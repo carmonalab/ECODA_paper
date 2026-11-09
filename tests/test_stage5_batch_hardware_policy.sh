@@ -15,6 +15,8 @@ RETRY_COMMAND="$(awk '/^  retry_msg="\$\(sbatch / {copy=1} copy {print} copy && 
 [[ -n "${RETRY_COMMAND}" ]]
 PROJECT_ROOT="${ROOT}"
 GPU_POLICY=auto; PASS_ARG=""; PARTITION_ARG=""
+EXCLUDED_NODES="${TEST_EXCLUDED_NODES:-}"; EXCLUDE_FLAG=""
+[[ -z "${EXCLUDED_NODES}" ]] || EXCLUDE_FLAG="--exclude=${EXCLUDED_NODES}"
 BENCHMARK_CPU_CONSTRAINT=EPYC-7742; BENCHMARK_GPU_CONSTRAINT=nvidia_h200_nvl
 BENCHMARK_CPU_CPUS_PER_TASK=16; BENCHMARK_GPU_CPUS_PER_TASK=8; BENCHMARK_GPU_COUNT=1
 BENCHMARK_GPU_DEFAULT_METHODS=mrvi,scpoli
@@ -88,6 +90,11 @@ exercise() {
   done
   if [[ "${view}" == batch_effect_* ]]; then
     if rg -q -- '--constraint(=| )' "${CASE_ROOT}/calls"; then echo 'batch model constraint survived initial/watchdog/retry' >&2; exit 1; fi
+  fi
+  if [[ -n "${EXCLUDED_NODES}" ]]; then
+    [[ $(grep -c -- "--exclude=${EXCLUDED_NODES}" "${CASE_ROOT}/calls") == 3 ]]
+  elif grep -q -- '--exclude=' "${CASE_ROOT}/calls"; then
+    echo 'default submissions unexpectedly excluded nodes' >&2; exit 1
   fi
 }
 for view in benchmark_analysis batch_effect_uncorrected batch_effect_corrected; do

@@ -289,6 +289,22 @@ def create_campaign_capture(*, gate_manifest, inspect, profile, run_root):
         scope_paths.add(str(policy_path))
     elif policy_flags:
         raise ValueError("campaign batch GPU policy receipt is missing")
+    excluded_path = folder / "campaign_excluded_nodes.tsv"
+    excluded_flags = [wrapper[i+1] for i, flag in enumerate(wrapper[:-1]) if flag == "--exclude-nodes"]
+    excluded_data = None
+    if excluded_path.exists() or excluded_path.is_symlink() or "--exclude-nodes" in wrapper:
+        if (len(excluded_flags) != 1 or wrapper.count("--exclude-nodes") != 1
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*(,[A-Za-z0-9][A-Za-z0-9._-]*)*", excluded_flags[0])
+                or len(set(excluded_flags[0].split(','))) != len(excluded_flags[0].split(','))):
+            raise ValueError("campaign excluded-node list is not one finite unique literal list")
+        excluded_data = _receipt(paths, excluded_path, producer="stage5_campaign_scope")
+        metadata = _fields(_remember(paths, parent / "metadata"))
+        if (excluded_data != (excluded_flags[0] + "\n").encode()
+                or sealed_hashes.get(str(excluded_path)) != _sha(excluded_data)
+                or metadata.get("EXCLUDED_NODES") != excluded_flags[0]
+                or metadata.get("EXCLUDED_NODES_MANIFEST") != str(excluded_path)):
+            raise ValueError("campaign excluded-node list differs from immutable wrapper/metadata")
+        scope_paths.add(str(excluded_path))
     parent_terminal = _fields(_remember(paths, parent / "status/terminal"))
     if parent_terminal.get("RUN_ID") != parent.name or parent_terminal.get("STATE") != "OK":
         raise ValueError("campaign parent terminal receipt is not successful")
@@ -299,6 +315,16 @@ def create_campaign_capture(*, gate_manifest, inspect, profile, run_root):
         root = parent.parent / child
         if not root.is_dir() or root.resolve() != root:
             raise ValueError("campaign child root is not canonical")
+        child_excluded = root / "manifests/excluded_nodes.tsv"
+        if excluded_data is not None:
+            child_data = _receipt(paths, child_excluded, producer="stage5_resource_exclusion")
+            child_metadata = _fields(_remember(paths, root / "metadata"))
+            if (child_data != excluded_data
+                    or child_metadata.get("EXCLUDED_NODES") != excluded_flags[0]
+                    or child_metadata.get("EXCLUDED_NODES_MANIFEST") != str(child_excluded)):
+                raise ValueError("child excluded-node list differs from sealed campaign")
+        elif child_excluded.exists() or child_excluded.is_symlink():
+            raise ValueError("child excluded-node list is absent from campaign wrapper")
         selection_path = folder / f"campaign_{context}.selection.tsv"
         references_path = folder / f"campaign_{context}.inputs.tsv"
         if selection_text != str(selection_path) or references_text != str(references_path):

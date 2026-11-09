@@ -61,7 +61,7 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, recovered MrVI published; tail observer RUNNING; remaining95 rehearsal passed
+## Live checkpoint — 2026-11-09, recovered MrVI published; observer retired; remaining95 startup repair
 
 - **Current recovery:** `ecoda_stage5_failed16_20261109_v1` launched at
   16:41:50 UTC and reached actual `FAILED` at 17:38:05 UTC. It selected
@@ -69,11 +69,13 @@ decisions have been applied to existing artifacts.
   GloScope 1; uncorrected MrVI 4; corrected MrVI 3 and QOT 8. No healthy row,
   preparation cache or annotation is being recomputed. Initial expected graph:
   16 scheduler IDs / 38 task units, excluding recorded OOM-only retries.
-- **Monitoring:** failed16 waiter 25146 / cell 142 completed and is inactive.
-  The monitor-only observer launched at 18:27:34 UTC; its single official
-  waiter 3808 / cell 236 is active, with sleep prevention bound to PID 60360.
-  It observes the old tail and approves no science. No persistent power
-  setting was changed.
+- **Monitoring:** both prior official waiters have finished. The monitor-only
+  observer was intentionally retired to release the required shared group;
+  only job4666208 was cancelled. It is honestly FAILED with one terminal
+  accounting inspection completed, and no success/release approval. Original
+  benchmark GPU jobs continue independently. A temporary one-hour sleep
+  assertion (session21067) bridges to the new recovery's process-bound waiter;
+  no persistent power setting was changed.
 - **Latest preserved queue evidence, 20:27:18 UTC:** the original two
   benchmark scPoli tasks remain pending their required H200 hardware:
   `4665568_1` is Stephenson and `4665568_2` is Bassez, both HR dims15.
@@ -82,8 +84,9 @@ decisions have been applied to existing artifacts.
   `N/A` start times and `ReqNodeNotAvail` for both scientific tasks. No
   polling loop or additional accounting query was used. Benchmark CPU hardware stays
   EPYC-7742; batch analyses may use any suitable CPU/GPU. The failed16 startup
-  failures remain unresolved; the additional one-off allocation diagnostic
-  query explicitly requested from the user has not been approved or run.
+  failures are being repaired. The user explicitly approved the additional
+  read-only allocation query from their phone; it completed once at20:42 UTC.
+  The original terminal accounting evidence remains unchanged.
 - **Next recovery scope:** the full finite original inventory identifies 95
   remaining absent physical rows: benchmark15, uncorrected32, corrected48
   (including eight corrected preparations). A local real-dispatcher rehearsal
@@ -4044,3 +4047,82 @@ is `.gate/orphaned_main_20261109_v1/user_requested_start_estimate.observed.txt`.
 This answers the start-estimate request without repeating accounting. The
 additional node-allocation accounting exception remains pending and unexecuted;
 the new 95-row scientific wave remains unlaunched.
+
+
+### User approved diagnostic; temporary startup-node avoidance in progress
+
+The user explicitly said to go ahead from their phone; no approval button or
+workstation interaction is needed. The single additional read-only allocation
+query ran at20:42:15–20:42:16 UTC for exactly roots4665516,4665560,4665623,
+4665627,4666183,4666196 with JobID/JobIDRaw/NodeList/Reason/State/ExitCode/Start/End.
+It is a separate supplemental diagnostic, not a replacement accounting audit.
+The exact query, raw stdout/stderr and result are preserved create-only under
+Bamboo input `startup-allocation-diagnostic-v1`; local observation SHA
+`52a04610d722b9a9e139d5e704aa219ca1075656be0482eb2a1fba3a295e9854`.
+
+Immediate0:53 failures were associated with cpu052 (five selected tasks),
+cpu046 (ten) and cpu051 (four). One cpu052 task also completed, so this does
+not prove a permanent fault or a particular filesystem errno. A bounded node
+metadata observation shows later reboots on046/052, and051's slurmd started
+only two seconds before its first observed startup failure. Temporary avoidance
+of these three nodes is scoped to the new recovery wave. Benchmark EPYC-7742,
+GPU requirements, method parameters and runtime remain fixed; batch CPU/GPU
+flexibility remains approved. The distinct original GloScope1:0 failure on
+cpu010 is being checked separately before its method retry.
+
+Assigned implementor batch_subset_audit is adding one explicit --exclude-nodes
+campaign/dispatcher argument and optional shared H5AD-preflight argument,
+recording the exact list and forwarding native --exclude to initial submissions
+and existing METHOD_FLAGS OOM retries. No exclusion is applied by default;
+there is no unsupported SBATCH_EXCLUDE environment shortcut, generic scheduler
+wrapper, dataset change or QOT source change. Independent review, focused tests,
+new committed source snapshot and fresh95-scope rehearsal precede launch.
+
+The exact monitor-only job4666208 descriptor was verified before retirement:
+own user, original observer7a6c513 script,1CPU/2G/5-minute afterany barrier with
+no scientific work. Retiring only this monitor is planned to free the same
+serialization group for the recovery; its cancellation remains truthful in its
+terminal audit. Original scPoli4665568, watchdog4665570 and aggregate4665612
+must not be cancelled. No new95 scientific jobs have been launched yet.
+
+
+### Monitor retired; four-file placement repair reviewed and tested
+
+Monitor4666208 was identity-checked and cancelled alone, with separate
+create-only intent/result metadata. Its official waiter3808/cell236 completed;
+actual wrapper terminal FAILED exit1 at20:47:20 UTC. Sole terminal inspection
+SHA `6f065bc21fd3ff3a72730f14f1abefb86fe409d391ded35d2bc37c349af33303`
+records exactly `4666208|CANCELLED by 463444|0:0`, audit_state COMPLETED.
+Independent review accepts intentional retirement only; no API success approval
+was attempted. The ecoda-benchmark group is free for normal reconciliation.
+Old4665568/4665570/4665612 were not cancelled or changed.
+
+Original GloScope1:0 forensics show its run-owned input_artifacts.tsv was not
+visible at the resolver call, before R started; four sibling variants succeeded,
+the file currently exists unchanged, and cpu010 later completed another method.
+No scientific algorithm bug or permanent cpu010 fault is established. Existing
+failure-only diagnostics preserve recurrence evidence. Retry only that missing
+GloScope row, with fresh manifest checks; do not change algorithms or exclude010.
+
+The exclusion implementation is independently accepted in four production
+files plus five focused tests. Required fourth seam: the accounting bridge
+strictly recognizes the optional exclusion resource identity, matching exact
+wrapper CSV, parent receipt/metadata and child receipts/metadata. No-flag
+campaign identity sets remain unchanged. Native exclusions reach H5AD/Renv/
+metadata/method/watchdog/aggregate submission and existing OOM retry flags.
+No generic input or ownership guard was weakened. Literal CSV validation,
+all-submission/default-hardware, campaign, actual OOM watchdog, eighteen
+accounting tests and existing H5AD preflight regressions pass; independent
+exclusion/campaign/accounting/OOM tests also pass.
+
+Frozen source SHA values:
+- stage5_campaign.sh: `e6003e00a80de08d94fbf64f5a335f10252c893cbd253c428f0d16afc2f7129c`
+- stage5_dispatcher.sh: `68672ea0368172b41b6d063f1ed174e6574263374c37f88f2637cc7b6c818b91`
+- h5ad_preflight_submit.sh: `84e6ecc1b7cab043e69d02028f33cc2a6a24cf2b28634ea800664b00a59b53ac`
+- gate_accounting_capture.py: `5cf5d47fc492e9eca17a100acb8899cc7a4cb5aff167352c804402b4f0d0a697`
+
+A fresh final-source95 rehearsal is running in a distinct synthetic root,
+checking all47 initial native exclusions and19 OOM flag sets, scope47/138/95,
+unchanged scientific/hardware/dependency behavior and16 metadata NOOP rows.
+New committed snapshot, final controls, fresh read-only launch preflight and
+launch review remain required. No new scientific jobs have yet been submitted.

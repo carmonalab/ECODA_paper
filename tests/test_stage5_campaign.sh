@@ -22,7 +22,7 @@ source "${ECODA_SOURCE_ROOT}/src/slurm_config.sh"
 source "${ECODA_SOURCE_ROOT}/src/utils/bash/ecoda_run_common.sh"
 source "${ECODA_SOURCE_ROOT}/src/5_run_benchmark_methods/scheduler_recorder_fixture.sh"
 child="${ECODA_RUN_ID}"; context="${child#*_}"
-selection=""; methods_seen=0; prepared=""; prepared_sha=""; method_matrix=""; gpu_policy=""
+selection=""; methods_seen=0; prepared=""; prepared_sha=""; method_matrix=""; gpu_policy=""; excluded_nodes=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --selection-file) selection="$2" ;;
@@ -34,10 +34,12 @@ while [[ $# -gt 0 ]]; do
     --prepared-adoption-sha256) prepared_sha="$2" ;;
     --method-matrix) method_matrix="$2" ;;
     --gpu-policy) [[ "${context}" != benchmark ]]; gpu_policy="$2" ;;
+    --exclude-nodes) excluded_nodes="$2" ;;
     *) exit 1 ;;
   esac
   shift 2
 done
+[[ "${excluded_nodes}" == "${CAMPAIGN_EXPECT_EXCLUDED_NODES:-}" ]]
 [[ "${selection}" == */manifests/campaign_"${context}".selection.tsv ]]
 [[ "${context}" == benchmark || ${methods_seen} -eq 1 ]]
 if [[ "${context}" == benchmark || "${CAMPAIGN_EXPECT_BATCH_GPU_POLICY:-auto}" == auto ]]; then
@@ -135,6 +137,27 @@ HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" NAS_TARGET_DIR="${NAS_BASE}
   --contexts "${TMP_DIR}/contexts.tsv" --derivative-release test-release > "${TMP_DIR}/success.log"
 parent="${HPC_ROOT}/_ecoda_runs/campaign_success"
 grep -q '^STATE=OK$' "${parent}/status/terminal"
+[[ ! -e "${parent}/manifests/campaign_excluded_nodes.tsv" ]]
+make_contexts excluded > "${TMP_DIR}/excluded.tsv"
+export CAMPAIGN_BARRIER="${TMP_DIR}/excluded-barrier"
+HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" NAS_TARGET_DIR="${NAS_BASE}" \
+  ECODA_RUN_ID=campaign_excluded CAMPAIGN_EXPECT_EXCLUDED_NODES=cpu046,cpu051,cpu052 \
+  bash "${SOURCE_TREE}/src/5_run_benchmark_methods/stage5_campaign.sh" \
+  --contexts "${TMP_DIR}/excluded.tsv" --derivative-release test-release \
+  --exclude-nodes cpu046,cpu051,cpu052 > "${TMP_DIR}/excluded.log"
+excluded_parent="${HPC_ROOT}/_ecoda_runs/campaign_excluded"
+[[ "$(cat "${excluded_parent}/manifests/campaign_excluded_nodes.tsv")" == cpu046,cpu051,cpu052 ]]
+grep -q 'campaign_excluded_nodes.tsv' "${excluded_parent}/manifests/campaign_identities.tsv"
+grep -q '^STATE=OK$' "${excluded_parent}/status/terminal"
+for bad in '' 'cpu046,cpu046' 'cpu[046-052]' 'cpu046, cpu051' '--help' 'cpu046,'; do
+  if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" NAS_TARGET_DIR="${NAS_BASE}" \
+      ECODA_RUN_ID=campaign_invalid_exclusion bash "${SOURCE_TREE}/src/5_run_benchmark_methods/stage5_campaign.sh" \
+      --contexts "${TMP_DIR}/excluded.tsv" --derivative-release test-release --exclude-nodes "${bad}" >/dev/null 2>&1; then
+    echo 'campaign accepted an unsafe or duplicate excluded-node list' >&2; exit 1
+  fi
+done
+[[ ! -e "${HPC_ROOT}/_ecoda_runs/campaign_invalid_exclusion" ]]
+export CAMPAIGN_BARRIER="${TMP_DIR}/barrier"
 for spec in 'pair benchmark corrected' 'single corrected'; do
   set -- ${spec}; prefix="$1"; shift; count=$#
   policy=auto; policy_args=()

@@ -74,6 +74,7 @@ source "${SCRIPT_DIR}/stage5_pending.sh"
 unset H5AD_ALLOW_MISSING_SUMMARY
 
 GPU_POLICY="auto"
+EXCLUDED_NODES=""; EXCLUDED_NODES_SET=0; EXCLUDE_FLAG=""
 BASELINE_METHODS=(gloscope mofa pseudobulk composition scitd mrvi scpoli pilot qot pilotgm)
 
 usage() {
@@ -88,6 +89,7 @@ Usage: 1_submit_hpc_array.sh [--datasets LIST] [--methods LIST]
        [--exact-batch-selection] [--pass uncorrected|corrected]
        [--analysis-variant final|corrected_final]
        [--gpu-policy auto|default|any] [--force]
+       [--exclude-nodes NODE,NODE]
        [--force-targeted --force-reason REASON] [--sync-only RUN_ID]
        [--partition NAME] [--mem VALUE] [--max-mem VALUE] [--throttle N]
 
@@ -144,6 +146,7 @@ while [[ $# -gt 0 ]]; do
     --force-reason=*) FORCE_REASON_ARG="${1#*=}"; FORCE_REASON_SET=1; shift ;;
     --gpu-policy) GPU_POLICY="${2:-}"; shift 2 ;;
     --gpu-policy=*) GPU_POLICY="${1#*=}"; shift ;;
+    --exclude-nodes) [[ ${EXCLUDED_NODES_SET} -eq 0 ]] || exit 1; EXCLUDED_NODES_SET=1; EXCLUDED_NODES="${2:-}"; ecoda_validate_excluded_nodes "${EXCLUDED_NODES}" || exit 1; EXCLUDE_FLAG="--exclude=${EXCLUDED_NODES}"; shift 2 ;;
     --sync-only) SYNC_ONLY_RUN="${2:-}"; SYNC_ONLY_SET=1; shift 2 ;;
     --sync-only=*) SYNC_ONLY_RUN="${1#*=}"; SYNC_ONLY_SET=1; shift ;;
     --partition) PARTITION_ARG="${2:-}"; shift 2 ;;
@@ -158,6 +161,9 @@ while [[ $# -gt 0 ]]; do
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
+[[ ${EXCLUDED_NODES_SET} -eq 0 || -z "${SYNC_ONLY_RUN}" ]] || {
+  echo 'ERROR: node exclusions apply to new submissions, not sync-only reuse' >&2; exit 1;
+}
 if [[ -n "${PREPARED_ADOPTION_ARG}" || -n "${PREPARED_ADOPTION_SHA}" ]]; then
   [[ -n "${DERIVATIVE_RELEASE}" && -n "${INPUT_ARTIFACTS}" &&
      "${PREPARED_ADOPTION_ARG}" == /* && "${PREPARED_ADOPTION_SHA}" =~ ^[0-9a-f]{64}$ &&
@@ -1002,10 +1008,15 @@ stage5_bind_run_identity() {
 stage5_validate_bound_runtime() {
   if [[ -n "${ECODA_RUN_ROOT:-}" ||
         "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]]; then
-    ecoda_runtime_validate_bound_run
+    ecoda_runtime_validate_bound_run || return 1
   else
-    ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE:-host}"
+    ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE:-host}" || return 1
   fi
+  if [[ -n "${EXCLUDED_NODES:-}" ]]; then
+    ecoda_validate_checksum "${ECODA_RUN_ROOT}/manifests/excluded_nodes.tsv" || return 1
+    [[ "$(cat "${ECODA_RUN_ROOT}/manifests/excluded_nodes.tsv")" == "${EXCLUDED_NODES}" ]] || return 1
+  fi
+  return 0
 }
 
 stage5_record_run_identity_metadata() {
@@ -1014,6 +1025,10 @@ stage5_record_run_identity_metadata() {
   local key value
   [[ -s "${source_copy}" && -s "${runtime_identity}" ]] || return 0
   printf 'SOURCE_MANIFEST=%s\nRUNTIME_IDENTITY=%s\n' "${source_copy}" "${runtime_identity}"
+  if [[ -n "${EXCLUDED_NODES:-}" ]]; then
+    printf 'EXCLUDED_NODES=%s\nEXCLUDED_NODES_MANIFEST=%s\nEXCLUDED_NODES_REASON=temporary startup-failure node association; cause unproven\n' \
+      "${EXCLUDED_NODES}" "${ECODA_RUN_ROOT}/manifests/excluded_nodes.tsv"
+  fi
   for key in FORMAT SOURCE_ROOT SOURCE_COMMIT SOURCE_ARCHIVE_PATH SOURCE_ARCHIVE_SHA256 \
     CONFIG_HELPER_SHA256 DATASETS_SHA256 PIXI_TOML_SHA256 PIXI_LOCK_SHA256 AUX_ROOT \
     SCGATE_DB_BRANCH; do
@@ -1881,6 +1896,7 @@ method_spec_for_group() {
     done
     METHOD_FLAGS=("${filtered_flags[@]}")
   fi
+  [[ -z "${EXCLUDED_NODES:-}" ]] || METHOD_FLAGS+=("--exclude=${EXCLUDED_NODES}")
   return "${rc}"
 }
 
@@ -2369,7 +2385,7 @@ stage5_compute_h5ad_preflight() {
         "${ECODA_RUN_ROOT}" require "${PARTITION_ARG:-${SLURM_PARTITION_BENCHMARK_CPU}}" \
         "${MEMORY}" "${THROTTLE}" "${preflight_logs}" stage5 \
         "${preflight_worker}" \
-        "${preflight_runtime_export}"
+        "${preflight_runtime_export}" "${EXCLUDED_NODES}"
     )"
     preflight_rc=$?
     set -e
@@ -2517,6 +2533,11 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
 else
   ecoda_init_run stage5 "${RUN_ID}" >/dev/null
   export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT
+  if [[ -n "${EXCLUDED_NODES}" ]]; then
+    ecoda_atomic_write "${ECODA_RUN_ROOT}/manifests/excluded_nodes.tsv" "${EXCLUDED_NODES}\n"
+    ecoda_write_checksum "${ECODA_RUN_ROOT}/manifests/excluded_nodes.tsv"
+    ecoda_write_artifact_record "${ECODA_RUN_ROOT}/manifests/excluded_nodes.tsv" stage5_resource_exclusion "${RUN_ID}" >/dev/null
+  fi
   if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
     recovery_run_manifest="${ECODA_RUN_ROOT}/manifests/validated_recovery.json"
     ecoda_atomic_copy "${ECODA_STAGE5_RECOVERY_MANIFEST}" "${recovery_run_manifest}" || exit 1
@@ -3526,7 +3547,7 @@ stage5_export_final_sample_metadata() {
       export_runtime="${export_runtime},ECODA_SOURCE_ROOT=${ECODA_SOURCE_ROOT},ECODA_SOURCE_MANIFEST=${ECODA_SOURCE_MANIFEST},ECODA_SOURCE_SNAPSHOT_REQUIRED=1"
     export_runtime="${export_runtime},ANALYSIS_VARIANT=${ANALYSIS_VARIANT},ANALYSIS_PASS=${PASS_ARG},ANALYSIS_ROOT=${ANALYSIS_ROOT},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT},ANALYSIS_LOG_PREFIX=${ANALYSIS_LOG_PREFIX}"
     set +e
-    export_msg="$(sbatch --parsable --wait \
+    export_msg="$(sbatch ${EXCLUDE_FLAG:+"${EXCLUDE_FLAG}"} --parsable --wait \
       --array="1-${pending_count}%${THROTTLE}" \
       --partition="${PARTITION_ARG:-${SLURM_PARTITION_BENCHMARK_CPU}}" \
       --ntasks=1 --cpus-per-task=1 --mem="${MEMORY}" \
@@ -3910,7 +3931,7 @@ stage5_run_r_environment_preflight() {
   stage5_validate_bound_runtime || return 1
   stage5_require_source_script "${preflight_worker}" || return 1
   set +e
-  preflight_msg="$(sbatch --parsable --wait \
+  preflight_msg="$(sbatch ${EXCLUDE_FLAG:+"${EXCLUDE_FLAG}"} --parsable --wait \
     --partition="${SLURM_PARTITION_BENCHMARK_CPU}" \
     --ntasks=1 --cpus-per-task=1 --mem=2G \
     --time="${WATCHDOG_TIME_LIMIT}" \
@@ -4297,7 +4318,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     stage5_validate_output_ownership "${manifest}" || return 1
     stage5_require_source_script "${watchdog_script}" || return 1
     set +e
-    wd_msg="$(sbatch --parsable --dependency="afterany:${array_id}" --partition="${watchdog_partition}" --ntasks=1 --cpus-per-task=1 --mem=2G --time="${WATCHDOG_TIME_LIMIT}" \
+    wd_msg="$(sbatch ${EXCLUDE_FLAG:+"${EXCLUDE_FLAG}"} --parsable --dependency="afterany:${array_id}" --partition="${watchdog_partition}" --ntasks=1 --cpus-per-task=1 --mem=2G --time="${WATCHDOG_TIME_LIMIT}" \
       --output="${RUN_LOG_DIR}/5_matrix_watchdog_${safe}_%A.log" --error="${RUN_LOG_DIR}/5_matrix_watchdog_${safe}_%A.err" --mail-user="${USER_EMAIL}" \
       --export="ALL,${worker_env},MATRIX_WATCHDOG_ROOT=${ECODA_RUN_ROOT}" \
       "${watchdog_script}" "${ECODA_RUN_ROOT}" "${group_label}" "${manifest}" "${array_id}" "${MEMORY}" "${MAX_MEMORY}" "${worker_partition}" "${throttle}" "${worker}" "${method_runtime_export}" "${METHOD_FLAGS[@]}")"
@@ -4434,7 +4455,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     stage5_require_source_script "${gate_script}" ||
       stage5_abort "Stage 5 aggregate gate script is outside the immutable source root"
     set +e
-    gate_msg="$(sbatch --parsable --wait --dependency="afterany:${watchdog_ids_colon}" --partition="${SLURM_PARTITION_BENCHMARK_CPU}" \
+    gate_msg="$(sbatch ${EXCLUDE_FLAG:+"${EXCLUDE_FLAG}"} --parsable --wait --dependency="afterany:${watchdog_ids_colon}" --partition="${SLURM_PARTITION_BENCHMARK_CPU}" \
       --ntasks=1 --cpus-per-task=1 --mem=2G --time="${WATCHDOG_TIME_LIMIT}" --output="${RUN_LOG_DIR}/5_matrix_gate_%j.log" \
       --error="${RUN_LOG_DIR}/5_matrix_gate_%j.err" --mail-user="${USER_EMAIL}" \
       "${gate_script}" "${ECODA_RUN_ROOT}" "${watchdog_labels_csv}" "${SCHEDULER_FILE}")"

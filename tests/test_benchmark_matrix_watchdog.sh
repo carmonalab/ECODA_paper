@@ -174,7 +174,7 @@ WATCHDOG_OUTPUT="$(HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" ANALYSIS
   SLURM_JOB_ID=999999 SLURM_SUBMIT_DIR="${ROOT}" \
   bash "${ROOT}/src/5_run_benchmark_methods/matrix_watchdog.sh" "${RUN_ROOT}" mrvi "${MANIFEST}" 1001 128G 256G shared-gpu 4 \
   "${SOURCE_TREE}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh" \
-  "${RUNTIME_EXPORT}" --gres=gpu:1,VramPerGpu:80G --cpus-per-task=8)"
+  "${RUNTIME_EXPORT}" --gres=gpu:1,VramPerGpu:80G --cpus-per-task=8 ${MATRIX_TEST_EXCLUDED_NODES:+"--exclude=${MATRIX_TEST_EXCLUDED_NODES}"})"
 STATUS="${RUN_ROOT}/status/watchdogs/mrvi.status"
 [[ "$(grep '^STATE=' "${STATUS}")" == "STATE=OK" ]]
 RETRY="${RUN_ROOT}/manifests/mrvi.retry_1.tsv"
@@ -189,6 +189,9 @@ if grep -q 'BENCHMARK_MANIFEST=' "${CAPTURE}"; then
 fi
 case "$(cat "${CAPTURE}")" in *"MATRIX_RETRY_MANIFEST=${RETRY}"*) ;; *) echo "matrix retry manifest export missing" >&2; exit 1 ;; esac
 RETRY_CALLS="$(cat "${CAPTURE}")"
+if [[ -n "${MATRIX_TEST_EXCLUDED_NODES:-}" ]]; then
+  case "${RETRY_CALLS}" in *"--exclude=${MATRIX_TEST_EXCLUDED_NODES}"*) ;; *) echo 'actual OOM retry lost excluded nodes' >&2; exit 1;; esac
+fi
 case "${RETRY_CALLS}" in
   *"${SOURCE_TREE}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh"*) ;;
   *) echo "matrix retry worker escaped the immutable source root" >&2; exit 1 ;;

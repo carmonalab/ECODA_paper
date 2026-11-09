@@ -365,6 +365,64 @@ class CampaignTests(unittest.TestCase):
         result = capture.create_campaign_capture(**self.campaign_arguments())
         self.assertEqual(len(result["children"]), 2)
 
+    def test_excluded_nodes_require_exact_wrapper_parent_and_child_receipts(self):
+        nodes = "cpu046,cpu051,cpu052"
+        data = (nodes + "\n").encode()
+        path = self.folder / "campaign_excluded_nodes.tsv"
+        self.seal(path, data, "stage5_campaign_scope")
+        identities = self.folder / "campaign_identities.tsv"
+        self.seal(identities, identities.read_bytes() + f"{path}\t{hashlib.sha256(data).hexdigest()}\n".encode(), "stage5_campaign_scope")
+        command = self.gate["exact_command"] + " --exclude-nodes " + nodes
+        self.gate["exact_command"] = command
+        self.gate["command_digest"] = hashlib.sha256(command.encode()).hexdigest()
+        metadata = self.run / "metadata"
+        metadata.write_text(f"EXCLUDED_NODES={nodes}\nEXCLUDED_NODES_MANIFEST={path}\n")
+        for root in self.children.values():
+            child = root / "manifests/excluded_nodes.tsv"
+            self.seal(child, data)
+            record = child.parent / "artifacts" / f"{hashlib.sha256(str(child).encode()).hexdigest()[:32]}.record"
+            record.parent.mkdir(exist_ok=True)
+            record.write_text(Path(f"{child}.md5").read_text() +
+                              f"RUN_ID={root.name}\nPRODUCER=stage5_resource_exclusion\nSTATE=PUBLISHED\n")
+            child.chmod(0o444)
+            (root / "metadata").write_text(f"EXCLUDED_NODES={nodes}\nEXCLUDED_NODES_MANIFEST={child}\n")
+
+        self.seal(path, b"cpu999\n", "stage5_campaign_scope")
+        with self.assertRaisesRegex(ValueError, "excluded-node list differs"):
+            capture.create_campaign_capture(**self.campaign_arguments())
+        self.seal(path, data, "stage5_campaign_scope")
+        metadata.write_text(f"EXCLUDED_NODES=cpu999\nEXCLUDED_NODES_MANIFEST={path}\n")
+        with self.assertRaisesRegex(ValueError, "excluded-node list differs"):
+            capture.create_campaign_capture(**self.campaign_arguments())
+        metadata.write_text(f"EXCLUDED_NODES={nodes}\nEXCLUDED_NODES_MANIFEST={path}\n")
+        child = self.children["corrected"] / "manifests/excluded_nodes.tsv"
+        record = child.parent / "artifacts" / f"{hashlib.sha256(str(child).encode()).hexdigest()[:32]}.record"
+        saved_record = record.read_bytes()
+        record.write_bytes(saved_record.replace(b"STATE=PUBLISHED", b"STATE=ACTIVE"))
+        with self.assertRaisesRegex(ValueError, "producer receipt differs"):
+            capture.create_campaign_capture(**self.campaign_arguments())
+        record.write_bytes(saved_record)
+        child_metadata = self.children["corrected"] / "metadata"
+        saved_metadata = child_metadata.read_bytes()
+        child_metadata.write_bytes(saved_metadata.replace(nodes.encode(), b"cpu999"))
+        with self.assertRaisesRegex(ValueError, "child excluded-node list differs"):
+            capture.create_campaign_capture(**self.campaign_arguments())
+        child_metadata.write_bytes(saved_metadata)
+        proof = Path(f"{path}.md5")
+        saved_proof = proof.read_bytes(); proof.write_bytes(saved_proof.replace(b"MD5=", b"WRONG="))
+        with self.assertRaisesRegex(ValueError, "checksum differs"):
+            capture.create_campaign_capture(**self.campaign_arguments())
+        proof.write_bytes(saved_proof)
+        for invalid in ("cpu046,cpu046", "cpu[046-052]", ""):
+            self.gate["exact_command"] = command.rsplit(" ", 1)[0] + " " + shlex.quote(invalid)
+            self.gate["command_digest"] = hashlib.sha256(self.gate["exact_command"].encode()).hexdigest()
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "finite unique"):
+                capture.create_campaign_capture(**self.campaign_arguments())
+        self.gate["exact_command"] = command
+        self.gate["command_digest"] = hashlib.sha256(command.encode()).hexdigest()
+        result = capture.create_campaign_capture(**self.campaign_arguments())
+        self.assertEqual(len(result["children"]), 3)
+
     def test_campaign_success_preserves_one_raw_and_three_actual_root_projections(self):
         result = capture.create_campaign_capture(**self.campaign_arguments())
         self.assertEqual(len(result["children"]), 3)

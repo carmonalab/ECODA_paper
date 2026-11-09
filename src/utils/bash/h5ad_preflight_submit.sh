@@ -2,6 +2,18 @@
 # Shared scheduler submission for H5AD contract preflight arrays.
 # Call after slurm_config.sh and ecoda_run_common.sh are sourced.
 
+ecoda_validate_excluded_nodes() {
+  local nodes="$1" node seen=","
+  [[ "${nodes}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*(,[A-Za-z0-9][A-Za-z0-9._-]*)*$ ]] || return 1
+  local parts=()
+  IFS=',' read -r -a parts <<< "${nodes}"
+  for node in "${parts[@]}"; do
+    case "${seen}" in *",${node},"*) return 1 ;; esac
+    seen="${seen}${node},"
+  done
+  return 0
+}
+
 ecoda_submit_h5ad_preflight() {
   local manifest="$1"
   local status_dir="$2"
@@ -14,11 +26,16 @@ ecoda_submit_h5ad_preflight() {
   local label="$9"
   local worker_script="${10}"
   local runtime_export="${11:-}"
+  local excluded_nodes="${12:-}" exclude_flag=""
   local count msg rc scheduler_id run_id
   local source_root source_manifest source_required host_env_prefix
   local runtime_image runtime_manifest runtime_run_id scratch_root aux_root logs_root
   local worker_source_path export_values value
 
+  if [[ -n "${excluded_nodes}" ]]; then
+    ecoda_validate_excluded_nodes "${excluded_nodes}" || return 1
+    exclude_flag="--exclude=${excluded_nodes}"
+  fi
   [[ -r "${manifest}" && -s "${manifest}" ]] || return 1
   [[ -n "${runtime_export}" ]] || return 1
   [[ "${mode}" == "require" || "${mode}" == "classify" ]] || return 1
@@ -86,7 +103,7 @@ ecoda_submit_h5ad_preflight() {
   worker_source_path="${worker_script}"
   worker_script="$(ecoda_require_source_script_path "${worker_source_path}" "${source_root}")" ||
     return 1
-  if msg="$(sbatch --parsable --wait --array="1-${count}%${throttle}" \
+  if msg="$(sbatch ${exclude_flag:+"${exclude_flag}"} --parsable --wait --array="1-${count}%${throttle}" \
       --partition="${partition}" --ntasks=1 --cpus-per-task=1 --mem="${memory}" \
       --time="${WATCHDOG_TIME_LIMIT:-12:00:00}" \
       --output="${logs_dir}/h5ad_preflight_${label}_%A_%a.log" \

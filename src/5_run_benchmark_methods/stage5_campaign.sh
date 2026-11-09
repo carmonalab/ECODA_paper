@@ -6,8 +6,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/../utils/bash/h5ad_preflight_submit.sh"
 
 CONTEXTS=""; RELEASE=""; PREPARED_ADOPTION=""; PREPARED_ADOPTION_SHA=""; BATCH_GPU_POLICY=auto; BATCH_GPU_POLICY_SET=0
+EXCLUDED_NODES=""; EXCLUDED_NODES_SET=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --contexts) CONTEXTS="${2:-}"; shift 2 ;;
@@ -15,7 +17,8 @@ while [[ $# -gt 0 ]]; do
     --prepared-adoption) PREPARED_ADOPTION="${2:?receipt required}"; shift 2 ;;
     --prepared-adoption-sha256) PREPARED_ADOPTION_SHA="${2:?receipt SHA256 required}"; shift 2 ;;
     --batch-gpu-policy) [[ ${BATCH_GPU_POLICY_SET} -eq 0 ]] || exit 1; BATCH_GPU_POLICY_SET=1; BATCH_GPU_POLICY="${2:-}"; shift 2 ;;
-    *) echo 'Usage: stage5_campaign.sh --contexts TSV --derivative-release ID [--batch-gpu-policy auto|default|any] [--prepared-adoption JSON --prepared-adoption-sha256 SHA256]' >&2; exit 1 ;;
+    --exclude-nodes) [[ ${EXCLUDED_NODES_SET} -eq 0 ]] || exit 1; EXCLUDED_NODES_SET=1; EXCLUDED_NODES="${2:-}"; ecoda_validate_excluded_nodes "${EXCLUDED_NODES}" || exit 1; shift 2 ;;
+    *) echo 'Usage: stage5_campaign.sh --contexts TSV --derivative-release ID [--batch-gpu-policy auto|default|any] [--exclude-nodes NODE,NODE] [--prepared-adoption JSON --prepared-adoption-sha256 SHA256]' >&2; exit 1 ;;
   esac
 done
 case "${BATCH_GPU_POLICY}" in auto|default|any) ;; *) echo 'ERROR: invalid batch GPU policy' >&2; exit 1 ;; esac
@@ -56,7 +59,7 @@ fi
 
 # Freeze every scientific request before starting any dispatcher. The metadata
 # check reads only sizes/proofs; each existing child performs its full preflight.
-"${PYTHON_BIN}" - "${PARENT_ROOT}" "${PROJECT_ROOT}" "${ECODA_RUNS_ROOT}" "${BATCH_GPU_POLICY}" <<'PY'
+"${PYTHON_BIN}" - "${PARENT_ROOT}" "${PROJECT_ROOT}" "${ECODA_RUNS_ROOT}" "${BATCH_GPU_POLICY}" "${EXCLUDED_NODES}" <<'PY'
 import hashlib, json, os, pathlib, sys
 parent, project, runs = map(pathlib.Path, sys.argv[1:4])
 sys.path.insert(0, str(project / 'src/utils/py'))
@@ -108,6 +111,12 @@ with policy.open('x') as handle:
     handle.write(sys.argv[4] + '\n')
 policy.chmod(0o444)
 identities.append(f'{policy}\t{hashlib.sha256(policy.read_bytes()).hexdigest()}\n')
+if len(sys.argv) > 5 and sys.argv[5]:
+    excluded = manifest / 'campaign_excluded_nodes.tsv'
+    with excluded.open('x') as handle:
+        handle.write(sys.argv[5] + '\n')
+    excluded.chmod(0o444)
+    identities.append(f'{excluded}\t{hashlib.sha256(excluded.read_bytes()).hexdigest()}\n')
 metadata_union = set()
 for row in rows:
     context, run_id, selection_text, references_text = row[:4]
@@ -188,8 +197,12 @@ while IFS=$'\t' read -r path sha; do
     echo 'ERROR: frozen campaign identity changed before launch' >&2; exit 1;
   }
 done < "${PARENT_ROOT}/manifests/campaign_identities.tsv"
+exclusion_metadata=""
+if [[ -n "${EXCLUDED_NODES}" ]]; then
+  exclusion_metadata="EXCLUDED_NODES=${EXCLUDED_NODES}\nEXCLUDED_NODES_MANIFEST=${PARENT_ROOT}/manifests/campaign_excluded_nodes.tsv\n"
+fi
 ecoda_atomic_write "${PARENT_ROOT}/metadata" \
-  "STAGE=stage5\nRUN_ID=${PARENT_ID}\nSTATE=ACTIVE\nCAMPAIGN_RELEASE=${RELEASE}\nCAMPAIGN_CONTEXTS=${PARENT_ROOT}/manifests/campaign_contexts.tsv\nBATCH_GPU_POLICY=${BATCH_GPU_POLICY}\nBATCH_GPU_POLICY_MANIFEST=${PARENT_ROOT}/manifests/campaign_batch_gpu_policy.tsv\nSOURCE_MANIFEST=${PARENT_ROOT}/manifests/source.manifest\nRUNTIME_IDENTITY=${PARENT_ROOT}/manifests/runtime.identity\n"
+  "STAGE=stage5\nRUN_ID=${PARENT_ID}\nSTATE=ACTIVE\nCAMPAIGN_RELEASE=${RELEASE}\nCAMPAIGN_CONTEXTS=${PARENT_ROOT}/manifests/campaign_contexts.tsv\nBATCH_GPU_POLICY=${BATCH_GPU_POLICY}\nBATCH_GPU_POLICY_MANIFEST=${PARENT_ROOT}/manifests/campaign_batch_gpu_policy.tsv\nSOURCE_MANIFEST=${PARENT_ROOT}/manifests/source.manifest\nRUNTIME_IDENTITY=${PARENT_ROOT}/manifests/runtime.identity\n${exclusion_metadata}"
 
 CHILD_PIDS=(); CHILD_IDS=(); CHILD_CONTEXTS=()
 campaign_interrupt() {
@@ -208,6 +221,7 @@ while IFS=$'\t' read -r context child selection references method_matrix; do
     unset ANALYSIS_MANIFEST EXECUTION_LOG_DIR FORCE_BENCHMARK
     export ECODA_RUN_ID="${child}" ECODA_LOGS_DIR="${PARENT_ROOT}/logs/${child}"
     args=(--selection-file "${selection}" --derivative-release "${RELEASE}" --input-artifacts "${references}")
+    [[ -z "${EXCLUDED_NODES}" ]] || args+=(--exclude-nodes "${EXCLUDED_NODES}")
     adoption_context=benchmark
     case "${context}" in uncorrected) adoption_context=batch_effect/uncorrected_final ;; corrected) adoption_context=batch_effect/corrected_final ;; esac
     if [[ -n "${PREPARED_ADOPTION}" ]] &&
