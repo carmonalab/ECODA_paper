@@ -61,69 +61,49 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, updated after the 04:43 UTC launch
+## Live checkpoint — 2026-11-09, inputs reviewed; main wave not launched
 
-- **P0/P1 DONE:** logical checkpoints and operator documentation harmonization
-  are committed. Production source through `3794e3e` is pushed;
-  later changes are recorded separately. External cancer-application files
-  remain outside this task's commits and immutable scientific snapshots.
-- **Bassez metadata repair DONE, audited and approved:** gate
-  `ecoda_stage2_bassez_hr_20261108_v1`, worker4663493/watchdog4663494.
-  50,809 HR fallbacks filled, 74,948 cells /26 samples /40 valid categories;
-  protected counts/cells/features/embeddings unchanged. New H5AD MD5
-  `678656c738597471d884f88e345e6970`. An exact22 author-HR composition-only
-  gate launched04:43:52Z and FAILED at controller validation04:50:47Z;
-  all five scheduler rows completed0. Exact output validation is under repair,
-  with no result reuse or main-wave deduplication approved. Other affected
-  HR methods remain pending.
-- **Stage3 scientific outputs produced/synchronized: 17/17.** Wrapper finished
-  `2026-11-09T02:53:27Z`. The original strict gate remains FAILED because its
-  preserved accounting includes historical Alzheimer OOM attempts before
-  success at500G. No failed-gate approval is claimed and no successful
-  preprocessing is repeated. Exact selected artifacts receive separate
-  validator-only reuse evidence.
-- **Stephenson Stage3 benchmark input individually validated and approved:**
-  53 Ncl samples,43 Covid/10 Healthy, all four exclusions absent; scratch/NAS
-  hashes/schema/provenance/modes pass. MD5 `657c72165dfbc4dd1caf83fc656e9c39`.
-  NOOP receipt SHA256 `27266a3613315905d9905a74b5d23fd1eba8908943f8104496c1a3e318b7bd21`.
-  Remaining16 batch-view artifacts are still in their read-only validation
-  (existing local exec52786); no new scheduler work is involved.
-- **Blacklist pseudobulk science DONE for10/11 benchmarks:** all ten fit
-  workers in array4663563 completed0;20RDS and10timing files pass the new
-  exact scientific NOOP validator and root review. Aux is unchanged. The
-  original gate remains FAILED at watchdog/release, and final publication
-  remains pending. Receipt SHA256
-  `acaab097e284bea392e0f79afe8156c8eaa1f555753056593a7460e95f29a3ae`.
-  Stephenson BL runs once within its eventual whole-method wave.
-- **Metadata evidence v3 DONE, terminal-audited and reviewer-approved:** gate
-  `ecoda_stage5_auto_annotation_reuse_evidence_20261109_v3`, single job4663686,
-  launched04:01:46Z, completed0 at04:03:32Z, review approved04:11:43Z.
-  Exact71 comparisons in three checksum-table-valid aggregates passed the
-  evidence contract. The71 conflicting standalone files remain unread and
-  unapproved. Scientific matching is not full reuse/provenance approval.
-- **New focused defect:** all three audited cohorts have10 HiTME layer2
-  variance rows computed with layer3. Baseline HiTME/scATOMIC counts match;
-  this finding does not justify broader RNA/model refits. A minimal deferred
-  R closure fix and actual-producer persistence regression pass independent
-  review. Additional100 exact L2 parameter refreshes across ten non-Stephenson
-  cohorts are PROPOSED; the user question is pending. Stephenson's approved
-  whole-method rerun already includes its ten. No selector/compute expansion
-  is authorized by silence.
-- **Stephenson Pipeline4 RUNNING:** gate
-  `ecoda_stage4_stephenson_annotation_20261109_v1`, launched04:01:47Z from
-  immutablefc2949f, group `ecoda-annotation`. Exactly one durable waiter is
-  armed (existing exec3070). Current wrapper log records prep4663688,
-  prep-watchdog4663689 and annotation-array4663694; completion and all emitted
-  IDs will be assessed once terminal. Expected initial contract is6IDs /
-  32tasks,53samples /27dual-annotation chunks. No benchmark methods yet.
-- **Main Stage5 wave NOT LAUNCHED:** all16 batch views, Stephenson whole
-  methods, Bassez affected HR methods and selected screen refreshes remain
-  explicitly scoped proposals. They await reviewed inputs and final physical
-  manifest validation. Do not report them as running.
-- Future Stage3 selected NAS ancestor-permission fix `29d202e` is committed
-  and pushed; it does not alter current producer/validator snapshots. P6 reporting
-  and screen implementation is committed, but production figures have not
-  been regenerated/released yet.
+- P0/P1 DONE: logical checkpoints and harmonized documentation are pushed.
+  Latest reviewed source includes output-ownership fix039d79c and the finite
+  HR publication extensionfc46e03. External application work remains excluded.
+- **Changed inputs ready:** approved Bassez metadata repair (74948cells,
+  26samples,40HRtypes); all17 Stage3 outputs produced/NAS-synced;53-sample
+  Stephenson benchmark input individually NOOP-reviewed. Original Stage3 gate
+  remains FAILED with its historical OOM evidence preserved.
+- **All16 batch inputs reviewed for reuse:** exact expected counts in both
+  views101/33/44/124/80/94/80/110.52 batch tables pass except the documented
+  two Ncl exceptions. Receipt SHAc8e1d9b5...; no old failed-gate approval.
+- **Kidney two-axis metadata validated:** both views have the same80 samples,
+  condition21AKI/26CKD/33Ref and tissue45kidney/23cortex/12medulla. Tissue is
+  fully confounded with cell/nucleus suspension and remains descriptive.
+  No extra H5AD, feature fit or cohort filtering is needed for this evaluation.
+- **Stephenson Stage4 COMPLETED and formally approved:** wrapper0 at04:50:11Z,
+  all32 raw scheduler rows0 across6roots; accounting bridge and pinned
+  protected-copy/annotation/source/runtime/NAS audit pass. New input MD5
+  `7d92fb6e0d3d7dd5c3500212fd951493`,size13,357,978,168.
+- **BL10 DONE and published/reviewed:**20RDS+10timings copied into a fresh
+  validated NAS release, source3794e3e, publication finished05:03:40Z; no fit
+  repeated. Original failed BL gate remains failed. Stephenson BL stays in
+  its upcoming whole-method run, once only. Aux remains unchanged.
+- **Bassez authorHR22 science approved, publication READY:** original gate
+  failed only in controller ownership validation after all5jobs completed0.
+  Its23RDS+one22-row timing file pass exact CLI,5finite metrics, current
+  metadata/NULL/count/source/proof checks with no fit/H5AD read. Original
+  abort cleanup already finalized ownersOK; no old record was edited.
+  New science receipt SHA78523c4...; new24-payload publication is prepared.
+- **Main Stage5 NOT LAUNCHED:** source039d79c is frozen independently; actual
+  controls cover remaining41 benchmark requests plus both8-dataset batch
+  contexts,77 initial IDs/248 scheduled units. Input reviews are complete;
+  root is sealing/staging controls and the last publication review. Peers in
+  the existing campaign remain independent. No targeted HiTME100 selection.
+- **User HiTME clarification: NO targeted refresh added.** Plain layer2
+  counts match in all3audited cohorts and maintained final selectors use that
+  plain key. Disputed variance entries are unused in maintained figures;
+  their historical experimental provenance is unproven. The earlier100-row
+  refresh proposal is withdrawn from this implementation scope. The user
+  will decide any further action after clarification; do not infer approval.
+- P6 five-metric/Kidney reporting implementation is committed. Final figures
+  and remaining method/screen waves are not claimed complete or released.
 
 ## 2. Confirmed scientific decisions
 
@@ -192,10 +172,11 @@ The original Lupus note omitted batch 22; the user confirmed 20+21+22 is
 correct. Breast v2 was an exclusion example; the retained chemistry is v3.
 Diabetes remains entirely disabled, rather than retaining its old subset.
 
-These counts are expectations from existing confounding evidence, not new
-Bamboo acceptance results. Reconcile raw IDs, current sample-level metadata,
-and the existing >=500-cell/QC rules before launch. Any unexpected discrepancy
-returns to the user rather than changing the selection automatically.
+These counts are now confirmed by the sixteen-view Bamboo NOOP receipt and
+independent review recorded below. Raw/current sample masks and >=500-cell
+retention agree in both views; no selection discrepancy was found. Future
+unexpected discrepancies must return to the user, never change the selection
+automatically.
 
 ### Other benchmark changes
 
@@ -527,7 +508,7 @@ statuses, scientific output roots and one synchronization owner per root.
 | P1: documentation | DONE | NOTES, onboarding README, both AGENTS guides, Bamboo durable-skill examples and historical-plan pointer harmonized; scoped whitespace and skill validation passed; Git publication recorded below |
 | P2: scoped contracts | IN_PROGRESS | Cohort/BL core, derivative roots and two corrected Harmony arms committed; exact rerun selectors, failure isolation, Bassez Stage 2 wrapper and gate evidence integration continue |
 | P3: source reconciliation | IN_PROGRESS | Orchestrator handles bounded read-only Bamboo source/runtime/NAS preflight; targeted Bassez scope is already user-approved, subject to unchanged-input proof |
-| P4: changed inputs | IN_PROGRESS | Generate and validate 16 batch-view derivatives, Stephenson benchmark derivative, and only the necessary Bassez repair; satisfy benchmark annotation contracts |
+| P4: changed inputs | DONE | All16 batch derivatives and53-sample Stephenson input individually reviewed; Bassez metadata repair and Stephenson dual annotation validated/synchronized/approved |
 | P5: method waves | IN_PROGRESS | Run three independent concurrent contexts with exact deduplicated scope, durable evidence, focused recovery and root-specific sync |
 | P6: evaluation/reporting | IN_PROGRESS | Complete five-metric scores, score both Kidney axes, refresh all affected maintained reports/figures from approved results, verify plots and document limitations/provenance |
 
@@ -1994,4 +1975,125 @@ Exact immutable command (SHA256
 
 ```bash
 env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bl10-publication-v1/3794e3e98b6d87bb18164a86747b0b624dc25c55/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bl10-publication-v1/3794e3e98b6d87bb18164a86747b0b624dc25c55/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bl10-publication-v1/3794e3e98b6d87bb18164a86747b0b624dc25c55/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage5_bl10_publication_20261109_v1 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage5_bl10_publication_20261109_v1 --script src/utils/bash/publish_bl_science.sh -- --control /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/bl-science-publication-v1/control.json --control-md5 fe1ecb6f7d3bd0a8cf81567b8446353b
+```
+
+
+## Reviewed input and scientific-result milestones — 2026-11-09
+
+All16 Stage3 batch-view artifact reuse is approved independently of the old
+FAILED global gate. Receipt MD5 `04e7131fe49d0904435c4bee0d6fcea5`, SHA256
+`c8e1d9b5b0a4b485ecdb228c706c6f8a3de65f0861fc57b148de68cd39bb05b4`.
+Independent review reapplied named masks, min500 and canonical-ID rules,
+compared paired memberships/configuration hashes, and recomputed all52tables.
+Only the two documented Ncl43Covid/10Healthy18.87% exceptions remain; COVID
+counts22/12/10, structural missing severe group allowed. All32scratch/NAS
+ownersOK, payload/proof hash/size agreement,16published scratch records and
+selectedNAS777 chains are evidenced by the pinned audit. Old24accounting rows
+and4OOM witnesses are preserved; no new scheduler queries/submissions.
+
+Kidney obs-only report MD5 `fc3d0b74371feaca6dcc1d1cde115691`, SHA256
+`db1e75e47d95eb2a275ab5d65042eae9d96fcbc11084e75f143048169f6df99a`.
+Configured specimen IDs and the producer's canonical Sample alias agree;
+condition/tissue/region/suspension are homogeneous per sample and match across
+bothviews. NoPapilla.45kidney samples are cells;23cortex+12medulla are nuclei.
+This confirms the stated anatomy/protocol confounding caveat, not another
+filter or correction covariate. Tissue and condition share all feature and
+distance outputs; evaluation/reporting alone supplies separate results.
+
+Stephenson Stage4 firstinspect is complete: six roots4663688/4663694/4663744
+and4663689/4663721/4663745, all32rowsCOMPLETED0. One accounting operation only.
+Bridge preserved raw SHA7f804bda... and derived6-root projection SHA71b3330a...;
+no rows were invented or failed rows omitted. Pinned fc2949f
+`ecoda_run_audit.sh` passed, including source/runtime/frozenaux, parent/copy
+protection, annotation completeness, payload/schema/ownership and actual NAS
+hashes/equality/modes. Formal root approval is
+`.gate/ecoda_stage4_stephenson_annotation_20261109_v1.review.json`.
+The derivative publication helper already normalizes/validates its full
+selected NAS ancestor chain; a suspected issue in a separate legacy wrapper
+branch was not applicable. No unnecessary chmod/repair/source change occurred.
+New annotated input MD5 `7d92fb6e0d3d7dd5c3500212fd951493`,size13,357,978,168.
+
+BL10 publication completed05:03:40Z and pinned terminal validation passed.
+New run `stage5_bl10_publication_20261109_v1`: receipt MD5
+`3fc1f22c595acea6d071c50aebcd0799`, SHA256
+`61ad382358ad576736e8c66336d88aa612d64f3caface951f4f50a7540a836db`.
+Review `.gate/bl_publication_inputs_20261109_v1/publication_review.json`, SHA
+`c2901b0f57ef8753b3a69919ae612ca5d36faafa84abda46041d5c61c8efa401`.
+Exact30payloads/60checksum entries, strictNAS666/777, source/runtime/oldFAILED
+accounting preserved; no fits or H5AD reads repeated. New NAS root is
+`releases/20261108-confounding-subsets-v1/stage5_bl10_publication_20261109_v1/benchmark`.
+
+HR22 actual read-only science audit passed:23RDS+one22-row timing Feather,
+26ordered samples/74948cells/40HRtypes, canonical5finite scores, groundtruth
+and storedNULL semantics, baselinecounts and unchanged features/distances,
+all producer records/owners/full hashes/input/source/runtime/aux proofs.
+Configured R4.5.2; no H5AD consumption/rehash, rescoring or method rerun.
+External R assertion SHA `c3de2329c9a3e52a515bc19d667a622ffcdc520dc264c2fcd4329dbabef8ba70`,
+exact23-row CLI manifest SHA026c8103486dd05b60120421f4522d0e01df9d57595a3dfbd933e655abbdc398.
+Science receipt MD5 `3ccc48e3e352286e500d862da67c9a67`, SHA256
+`78523c4ad31a9768085c0be52a6576dd7cb97a511d1fdc54b69619a25ede74c4`;
+root scientific review SHA
+`9828da9b4c4046275b4774f1f4e93777c994b0928e6be8c724e71bb1ee6b32b1`.
+This approves scientific reuse; old FAILED gate/statuses stay unchanged.
+Future pending-output lifecycle fix039d79c is independently accepted and
+source-frozen for the main wave; generic input guards remain unchanged.
+
+## HiTME clarification from the user — NO additional targeted refresh
+
+The user requested clarification and explicitly withheld any targeted refresh
+of100parameter results. None was selected, implemented as a selector, or run.
+The prior proposed100-row expansion is withdrawn from the current scope.
+Do not present it as a prerequisite or infer approval from elapsed time.
+
+What the audit establishes: plain `ECODA_HiTME_HR_layer2` matches current L2
+counts exactly in Bassez,Zhang,Pelka; plain L3 also matches its own metadata.
+Separate `ECODA_HiTME_HR_layer2_top_varexp0..0.9` entries in three explicitly
+selected checksum-table-valid aggregate RDS contain L3-style state categories
+and fail comparison to currentL2. The current deferred variance builder had
+a reproducible loop-capture bug; fixe776105 affects only those future variants,
+not plain baselines. Historical producer ownership/source provenance for those
+old aggregates is absent, so this does not establish whether the mismatched
+entries came from intentional L3 tests or that historical bug, nor which RDS
+bytes generated a past published figure.
+
+Maintained code/retainedHTML traces support the user's intended distinction:
+Fig2A omits HiTME; Supp15 extended/presentation selects exact plain L2
+(`notebooks/benchmark_analysis.rmd:2908,3005`); annotation/PCA/MDS comparisons
+also select plainL2. Supp2's active filter excludes HiTME and variance entries;
+its earlier method list is unused. Fig4/Supp20 HVC analysis uses authorsHR.
+The L2variance0.5 reference at2429 is diagnostic feature-name printing.
+`src/utils/constants.R` extended normalization pool contains only plainL2;
+exact membership filtering prevents excluded variants from affecting scaling.
+There is no evidence here of L3 accidentally replacing the final plain L2
+benchmark. Further targeted work requires a new user decision after this
+clarification. Preserve intentional L3 tests and old artifacts.
+
+## Bassez HR22 no-fit publication contract — READY
+
+New run `stage5_bassez_hr22_publication_20261109_v1`; fixed24payloads=
+23reviewedRDS+one original selected timingFeather,48NASchecksum entries.
+No scheduler, new fit, rescoring, H5AD read or oldrun write. Reuse the accepted
+publisher's copy/owner/NAS/mode/atomicreceipt machinery via the second explicit
+fixed scope `ecoda_bassez_hr22_publication_control_v1`; BL10 behavior unchanged.
+New copy producer `stage5_bassez_hr22_release_copy`, receipt
+`ecoda_bassez_hr22_publication_receipt_v1` /`bassez_hr22_publication.json`.
+Author and independent HR fixture plus unchangedBL regression pass.
+
+Source `fc46e0366226a4dcce2c2cb0366678df167d3aab`, separate snapshotparent
+`20261109-bassez-hr22-publication-v1`, archive SHA256
+`e2e00e96e3bc2293567ff889d5e639919fd149aa602f9fc8716c7488eb2d52e8`.
+Same frozen runtime/aux. Control MD5 `214bd3b9054026f4dccc523065fbcf28`, SHA256
+`46bfbe58ca8edae16160fc03f7c2e7aec67454aa70629463df7046031516c69c`;
+review SHA9828da9b... binds the science78523c4... receipt. Stage both under
+`_ecoda_inputs/20261108-confounding-subsets-v1/bassez-hr22-publication-v1`.
+Require fresh owned run/log/NAS roots and terminal customvalidate+rootreview.
+Historical stdout validation marker is shared withBL; HR schema/report/copy
+producer and24mappings determine scope, not that text. Original gate remains
+FAILED even after successful new publication.
+
+Exact immutable command (SHA256
+`752af53115482b45e9bdd4e4913e74ce8d152db1282aec15c73bb64b38e884de`):
+
+```bash
+env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bassez-hr22-publication-v1/fc46e0366226a4dcce2c2cb0366678df167d3aab/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bassez-hr22-publication-v1/fc46e0366226a4dcce2c2cb0366678df167d3aab/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bassez-hr22-publication-v1/fc46e0366226a4dcce2c2cb0366678df167d3aab/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage5_bassez_hr22_publication_20261109_v1 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage5_bassez_hr22_publication_20261109_v1 --script src/utils/bash/publish_bl_science.sh -- --control /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/bassez-hr22-publication-v1/control.json --control-md5 214bd3b9054026f4dccc523065fbcf28
 ```
