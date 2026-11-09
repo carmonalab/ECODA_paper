@@ -35,16 +35,26 @@ MAIN_SCHEMA = 'ecoda_main_v2_science_publication_control_v1'
 REBOOT_SCHEMA = 'ecoda_main_v2_login_reboot_publication_control_v1'
 MAIN_SCHEMAS = {MAIN_SCHEMA, REBOOT_SCHEMA}
 MAIN_SOURCE = '9ca2453eea7320a721ef6dfd458f9db108abecac'
+UNC4_SCHEMA = 'ecoda_failed16_unc4_publication_control_v1'
+UNC4_SOURCE = '0314f207dfe17f70c2ffdfcc31c4ecd00379b41c'
+UNC4_RUN = 'stage5_failed16_uncorrected_20261109_v1'
+UNC4_DATASETS = ('Covid19_PBMC', 'Kidney_KPMP_full', 'Lupus_PBMC', 'Lung')
+UNC4_SAMPLES = (44, 80, 94, 80)
 MAIN_RUNS = dict(benchmark='stage5_main_benchmark_20261109_v2',
                  **{'batch_effect/uncorrected_final': 'stage5_main_uncorrected_20261109_v2',
                     'batch_effect/corrected_final': 'stage5_main_corrected_20261109_v2'})
 
 
 def analysis_context(control):
+    if control['schema'] == UNC4_SCHEMA:
+        return 'batch_effect/uncorrected_final'
     return control['context'] if control['schema'] in MAIN_SCHEMAS else 'benchmark'
 
 
 def campaign(control):
+    if control['schema'] == UNC4_SCHEMA:
+        return ('stage5_failed16_unc4_science_release_copy', 'failed16_unc4_science_publication.json',
+                'ecoda_failed16_unc4_science_publication_receipt_v1', 'failed16_unc4_science_publication')
     if control['schema'] == REBOOT_SCHEMA:
         return ('stage5_main_v2_reboot_science_release_copy', 'main_v2_reboot_science_publication.json',
                 'ecoda_main_v2_reboot_science_publication_receipt_v1', 'main_v2_reboot_science_publication')
@@ -189,13 +199,15 @@ def verified_scope(args):
     if control.get('schema') == REBOOT_SCHEMA:
         expected_keys.add('incident')
     require(set(control) == expected_keys
-            and control['schema'] in {'ecoda_bl_publication_control_v1', HR_SCHEMA, *MAIN_SCHEMAS}, 'Unknown publication control')
+            and control['schema'] in {'ecoda_bl_publication_control_v1', HR_SCHEMA, UNC4_SCHEMA, *MAIN_SCHEMAS}, 'Unknown publication control')
     run = safe(args.run_root); nas = safe(args.nas_root)
     require(run.is_dir() and run.parent.name == '_ecoda_runs' and control['run_id'] == run.name
             and control['nas_root'] == str(nas) and nas.is_dir()
             and re.fullmatch('[A-Za-z0-9][A-Za-z0-9_-]*', control['release_id']), 'Publication roots differ')
     require(control_path == run / 'manifests/control.json', 'Publication control must be run-owned')
     receipt_path = proof(control['science_receipt']); review = read_json(proof(control['review'])); science = read_json(receipt_path)
+    if control['schema'] == UNC4_SCHEMA:
+        return verified_unc4_scope(control, science, review, run, nas)
     if control['schema'] in MAIN_SCHEMAS:
         return verified_main_v2_scope(control, science, review, run, nas)
     if control['schema'] == HR_SCHEMA:
@@ -734,6 +746,189 @@ def verified_main_v2_scope(control, science, review, run, nas):
     return control, science, inventory, run, nas, destination
 
 
+def verified_unc4_scope(control, science, review, run, nas):
+    """The fixed0314 four-MrVI fits passed; only their final controller failed."""
+    original = safe(science['original_run_root']); context = 'batch_effect/uncorrected_final'
+    require(original.parent == run.parent and original.name == UNC4_RUN and original != run
+            and science['schema'] == 'ecoda_failed16_unc4_science_receipt_v1'
+            and science['status'] == 'NOOP_VALIDATED' and science['science_validated'] is True
+            and science['publication_completed'] is False and science['original_gate_status'] == 'FAILED'
+            and science['source_commit'] == UNC4_SOURCE and science['worker_exit_not_established'] is True,
+            'Wrong fixed uncorrected-four science receipt')
+    require(review['status'] == 'APPROVED_SCIENTIFIC_ARTIFACT_REUSE'
+            and review['receipt_sha256'] == control['science_receipt']['sha256']
+            and review['validation_sha256'] == science['validation']['sha256']
+            and review['companions_sha256'] == science['companions']['sha256']
+            and review['datasets'] == review['distance_feathers'] == review['runtime_jsons'] == review['timing_feathers'] == 4
+            and review['payloads'] == 12 and review['original_gate_status'] == 'FAILED'
+            and review['publication_completed'] is False and review['worker_exit_not_established'] is True,
+            'Review does not approve the exact four-fit/12-payload release')
+    evidence = {key: proof(value) for key, value in science['original_evidence'].items()}
+    names = {'source_manifest': 'manifests/source.manifest', 'runtime_identity': 'manifests/runtime.identity',
+             'binding': 'manifests/artifact_bindings.json', 'source_identity': 'manifests/source_identity.json',
+             'input_artifacts': 'manifests/input_artifacts.tsv', 'selection': 'manifests/selection.tsv',
+             'dispatch': 'manifests/dispatch_selection.tsv', 'child_scheduler_ids': 'manifests/scheduler_ids.tsv',
+             'metadata': 'metadata', 'owners_manifest': 'manifests/owners.tsv', 'terminal': 'status/terminal', 'aggregate': 'status/aggregate',
+             'watchdog': 'status/watchdogs/batch_effect_uncorrected__mrvi.status'}
+    require(set(evidence) == set(names) | {'gate_manifest', 'inspect', 'profile', 'matrix', 'parent_scheduler_ids'},
+            'Incomplete original fixed-four proof set')
+    for name, relative in names.items():
+        require(evidence[name] == original / relative, 'Wrong fixed-four original proof namespace')
+    source = fields(evidence['source_manifest']); runtime = fields(evidence['runtime_identity'])
+    config = safe(source['SOURCE_ROOT'] + '/datasets.json')
+    require(source['SOURCE_COMMIT'] == UNC4_SOURCE and source['AUX_ROOT'] == source['SOURCE_ROOT'] + '/aux'
+            and digest(config) == source['DATASETS_SHA256'], 'Original four-fit source/config changed')
+    require(digest(runtime['RUNTIME_MANIFEST']) == runtime['RUNTIME_MANIFEST_SHA256']
+            and fields(runtime['RUNTIME_MANIFEST'])['IMAGE_SHA256'] == runtime['RUNTIME_IMAGE_SHA256']
+            and safe(runtime['RUNTIME_IMAGE']).stat().st_size == int(runtime['RUNTIME_IMAGE_SIZE']), 'Original runtime changed')
+    binding = read_json(evidence['binding'])
+    require(binding['schema'] == 'ecoda_derivative_artifacts_v1' and binding['stage'] == 'stage5'
+            and binding['run_id'] == original.name and binding['run_root'] == str(original)
+            and binding['selection'] == str(evidence['selection']) and binding['input_artifacts'] == str(evidence['input_artifacts']),
+            'Original fixed-four input/output binding differs')
+    for path in (config, evidence['source_manifest'], evidence['runtime_identity'], evidence['selection'], evidence['input_artifacts']):
+        require(binding['identities'].get(str(path)) == digest(path), 'Original bound proof changed')
+    gate = read_json(evidence['gate_manifest']); inspected = read_json(evidence['inspect']); profile = read_json(evidence['profile'])
+    require(gate['gate_id'] == 'ecoda_stage5_failed16_20261109_v1' and gate['state'] == inspected['state'] == 'FAILED'
+            and inspected['operation'] == 'inspect' and inspected['gate_id'] == gate['gate_id'] and gate['audit'] == inspected['audit']
+            and gate['audit_completed'] is True and gate['audit_state'] == 'COMPLETED' and gate['audit']['passed'] is False
+            and gate['profile'] == profile['name'] and gate['profile_digest'] == digest(evidence['profile'])
+            and gate['command_digest'] == hashlib.sha256(gate['exact_command'].encode()).hexdigest(), 'Original failed16 terminal audit differs')
+    terminal = gate['terminal_status']
+    require(terminal['schema_version'] == '1.0' and terminal['state'] == 'FAILED' and type(terminal['exit_code']) is int
+            and terminal['exit_code'] != 0 and all(terminal[key] == gate[key] for key in ('gate_id', 'exact_command', 'command_digest', 'event_generation'))
+            and isinstance(gate['event_generation'], str) and bool(gate['event_generation'])
+            and all(isinstance(terminal.get(key), str) and terminal[key] for key in ('started_at', 'finished_at')),
+            'Original failed wrapper outcome is not established')
+    argv = shlex.split(gate['exact_command'])
+    require(cli_value(argv, '--run-id') == 'stage5_failed16_20261109_v1'
+            and cli_value(argv, '--source-root') == source['SOURCE_ROOT']
+            and safe(cli_value(argv, '--source-manifest')).read_bytes() == evidence['source_manifest'].read_bytes()
+            and cli_value(argv, '--scratch-root') == str(original.parent.parent)
+            and cli_value(argv, '--runtime-image') == runtime['RUNTIME_IMAGE']
+            and cli_value(argv, '--runtime-manifest') == runtime['RUNTIME_MANIFEST']
+            and cli_value(argv, '--script') == 'src/5_run_benchmark_methods/stage5_campaign.sh', 'Wrong original failed16 command')
+    ids = gate['scheduler_array_ids'] + gate['scheduler_watchdog_ids']; accounting = inspected['audit']['accounting']
+    expected_ids = {'4666176', '4666180', '4666183', '4666185', '4666178', '4666187', '4666192', '4666196', '4666184', '4666191'}
+    template = 'sacct -n -P -X -j {scheduler_ids} --format=JobIDRaw,State,ExitCode'
+    raw = [line.split('|') for line in accounting['stdout'].splitlines()]
+    require(len(ids) == len(set(ids)) == 10 and set(ids) == expected_ids and accounting['scheduler_ids'] == ids
+            and profile['policy']['accounting_command'] == template and accounting['command'] == template.replace('{scheduler_ids}', ','.join(ids))
+            and accounting['query_count'] == 1 and accounting['attempted'] is True and accounting['actual_exit'] == 0
+            and len(raw) == len({row[0] for row in raw}) == 23 and accounting['stdout'].endswith('\n')
+            and all(len(row) == 3 and re.fullmatch('[1-9][0-9]*', row[0])
+                    and row[1].rstrip('+') in {'COMPLETED', 'FAILED', 'CANCELLED', 'TIMEOUT', 'OUT_OF_MEMORY', 'NODE_FAIL', 'PREEMPTED', 'BOOT_FAIL', 'DEADLINE', 'REVOKED', 'SPECIAL_EXIT'}
+                    and re.fullmatch('[0-9]+:[0-9]+', row[2]) for row in raw)
+            and expected_ids <= {row[0] for row in raw}
+            and accounting['rows'] == [dict(line=i, job_id=row[0], state=row[1], exit_code=row[2]) for i, row in enumerate(raw, 1)]
+            and science['original_accounting'] == accounting, 'Original sole10-ID/23-row accounting was changed/incomplete')
+    require(all(next(row[1:] for row in raw if row[0] == job) == ['COMPLETED', '0:0'] for job in ('4666187', '4666191', '4666192')),
+            'Original logical array/watchdog/aggregate are not completed')
+    rows = lambda path: [line.split('\t') for line in path.read_text().splitlines()]
+    require(rows(evidence['child_scheduler_ids']) == [['PREFLIGHT', '4666178'], ['ARRAY', '4666187'], ['WATCHDOG', '4666191'], ['AGGREGATE_GATE', '4666192']]
+            and fields(str(evidence['child_scheduler_ids']) + '.md5') == dict(PATH=str(evidence['child_scheduler_ids']), MD5=digest(evidence['child_scheduler_ids'], 'md5'), SIZE=str(evidence['child_scheduler_ids'].stat().st_size)),
+            'Original child scheduler ledger differs')
+    parent = original.parent / 'stage5_failed16_20261109_v1'
+    schedulers = rows(evidence['parent_scheduler_ids'])
+    require(evidence['parent_scheduler_ids'] == parent / 'manifests/campaign_scheduler_ids.tsv'
+            and len(schedulers) == 10 and all(len(row) == 4 for row in schedulers) and {row[3] for row in schedulers} == expected_ids
+            and [row[2:] for row in schedulers if row[1] == original.name] == rows(evidence['child_scheduler_ids']), 'Original parent scope differs')
+    expected_selection = [[ds, 'batch_effect_uncorrected', 'batch_effect_uncorrected'] for ds in UNC4_DATASETS]
+    expected_matrix = [[ds, 'batch_effect_uncorrected', 'mrvi'] for ds in UNC4_DATASETS]
+    matrix = evidence['matrix']
+    require(rows(evidence['selection']) == expected_selection and rows(evidence['dispatch']) == expected_matrix
+            and matrix == original / 'manifests/matrix_batch_effect_uncorrected_mrvi.tsv' and rows(matrix) == expected_matrix
+            and fields(str(matrix) + '.md5') == dict(PATH=str(matrix), MD5=digest(matrix, 'md5'), SIZE=str(matrix.stat().st_size)), 'Four physical worker rows differ')
+    require(len(science['worker_evidence']) == 4, 'Missing exact logical worker logs')
+    for index, item in enumerate(science['worker_evidence'], 1):
+        require(item['dataset'] == UNC4_DATASETS[index-1] and item['task_index'] == index, 'Worker logical row mapping differs')
+        for key in ('stdout', 'stderr'):
+            log = proof(item[key]); suffix = '.log' if key == 'stdout' else '.err'
+            require(log == original / 'logs' / (f'5_matrix_batch_effect_uncorrected__mrvi_4666187_{index}' + suffix), 'Wrong original worker log')
+    wd = fields(evidence['watchdog']); aggregate_lines = evidence['aggregate'].read_text().splitlines()
+    require(fields(evidence['terminal'])['STATE'] == 'FAIL'
+            and fields(evidence['terminal'])['REASON'] == 'Stage 5 final matrix artifact validation failed'
+            and 'STATE=OK' in aggregate_lines and aggregate_lines.count('WATCHDOG_LABELS=batch_effect_uncorrected__mrvi') == 1
+            and [line for line in aggregate_lines if line.startswith('SCHEDULER_ID=')] == ['SCHEDULER_ID=' + job for job in ('4666178', '4666187', '4666191', '4666192')]
+            and wd['STATE'] == 'OK' and wd['LABEL'] == 'batch_effect_uncorrected__mrvi' and wd['ARRAY_JOB_ID'] == wd['SCHEDULER_ID'] == '4666187' and wd['RETRY_INDEX'] == '0', 'Original failure/aggregate/WD evidence differs')
+    validation = read_json(proof(science['validation'])); companions = read_json(proof(science['companions']))
+    require(validation['schema'] == 'ecoda_failed16_unc4_readonly_validation_v1'
+            and validation['status'] == 'VALIDATED_CURRENT_FOUR_MRVI_ARTIFACTS' and validation['run_id'] == original.name
+            and validation['original_source_commit'] == UNC4_SOURCE
+            and all(validation[key] is True for key in ('no_source_writes', 'no_accounting_query', 'no_model_fit', 'no_h5ad_payload_read'))
+            and companions['schema'] == 'ecoda_failed16_unc4_companion_audit_v1' and companions['run_id'] == original.name
+            and all(companions[key] is True for key in ('no_source_writes', 'no_accounting_query', 'no_scheduler_query', 'no_model_fit', 'no_h5ad_payload_read')),
+            'Missing current no-compute science/companion audits')
+    validation_source = fields(proof(validation['validation_source']))
+    require(validation['validation_source']['commit'] == validation_source['SOURCE_COMMIT'] == '7a6c513f7f3d3bc4b1f0710029e12aef2d26aedd'
+            and proof(validation['validator']) == Path(validation_source['SOURCE_ROOT']) / 'src/5_run_benchmark_methods/matrix_artifact_validator.py'
+            and validation['validator']['sha256'] == 'c7b9c7f75a9e3bd0de2544d9befc8cf715e9b56a76d2ca00f6d12a036a090d97'
+            and proof(validation['config']) == config and proof(validation['binding']) == evidence['binding'], 'Committed patched validator/input binding differs')
+    for item in validation['unchanged']:
+        proof(item)
+    require({item['path'] for item in validation['unchanged']} >= {str(evidence[key]) for key in ('source_identity', 'binding', 'selection', 'metadata', 'terminal', 'aggregate')}, 'Immutable original snapshots missing')
+    distances = validation['payloads']; observed = companions['rows']; identities = read_json(evidence['source_identity'])['entries']
+    references = rows(evidence['input_artifacts'])
+    require([item['dataset'] for item in distances] == [item['dataset'] for item in observed] == list(UNC4_DATASETS)
+            and len(identities) == len(references) == 4 and [row[0] for row in references] == list(UNC4_DATASETS)
+            and len(science['distance_owners']) == 4, 'Wrong exact dataset/companion/input coverage')
+    require(len(science['row_owners']) == 4, 'Missing original method row owners')
+    owner_rows = rows(evidence['owners_manifest'])
+    for ds, snapshot in zip(UNC4_DATASETS, science['row_owners']):
+        path = proof(snapshot); value = fields(path)
+        key = f'derivative/{original.name}/uncorrected/{ds}/batch_effect_uncorrected/mrvi'
+        require(value == snapshot['fields'] and value['RUN_ID'] == original.name and value['STAGE'] == 'stage5'
+                and value['STATE'] in {'OK', 'FAIL', 'ACTIVE'} and value['KEY'] == key
+                and path == original.parent.parent / '_ecoda_owners/stage5' / re.sub(r'[/,:\t |]', '_', key) / 'owner'
+                and [key, str(path.parent)] in owner_rows, 'Original method owner changed/foreign')
+    import pandas as pd
+    inventory = []
+    for index, (ds, distance, observed_row, identity, reference) in enumerate(zip(UNC4_DATASETS, distances, observed, identities, references)):
+        require(identity['dataset'] == ds and identity['view'] == 'batch_effect_uncorrected' and reference[:2] == [ds, identity['view']]
+                and reference[2:5] == [identity['path'], identity['md5'], str(identity['size'])]
+                and fields(reference[5]) == dict(PATH=identity['path'], MD5=identity['md5'], SIZE=str(identity['size']))
+                and distance['input_md5'] == identity['md5'] and distance['n_samples'] == len(identity['sample_ids']) == UNC4_SAMPLES[index]
+                and distance['frame_shape'] == [UNC4_SAMPLES[index], UNC4_SAMPLES[index]], 'Current source sample/input universe differs')
+        output = original / 'artifacts' / context / 'embeddings' / f'{ds}_batch_effect_uncorrected_final_hvg2000_highres_mrvi_dists.feather'
+        current = record(output, original, 'stage5_mrvi')
+        require(distance['path'] == str(output) and distance['md5'] == current['md5'] and str(distance['size']) == current['size']
+                and distance['producer_record'] == fields(current['record_path']), 'Validated original distance proof differs')
+        require(owner(output, original, {'OK', 'FAIL', 'ACTIVE'}) == science['distance_owners'][index], 'Original distance owner changed')
+        preflight = proof(distance['input_preflight']); status = fields(preflight)
+        require(preflight == original / 'status/h5ad_preflight' / (ds + '__batch_effect_uncorrected.status')
+                and status['STATE'] == 'OK' and status['RUN_ID'] == original.name and status['DATASET'] == ds, 'Original full-input witness differs')
+        runtime_path = Path(str(output) + '.runtime.json'); timing_path = original / 'logs' / f'execution_times_batch_effect_uncorrected_final_mrvi_{ds}.feather'
+        payload = read_json(runtime_path); timing = pd.read_feather(timing_path)
+        require(set(payload) == {'schema_version', 'artifact_path', 'artifact_md5', 'dataset', 'method', 'time_secs', 'mem_GB'}
+                and payload['schema_version'] == 1 and payload['artifact_path'] == str(output) and payload['artifact_md5'] == current['md5']
+                and payload['dataset'] == ds and payload['method'] == 'MrVI_hvg2000'
+                and observed_row['runtime']['payload'] == payload
+                and set(timing.columns) == {'dataset', 'method', 'time_secs', 'mem_GB'} and len(timing) == 1
+                and timing.iloc[0]['dataset'] == ds and timing.iloc[0]['method'] == 'MrVI_hvg2000'
+                and json.loads(timing.to_json(orient='records')) == observed_row['timing']['rows'], 'Runtime/timing schema or original-fit identity differs')
+        for cost in ('time_secs', 'mem_GB'):
+            require(type(payload[cost]) in (int, float) and math.isfinite(payload[cost]) and payload[cost] >= 0
+                    and math.isfinite(float(timing.iloc[0][cost])) and float(timing.iloc[0][cost]) >= 0
+                    and math.isclose(float(timing.iloc[0][cost]), payload[cost], rel_tol=1e-9, abs_tol=1e-8), 'Runtime/timing costs differ')
+        for kind, path, producer, observed_item in (('result', output, 'stage5_mrvi', None),
+                ('runtime', runtime_path, 'stage5_mrvi', observed_row['runtime']), ('timing', timing_path, 'stage5_execution_log', observed_row['timing'])):
+            item = record(path, original, producer)
+            if observed_item is not None:
+                require(observed_item['exists'] is True and observed_item['path'] == str(path) and observed_item['md5'] == item['md5']
+                        and str(observed_item['size']) == item['size'] and proof(observed_item['sidecar']) == Path(str(path) + '.md5')
+                        and proof(observed_item['producer_record']) == Path(item['record_path']), 'Original companion proof changed')
+                previous = observed_item['owner']
+                require(previous['path'] == str(owner_file(path, original)) and type(previous['exists']) is bool, 'Wrong companion owner namespace')
+                if previous['exists']:
+                    require(owner(path, original, {'OK', 'FAIL', 'ACTIVE'}) == {key: previous[key] for key in ('path', 'sha256', 'fields')}, 'Original companion owner changed')
+                else:
+                    require(not owner_file(path, original).exists(), 'An originally absent owner was created')
+            relative = 'embeddings/' + ('timing_sources/' if kind == 'timing' else '') + path.name
+            inventory.append(dict(dataset=ds, kind=kind, source=str(path), relative=relative, md5=item['md5'], size=item['size'], original_producer=producer))
+    destination = safe(str(nas / 'releases' / control['release_id'] / run.name / context), False)
+    return control, science, inventory, run, nas, destination
+
+
 def verified_hr22_scope(control, science, review, receipt_path, run, nas):
     from benchmark_request_scope import AUTHOR_HR
     require(review['status'] == 'APPROVED_SCIENTIFIC_ARTIFACT_REUSE'
@@ -829,7 +1024,18 @@ def write_receipt(destination, value):
 def copy_payload(args):
     """Copy to a new inode; atomic link installs only the new temporary inode."""
     source = safe(args.source); destination = safe(args.destination, False); boundary = safe(args.boundary)
-    require(source.suffix in {'.rds', '.feather'} or source.name == 'nas_checksums.md5', 'Copy source is outside finite BL payload kinds')
+    if source.name.endswith('.runtime.json'):
+        control_path = safe(args.control)
+        require(digest(control_path, 'md5') == args.control_md5, 'Runtime-copy control digest differs')
+        control = read_json(control_path); selected_run = control_path.parent.parent
+        require(control['schema'] == UNC4_SCHEMA and control_path == selected_run / 'manifests/control.json'
+                and selected_run.parent.name == '_ecoda_runs' and control['run_id'] == selected_run.name, 'Runtime-copy control is not the fixed run-owned scope')
+        allowed = {root / 'artifacts/batch_effect/uncorrected_final/embeddings' /
+                   f'{ds}_batch_effect_uncorrected_final_hvg2000_highres_mrvi_dists.feather.runtime.json'
+                   for root in (selected_run, selected_run.parent / UNC4_RUN) for ds in UNC4_DATASETS}
+        require(source in allowed, 'Runtime copy is outside the fixed four-fit scope')
+    else:
+        require(source.suffix in {'.rds', '.feather'} or source.name == 'nas_checksums.md5', 'Copy source is outside finite BL payload kinds')
     require(boundary in destination.parents and not destination.exists(), 'Copy target exists/outside boundary')
     require(digest(source, 'md5') == args.md5 and source.stat().st_size == int(args.size), 'Copy source differs')
     # Pin the parent chain. No symlink can redirect a temporary or publication.
@@ -931,6 +1137,10 @@ def main():
                           required_sample_metadata_sources=[] if control['context'] == 'benchmark' else sorted({
                               str(Path(science['original_run_root']) / 'artifacts' / control['context'] / 'metadata' / (row['dataset'] + '_sample_metadata.feather'))
                               for row in inventory}))
+        if control['schema'] == UNC4_SCHEMA:
+            result.update(worker_exit_not_established=True, completion_criterion='VALIDATED_PUBLISHED_ARTIFACTS', publication_scope='FOUR_MRVI_FITS_ONLY', sample_metadata_published=False,
+                          runtime_companion_policy='BYTE_IDENTICAL_ORIGINAL_FIT_EVIDENCE_NOT_REBASED',
+                          sample_metadata_policy='Separate validated v1 selected metadata-adoption lineage; no exports or TASK provenance are created.')
         if control['schema'] == REBOOT_SCHEMA:
             result.update(incident=control['incident'], orchestration_outcome='LOGIN_REBOOT_LOSS', wrapper_exit_code=None,
                           policy='New reviewed artifact copies; original PRELAUNCH_STOP, absent wrapper outcome, statuses and owners remain unchanged. No scheduler query, fit, or H5AD read.')
@@ -941,7 +1151,7 @@ def main():
             require(completed.tzinfo is not None and completed <= datetime.datetime.now(datetime.timezone.utc), 'Invalid completion timestamp')
             record(Path(args.report), run, report_producer); owner(Path(args.report), run, {'OK'})
             require(fields(run / 'status/terminal')['STATE'] == 'NOOP_VALIDATED', 'Publication run is not terminal validated')
-            print('MAIN_V2_SCIENCE_PUBLICATION_CONTRACT_OK' if control['schema'] in MAIN_SCHEMAS else 'BL_PUBLICATION_CONTRACT_OK'); return
+            print('FAILED16_UNC4_PUBLICATION_CONTRACT_OK' if control['schema'] == UNC4_SCHEMA else 'MAIN_V2_SCIENCE_PUBLICATION_CONTRACT_OK' if control['schema'] in MAIN_SCHEMAS else 'BL_PUBLICATION_CONTRACT_OK'); return
         write_receipt(args.report, result)
     except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
         parser.exit(1, f'ERROR: {error}\n')

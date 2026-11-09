@@ -49,6 +49,11 @@ CONTROL="${ECODA_RUN_ROOT}/manifests/control.json"
 campaign_schema="$("${PYTHON_BIN}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema"])' "${CONTROL}")"
 publication_context=benchmark
 case "${campaign_schema}" in
+  ecoda_failed16_unc4_publication_control_v1)
+    COPY_PRODUCER=stage5_failed16_unc4_science_release_copy; SCOPE_PRODUCER=failed16_unc4_publication_scope
+    REPORT_PRODUCER=failed16_unc4_science_publication; REPORT_NAME=failed16_unc4_science_publication.json
+    VALIDATION_MARKER=FAILED16_UNC4_SCIENCE_PUBLICATION_VALIDATED
+    publication_context=batch_effect/uncorrected_final ;;
   ecoda_bl_publication_control_v1)
     COPY_PRODUCER=stage5_bl_science_release_copy; SCOPE_PRODUCER=bl_publication_scope
     REPORT_PRODUCER=bl_science_publication; REPORT_NAME=bl_publication.json
@@ -125,7 +130,7 @@ while IFS=$'\t' read -r dataset kind source relative md5 size producer extra; do
     copy_source="${source}"
     [[ "${target}" != "${published}" ]] || copy_source="${copied}"
     "${PYTHON_BIN}" "${helper}" copy --source "${copy_source}" --destination "${target}" \
-      --boundary "${boundary}" --md5 "${md5}" --size "${size}"
+      --boundary "${boundary}" --md5 "${md5}" --size "${size}" --control "${CONTROL}" --control-md5 "${CONTROL_MD5}"
     ecoda_write_checksum "${target}"
     ecoda_write_artifact_record "${target}" "${COPY_PRODUCER}" "${ECODA_RUN_ID}" >/dev/null
     ecoda_validate_artifact_record "${target}" "${COPY_PRODUCER}" "${ECODA_RUN_ID}" >/dev/null

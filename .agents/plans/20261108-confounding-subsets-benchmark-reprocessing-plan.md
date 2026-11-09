@@ -3676,3 +3676,73 @@ whose error code 4021 is displayed as `0:53` by accounting. Missing worker logs
 fit that hypothesis; they do not establish Bamboo's actual errno or allocation.
 This is source-level diagnostic context, not a confirmed runtime cause or node.
 The user allocation-diagnostic exception remains pending.
+
+### Four uncorrected MrVI results validated; copy-only release code accepted
+
+Committed validator `7a6c513f7f3d3bc4b1f0710029e12aef2d26aedd` was deployed in
+its new immutable snapshot. The actual read-only validation passes for all four
+original distance matrices: Covid19 44, Kidney 80, Lupus 94, Lung 80 samples.
+Receipt `.gate/failed16_inputs_20261109_v1/unc4_validation.observed.json` SHA
+`fb448d820b14413bdb60b943bdd2077d23a86498c1f5f716ec40181c9a1cae56`.
+The original failed run, source, input binding, statuses and owners were not
+changed; no H5AD read or fit was performed. Bamboo reports Slurm 26.05.4.
+
+All four original runtime JSON and four timing Feather companions also pass
+strict checksum/producer checks; companion observation SHA
+`f2cfa9fc4c51633d9e1e974e6f97b6b646b68ef06ef06e8280e1ed506e4be304`.
+The explicit fixed-four publisher arm is independently accepted, with twelve
+files total and no sample metadata export. Copied runtime JSON retains its
+original artifact_path and original-fit meaning; no runtime identity is rebased
+or presented as a new fit. New producer records describe validated copies.
+The exact original matrix is `matrix_batch_effect_uncorrected_mrvi.tsv`;
+an earlier diagnostic looked for a nonexistent `_base` suffix, recorded its
+absence and was corrected in a separate preserved metadata-only capture.
+Actual publication controls remain draft until the root seals and reviews them.
+
+### Full original presence inventory supersedes the twelve-row assumption
+
+At the completed recovery boundary a bounded metadata inventory expanded all
+32 original immutable method matrices: 53 benchmark + 56 uncorrected + 56
+corrected = 165 physical rows. It inspected expected-file presence and small
+proof metadata only, without binary/H5AD reads, model work, scheduler queries
+or remote writes. Final collector SHA
+`28c38fcb7783b15b687f60cd1c7137d2cc955a871071a899a2972ade6f5e680c`;
+actual observation `.gate/orphaned_main_20261109_v1/old_main_full_presence_v2.observed.json`
+SHA `47fe94b1dad82b45e6dfb39b2035fc5766b6c474044e8ae4861f844d5f841294`.
+
+- 64 rows have complete core metadata/presence, requiring full binary/science
+  validation before reuse approval; presence is not success.
+- Two active rows are excluded: one Stephenson and one Bassez scPoli
+  `hvg2000_highres_dims15`, array `4665568`. They are not two Stephenson rows.
+- 99 rows have all expected core payloads absent: benchmark 15,
+  uncorrected 36, corrected 48. Four uncorrected MrVI rows are now covered by
+  the new validated recovery outputs, leaving 95 candidate gaps in the
+  original physical scope, not yet an approved new launch selection.
+- These include 83 additional gaps beyond the earlier known sixteen;
+  watchdog reports were unavailable for those families. The twelve-row draft
+  alone cannot complete the campaign and is superseded as a total-scope claim.
+- The remaining candidate breakdown is benchmark 15; uncorrected 32 science
+  rows (composition/PB/PILOT/QOT across eight cohorts); corrected 48 rows,
+  including eight missing preparation rows and forty science rows.
+  Existing uncorrected preparation artifacts must be validated/reused before
+  deciding whether any preparation needs recomputation.
+
+An earlier executed collector `511ac...` failed closed at its final namespace
+containment check (short versus full batch context names); its stderr and exact
+SHA-verified executed source are archived separately. The corrected collector
+has a regression reconstructing all 165 actual tuples and known/active scope.
+This was a metadata diagnostic failure, not evidence of a scientific-data fault.
+
+The original postmortem candidate at 17:54:10 UTC remains BLOCKED: 19 watchdog
+stdout files are missing (one belongs to the still-pending tail), and old jobs
+remain queued. Candidate SHA
+`07bdf71b1dccd3fcad75120e8d01dea938dae74b7b170e9825e58c3acb8d7926`;
+no original accounting query or complete final-catalog claim was made.
+Independent review confirms that profile section 6 permits a later selected
+artifact NOOP reuse decision despite unrelated unrecoverable historical logs,
+provided old-writer absence is independently established, every other user job
+is absent or explicitly classified as fresh/disjoint, and selected bytes/proofs
+are stable and fully validated. Such a future decision must explicitly retain
+catalog_complete=false, historical retry coverage UNVERIFIABLE, unknown exits,
+old STOP and an unapproved/incomplete historical audit. Current strict reboot
+publisher is unchanged; no alternative release is implemented or approved now.
