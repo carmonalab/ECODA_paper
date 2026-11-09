@@ -2783,11 +2783,16 @@ run_ct_comps_analysis_worker <- function(
   dir.create(args$output_dir, showWarnings = FALSE, recursive = TRUE)
 
   out_file <- file.path(args$output_dir, paste0(ds, out_suffix, ".rds"))
-  if (artifact_checksum_ok(
+  checksum_valid<-artifact_checksum_ok(
     out_file,
     producer = artifact_producer,
     run_id = artifact_run_id
-  ) && !force) {
+  )
+  if(identical(analysis_label,'trans')&&file.exists(out_file)) {
+    if(!checksum_valid||force) stop('Existing transformation artifact preserved; select a new derivative output root: ',out_file)
+    validate_transformation_result(readRDS(out_file))
+  }
+  if (checksum_valid && !force && !identical(analysis_label,'trans')) {
     replay_runtime_metadata(
       out_file,
       ds,
@@ -2805,23 +2810,20 @@ run_ct_comps_analysis_worker <- function(
     stop("Input h5ad not found: ", h5ad_path)
   }
 
-  ad <- import("anndata", convert = FALSE)
-  adata <- ad$read_h5ad(h5ad_path, backed = "r")
-  obs <- py_to_r(adata$obs)
-
   sample_col <- "Sample"
+  ct_col<-entry$cell_type_high_res
+  label_col<-entry$label_col
+  if(is.null(ct_col)||!nzchar(ct_col)) stop('Configured high-resolution cell-type column is required')
+  # H5py reads only requested obs/var schema, never X, layers, or embeddings.
+  obs<-load_h5ad_author_hr_metadata(h5ad_path,
+    unique(c(sample_col,entry$sample_col,ct_col,label_col)),args$view)
   if (!sample_col %in% colnames(obs)) {
     stop(sample_col, " not found in obs columns of ", h5ad_path)
-  }
-  ct_col <- entry$cell_type_high_res
-  if (is.null(ct_col)) {
-    stop("Dataset '", ds, "' has no cell_type_high_res column in datasets.json")
   }
   if (!ct_col %in% colnames(obs)) {
     stop("Cell type column '", ct_col, "' not found in obs columns of ",
          h5ad_path)
   }
-  label_col <- entry$label_col
   if (!label_col %in% colnames(obs)) {
     stop("Label column '", label_col, "' not found in obs columns of ",
          h5ad_path)
@@ -2839,9 +2841,30 @@ run_ct_comps_analysis_worker <- function(
   labels <- as.factor(metadata[[label_col]])
   names(labels) <- metadata[[sample_col]]
 
+  if(identical(analysis_label,'trans')&&checksum_valid&&!force) {
+    cached<-readRDS(out_file)
+    validate_transformation_result(cached,expected_samples=rownames(ct_comps))
+    identity<-attr(cached,'transformation_input')
+    if(!isTRUE(all.equal(attr(cached,'composition_counts'),as.matrix(ct_comps)))||
+       !identical(attr(cached,'sample_labels'),labels)||
+       !identical(identity$dataset,ds)||!identical(identity$view,args$view)||
+       !identical(identity$cell_type_column,ct_col)||!identical(identity$evaluation_label_column,label_col))
+      stop('Existing transformation cache has incompatible metadata; preserved: ',out_file)
+    replay_runtime_metadata(out_file,ds,log_method,args$log_file,
+      producer=artifact_producer,run_id=artifact_run_id)
+    message('trans results already exist and passed metadata/policy validation: ',out_file)
+    return(invisible(NULL))
+  }
   time_secs <- exec_time(res <- run_fun(ct_comps, labels))
   time_secs_numeric <- as.numeric(time_secs, units = "secs")
   mem_gb <- peak_rss_gb()
+  if(identical(analysis_label,'trans')) {
+    validate_transformation_result(res)
+    attr(res,'transformation_input')<-list(dataset=ds,view=args$view,h5ad_path=h5ad_path,
+      configured_sample_column=entry$sample_col,canonical_sample_column=sample_col,
+      cell_type_column=ct_col,evaluation_label_column=label_col,
+      config_md5=unname(tools::md5sum(args$config_path)))
+  }
   save_rds_atomic(
     res,
     out_file,

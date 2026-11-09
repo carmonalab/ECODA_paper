@@ -2232,18 +2232,16 @@ validate_pseudobulk <- function(
   )
 }
 
-validate_trans <- function(file) {
+validate_trans <- function(file,expected=NULL) {
   if (!checksum_ok(file)) stop("Missing or invalid transformation checksum: ", file)
   value <- readRDS(file)
-  required <- c("trans_method", "ANOSIM_score", "Modularity_score", "Adjusted_Rand_Index")
-  if (!is.data.frame(value) || nrow(value) <= 0L || !all(required %in% names(value))) {
-    stop("Transformation result has the wrong summarized schema: ", file)
-  }
-  scores <- value[required[2:4]]
-  if (!all(vapply(scores, is.numeric, logical(1L))) || !finite_numeric(scores)) {
-    stop("Transformation scores are nonnumeric or nonfinite: ", file)
-  }
+  # Load only definitions into an isolated environment. The shared pure
+  # validator has no package/model/cohort dependency and never re-scores.
+  contract<-new.env(parent=baseenv())
+  sys.source(file.path(validator_dir,'benchmark_pipeline.R'),envir=contract)
+  contract$validate_transformation_result(value,expected_samples=expected)
 }
+
 validate_zeroimp <- function(file) {
   if (!checksum_ok(file)) stop("Missing or invalid zero-imputation checksum: ", file)
   value <- readRDS(file)
@@ -2433,7 +2431,7 @@ validate_artifact_contract <- function(
       batch_contract
     )
   } else if (method == "trans") {
-    validate_trans(file)
+    validate_trans(file,expected)
   } else if (method == "zeroimp") {
     validate_zeroimp(file)
   } else if (method == "prepare_pseudobulk" ||
@@ -2584,7 +2582,7 @@ for (part in parts) {
       file <- file.path(root, "results", paste0(ds, "_trans.rds"))
       .validate_reconstructed_artifact_path(file)
       selected_artifacts <- c(selected_artifacts, file)
-      validate_trans(file)
+      validate_trans(file,expected)
     } else if (label == "zeroimp") {
       file <- file.path(root, "results", paste0(ds, "_zeroimp.rds"))
       .validate_reconstructed_artifact_path(file)

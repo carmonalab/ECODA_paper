@@ -2,6 +2,72 @@
 # PIPELINE FUNCTIONS
 # ============================================================
 
+# Versioned screen contract: aliases remain readable by existing notebooks,
+# while their definitions and retained draws distinguish these from old summaries.
+transformation_analysis_policy <- function() {
+  list(version=2L, methods=c('counts','freq','arcsine_sqrt','alr_randref','alr_mincvref','clr'),
+    score_columns=c(anosim_score='ANOSIM_score',mod_knn3_score='Modularity_score',
+      cluster_score='Adjusted_Rand_Index',sil_score='Silhouette_score',lisi_score='LISI_score'),
+    modularity_k=3L, ari='mean(Ward.D2 ARI, PAM ARI)',
+    lisi='separation; higher is better', aggregation='arithmetic mean of replicate scores',
+    replicates=20L, zero_imputation='counts_all__1', seed=123L,
+    rng_kind="L'Ecuyer-CMRG", rng_normal_kind="Inversion", rng_sample_kind="Rejection", rng_policy='seed + perturbation index - 1; scoring RNG restored',
+    alr_randref='seeded uniform reference',alr_mincvref='minimum frequency CV reference')
+}
+
+# Pure validation: no models, cohort reads, or metric recomputation. Features,
+# labels/references, score definitions and summary-to-draw arithmetic are kept.
+validate_transformation_result <- function(value,expected_samples=NULL) {
+  policy<-transformation_analysis_policy()
+  if(!is.data.frame(value)||!identical(attr(value,'transformation_policy'),policy))
+    stop('Transformation result requires the version-2 five-metric policy; legacy summaries cannot be backfilled')
+  columns<-unname(policy$score_columns)
+  if(nrow(value)!=length(policy$methods)||anyDuplicated(value$trans_method)||
+     !setequal(as.character(value$trans_method),policy$methods)||!all(columns%in%names(value))||
+     !all(vapply(value[columns],function(x)is.numeric(x)&&all(is.finite(x)),logical(1))))
+    stop('Transformation summary lacks its complete finite five-score grid')
+  draws<-attr(value,'transformation_replicates');counts<-attr(value,'composition_counts')
+  labels<-attr(value,'sample_labels')
+  if(!is.matrix(counts)||!is.numeric(counts)||any(!is.finite(counts))||any(counts<0)||
+     is.null(rownames(counts))||anyDuplicated(rownames(counts))||any(rowSums(counts)<=0)||
+     is.null(colnames(counts))||anyDuplicated(colnames(counts))||
+     !identical(names(labels),rownames(counts))||anyNA(labels))
+    stop('Transformation result lacks aligned source compositions/labels')
+  if(!is.null(expected_samples)&&!setequal(rownames(counts),expected_samples))
+    stop('Transformation sample universe differs from its configured input')
+  required<-c('trans_method','zero_imp_method','n_celltypes','Amount_of_perturbation',
+    'bootstrap_id','alr_reference','feat_mat','sample_labels','rng_feature_state','rng_score_state',columns)
+  if(!is.data.frame(draws)||nrow(draws)!=length(policy$methods)*policy$replicates||
+     !all(required%in%names(draws))||any(draws$zero_imp_method!=policy$zero_imputation)||
+     any(draws$n_celltypes!=0)||any(draws$Amount_of_perturbation!=0)||
+     !all(vapply(draws[columns],function(x)is.numeric(x)&&all(is.finite(x)),logical(1))))
+    stop('Transformation result lacks the complete reconstructable draw grid')
+  for(method in policy$methods) {
+    subset<-draws[draws$trans_method==method,,drop=FALSE]
+    if(nrow(subset)!=policy$replicates||!setequal(subset$bootstrap_id,seq_len(policy$replicates))||
+       anyDuplicated(subset$bootstrap_id)) stop('Missing or duplicate transformation replicate')
+    summary<-as.numeric(value[value$trans_method==method,columns,drop=TRUE])
+    if(any(abs(summary-colMeans(subset[columns]))>1e-10)) stop('Transformation summary differs from its stored draws')
+  }
+  feature_names<-make.names(colnames(counts),unique=TRUE)[colSums(counts)>0]
+  for(i in seq_len(nrow(draws))) {
+    feature<-as.matrix(draws$feat_mat[[i]])
+    if(!is.numeric(feature)||any(!is.finite(feature))||ncol(feature)<1||
+       !identical(rownames(feature),rownames(counts))||
+       !identical(draws$sample_labels[[i]],labels)||
+       !all(colnames(feature)%in%feature_names)||anyDuplicated(colnames(feature))||
+       !is.integer(draws$rng_feature_state[[i]])||length(draws$rng_feature_state[[i]])!=7L||
+       !is.integer(draws$rng_score_state[[i]])||length(draws$rng_score_state[[i]])!=7L)
+      stop('Transformation draw has malformed features/labels/RNG identity')
+    reference<-draws$alr_reference[[i]]
+    if(grepl('^alr_',draws$trans_method[[i]])) {
+      if(is.na(reference)||!reference%in%feature_names||reference%in%colnames(feature))
+        stop('Transformation ALR reference identity is invalid')
+    } else if(!is.na(reference)) stop('Non-ALR transform records a reference')
+  }
+  invisible(TRUE)
+}
+
 datrans <- function(
   count_mat,
   labels = NULL,
@@ -18,20 +84,34 @@ datrans <- function(
     "clr"
   ),
   zero_imp_method = "counts_all__1",
-  n_cores = 8
+  n_cores = 8,
+  rng_seed = 123L
 ) {
+  stopifnot(length(rng_seed)==1L,is.finite(rng_seed),rng_seed==as.integer(rng_seed),rng_seed>=0,reps>=1L,n_cores>=1L)
+  if(!is.null(labels)) {
+    if(is.null(names(labels))) names(labels)<-rownames(count_mat)
+    stopifnot(length(labels)==nrow(count_mat),setequal(names(labels),rownames(count_mat)),!anyNA(labels))
+    labels<-labels[rownames(count_mat)]
+  }
   colnames(count_mat) <- make.names(colnames(count_mat), unique = TRUE)
   n_half_samples <- round(dim(count_mat)[1] / 2)
   if (!is.null(cts)) {
     n_ct_to_select[n_ct_to_select >= length(cts)] <- length(cts)
   }
-  cluster <- makeCluster(n_cores)
-  registerDoParallel(cluster)
+  if(n_cores==1L) {
+    foreach::registerDoSEQ()
+  } else {
+    cluster <- makeCluster(n_cores)
+    on.exit(stopCluster(cluster),add=TRUE)
+    registerDoParallel(cluster)
+  }
   rets <- foreach(
-    da = Amount_of_perturbation,
+    da_index = seq_along(Amount_of_perturbation),
     .export = c(
       "calc_perc_df",
       "impute_zeros",
+      "calc_sep_score",
+      "calc_lisi",
       "calc_sil",
       "calc_modularity",
       "compute_snn_graph",
@@ -56,12 +136,15 @@ datrans <- function(
     .combine = rbind
   ) %dopar%
     {
+      set.seed(as.integer(rng_seed)+da_index-1L,kind="L'Ecuyer-CMRG",normal.kind="Inversion",sample.kind="Rejection")
+      da<-Amount_of_perturbation[[da_index]]
       res <- data.frame(
         trans_method = character(),
         zero_imp_method = character(),
         n_celltypes = numeric(),
         Amount_of_perturbation = numeric(),
         Silhouette_score = numeric(),
+        LISI_score = numeric(),
         ANOSIM_score = numeric(),
         Modularity_score = numeric(),
         Adjusted_Rand_Index = numeric(),
@@ -131,70 +214,64 @@ datrans <- function(
                 )
             }
             for (met in trans_method) {
+              rng_feature_state<-get(".Random.seed",envir=.GlobalEnv)
+              reference_ct<-NA_character_
               if (grepl("counts", met)) {
                 df <- df_counts_temp
               } else if (grepl("freq", met)) {
                 df <- df_freq
               } else if (grepl("arcsine_sqrt", met)) {
                 df <- df_arcsine_sqrt
-              } else if (grepl("alr_mincvref", met)) {
+              } else if (grepl("alr_randref", met)) {
                 ct_ref <- sample(
                   colnames(df_freq_imputed)[
                     !colnames(df_freq_imputed) %in% ct_da
                   ],
                   size = 1
                 )
+                reference_ct<-ct_ref
                 df <- Hotelling::alr(
                   as.formula(paste0(ct_ref, "~.")),
                   df_freq_imputed
                 )
-              } else if (grepl("alr_randref", met)) {
+              } else if (grepl("alr_mincvref", met)) {
                 cvs <- apply(df_freq_imputed, 2, cv)
-                ct_ref_mincv <- colnames(df_freq_imputed)[which(
-                  cvs == min(cvs[!colnames(df_freq_imputed) %in% ct_da])
-                )][1]
+                eligible<-setdiff(colnames(df_freq_imputed),ct_da)
+                if(!length(eligible)) stop('ALR requires an eligible reference')
+                ct_ref_mincv<-eligible[which.min(cvs[eligible])]
+                reference_ct<-ct_ref_mincv
                 df <- Hotelling::alr(
                   as.formula(paste0(ct_ref_mincv, "~.")),
                   df_freq_imputed
                 )
               } else if (grepl("clr", met)) {
                 df <- clr(df_freq_imputed)
-              }
+              } else stop('Unknown transformation: ',met)
               dist_mat <- dist(df)
-              if (is.null(labels)) {
-                avg_sil <- calc_sil(dist_mat, labels_random)
-                anosim_score <- vegan::anosim(
-                  x = dist_mat,
-                  grouping = labels_random,
-                  distance = "euclidean",
-                  permutations = 99
-                )[["statistic"]]
-                mod <- calc_modularity(dist_mat, labels_random)
-                cluster_score <- clust_eval(dist_mat, labels_random)
-              } else {
-                avg_sil <- calc_sil(dist_mat, labels)
-                anosim_score <- vegan::anosim(
-                  x = dist_mat,
-                  grouping = labels,
-                  distance = "euclidean",
-                  permutations = 99
-                )[["statistic"]]
-                mod <- calc_modularity(dist_mat, labels)
-                cluster_score <- clust_eval(dist_mat, labels)
-              }
+              evaluation_labels<-if(is.null(labels)) stats::setNames(labels_random,rownames(df)) else labels[rownames(df)]
+              rng_score_state<-get('.Random.seed',envir=.GlobalEnv)
+              scores<-calc_sep_score(dist_mat,evaluation_labels,parallel=1L)
+              # Biological labels enter scoring only. Its permutation RNG must
+              # never affect later random reference/perturbation choices.
+              assign('.Random.seed',rng_score_state,envir=.GlobalEnv)
               new_row_df <- data.frame(
                 trans_method = met,
                 zero_imp_method = zmet,
                 n_celltypes = nct,
                 Amount_of_perturbation = da,
-                Silhouette_score = avg_sil,
-                ANOSIM_score = anosim_score,
-                Modularity_score = mod,
-                Adjusted_Rand_Index = cluster_score,
+                Silhouette_score = scores$sil_score,
+                LISI_score = scores$lisi_score,
+                ANOSIM_score = scores$anosim_score,
+                Modularity_score = scores$mod_knn3_score,
+                Adjusted_Rand_Index = scores$cluster_score,
                 bootstrap_id = rep
               )
               new_row_df$diff_abu_cts <- list(ct_da)
-              new_row_df$dist_mat <- list(df)
+              new_row_df$alr_reference<-reference_ct
+              new_row_df$feat_mat<-list(as.data.frame(df))
+              new_row_df$sample_labels<-list(evaluation_labels)
+              new_row_df$rng_feature_state<-list(rng_feature_state)
+              new_row_df$rng_score_state<-list(rng_score_state)
               res <- rbind(res, new_row_df)
             }
           }
@@ -202,7 +279,6 @@ datrans <- function(
       }
       return(res)
     }
-  stopCluster(cluster)
   return(rets)
 }
 
@@ -2564,31 +2640,22 @@ run_composition_methods_hpc <- function(
 
 
 run_transformation_analysis <- function(ct_comps, labels) {
-  res_list <- datrans(
-    ct_comps,
-    labels,
-    Amount_of_perturbation = 0,
-    n_ct_to_select = 0,
-    reps = 20,
-    n_cores = 1,
-    trans_method = c(
-      "counts",
-      "freq",
-      "arcsine_sqrt",
-      "alr_randref",
-      "alr_mincvref",
-      "clr"
-    )
-  )
-  res_list <- res_list %>%
-    dplyr::group_by(.data$trans_method) %>%
-    summarize(
-      ANOSIM_score = mean(ANOSIM_score),
-      Modularity_score = mean(Modularity_score),
-      Adjusted_Rand_Index = mean(Adjusted_Rand_Index)
-    ) %>%
-    ungroup()
-  return(res_list)
+  policy<-transformation_analysis_policy()
+  if(is.null(names(labels))) names(labels)<-rownames(ct_comps)
+  labels<-labels[rownames(ct_comps)]
+  draws<-datrans(ct_comps,labels,Amount_of_perturbation=0,n_ct_to_select=0,
+    reps=policy$replicates,n_cores=1,trans_method=policy$methods,
+    zero_imp_method=policy$zero_imputation,rng_seed=policy$seed)
+  columns<-unname(policy$score_columns)
+  result<-data.frame(trans_method=policy$methods,stringsAsFactors=FALSE)
+  for(column in columns) result[[column]]<-vapply(policy$methods,
+    function(method)mean(draws[draws$trans_method==method,column]),numeric(1))
+  attr(result,'transformation_policy')<-policy
+  attr(result,'transformation_replicates')<-draws
+  attr(result,'composition_counts')<-as.matrix(ct_comps)
+  attr(result,'sample_labels')<-labels
+  validate_transformation_result(result)
+  result
 }
 
 run_zeroimp_analysis <- function(ct_comps, labels) {
