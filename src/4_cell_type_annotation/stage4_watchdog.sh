@@ -16,6 +16,7 @@ if [[ ! -f "${SCRIPT_DIR}/../slurm_config.sh" ]]; then
 fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_derivative_artifacts.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 cd "${PROJECT_ROOT}"
 
@@ -82,17 +83,7 @@ STAGE4_OUTPUT_OWNER_DIRS=()
 STAGE4_OUTPUT_OWNER_PATHS=()
 
 stage4_validate_scratch_output_ownership() {
-  local selection="$1" saved_nas="${NAS_TARGET_DIR-}" had_nas=0 rc
-  [[ -n "${NAS_TARGET_DIR+x}" ]] && had_nas=1
-  unset NAS_TARGET_DIR
-  ecoda_validate_output_ownership stage4 "${selection}" "${RUN_ID}"
-  rc=$?
-  if [[ ${had_nas} -eq 1 ]]; then
-    export NAS_TARGET_DIR="${saved_nas}"
-  else
-    unset NAS_TARGET_DIR
-  fi
-  return "${rc}"
+  ecoda_validate_output_ownership stage4 "$1" "${RUN_ID}" 0 scratch
 }
 
 stage4_validate_owner_scope() {

@@ -160,7 +160,13 @@ for arg in "$@"; do
       ;;
   esac
 done
-[[ -n "${FILES_FROM}" && -n "${SOURCE}" && -n "${DEST}" ]] || exit 2
+[[ -n "${SOURCE}" && -n "${DEST}" ]] || exit 2
+if [[ -z "${FILES_FROM}" ]]; then
+  [[ " $* " == *' --ignore-existing '* && "${CHMOD_SPEC}" == ugo+rwX && ! -e "${DEST}" ]] || exit 2
+  cp "${SOURCE}" "${DEST}"
+  chmod 666 "${DEST}"
+  exit 0
+fi
 while IFS= read -r relative; do
   [[ -n "${relative}" ]] || continue
   mkdir -p "${DEST%/}/$(dirname "${relative}")"
@@ -197,8 +203,13 @@ set -euo pipefail
 map_path="${ECODA_AUX_ROOT:-}/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
 printf '%s\n' "${map_path}" >> "${PY_AUX_CAPTURE}"
 printf '%s\n' "$*" >> "${PY_CAPTURE}"
+if [[ "${1:-}" == */derivative_artifacts.py ]]; then exec "${TEST_REAL_PYTHON}" "$@"; fi
+if [[ -n "${ANNOT_MODEL_CAPTURE:-}" && "${1:-}" == */annotation_contract.py ]]; then
+  printf '%s\t%s\n' "${TISSUE_TYPE:-unset}" "${NORMAL_TISSUE:-unset}" >> "${ANNOT_MODEL_CAPTURE}"
+fi
 exit 0
 STUB
+export TEST_REAL_PYTHON="${ROOT}/.pixi/envs/default/bin/python"
 chmod +x "${HOST_ENV_PREFIX}/bin/python"
 cat > "${HOST_ENV_PREFIX}/bin/Rscript" <<'STUB'
 #!/bin/bash
@@ -247,9 +258,20 @@ export ECODA_RUN_ROOT="${run_root}" ECODA_RUN_ID="${run_id}"
 export ECODA_RUNS_ROOT="${run_root%/*}"
 source "${ECODA_SOURCE_ROOT}/src/slurm_config.sh"
 source "${ECODA_SOURCE_ROOT}/src/utils/bash/ecoda_run_common.sh"
+source "${ECODA_SOURCE_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
 case "${kind}" in
   prepare)
     while IFS=$'\t' read -r ds views owner_root; do
+      if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+        mv "${NAS_TARGET_DIR}" "${NAS_TARGET_DIR}.hidden"
+        ecoda_stage4_prepare_copy "${ds}" "${views}"
+        eval "$(awk '/^stage4_validate_scratch_output_ownership\(\)/ {copy=1} copy {print} copy && /^}$/ {exit}' \
+          "${ECODA_SOURCE_ROOT}/src/4_cell_type_annotation/stage4_watchdog.sh")"
+        RUN_ID="${run_id}"
+        stage4_validate_scratch_output_ownership "${run_root}/manifests/runnable_selection.tsv"
+        [[ ${#ECODA_OUTPUT_PATHS[@]} -eq 1 && ! -e "${NAS_TARGET_DIR}" ]]
+        mv "${NAS_TARGET_DIR}.hidden" "${NAS_TARGET_DIR}"
+      fi
       union="${run_root}/datasets/${ds}/union/union.h5ad"
       chunk_dir="${run_root}/datasets/${ds}/chunks"
       mkdir -p "${chunk_dir}" "$(dirname "${union}")"
@@ -278,8 +300,12 @@ case "${kind}" in
         output_name="$(jq -r --arg ds "${ds}" --arg view "${view}" \
           '.[$ds].views[$view].output_file_name // .[$ds].views[$view].output_file // empty' \
           "${DATASETS_JSON_FILE}")"
-        path="${HPC_SCRATCH_DIR}/${ds}/output/${output_name}"
+        path="$(ecoda_stage4_path "${ds}" "${view}")"
         mkdir -p "$(dirname "${path}")"
+        if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+          printf 'synthetic annotated derivative\n' > "${path}"
+          ecoda_write_checksum "${path}" >/dev/null
+        fi
         [[ -s "${path}" ]] || printf 'synthetic merged output\n' > "${path}"
         [[ -s "${path}.md5" ]] || ecoda_write_checksum "${path}" >/dev/null
         ecoda_write_artifact_record "${path}" stage4_merge "${run_id}" >/dev/null
@@ -786,4 +812,56 @@ DATASET_MANIFEST="$(printf '%s\n' "${DATASET_OUTPUT}" | sed -n 's/^ANNOTATION_SE
 [[ "$(sed -n '1p' "${DATASET_MANIFEST}")" == $'_debug\tbenchmark_analysis' ]] || fail "dataset mode changed first view"
 [[ "$(sed -n '2p' "${DATASET_MANIFEST}")" == $'_debug\tbatch_effect_uncorrected' ]] || fail "dataset mode changed second view"
 
+# Fresh benchmark derivative: real binding/copy/ownership/publication, with
+# scheduler, reference payload and expensive annotation computations stubbed.
+DERIVATIVE_SELECTION="${TMP_DIR}/stephenson-benchmark.tsv"
+printf 'Stephenson\tbenchmark_analysis\n' > "${DERIVATIVE_SELECTION}"
+DERIVATIVE_BASE="${TMP_DIR}/derivative"
+make_base "${DERIVATIVE_BASE}"
+prepare_inputs "${DERIVATIVE_BASE}" "${DERIVATIVE_SELECTION}" "${VALID_TREE}"
+DERIVATIVE_NAME="$(jq -r '.Stephenson.views.benchmark_analysis.output_file_name' "${VALID_TREE}/datasets.json")"
+DERIVATIVE_PARENT="${DERIVATIVE_BASE}/scratch/ECODA_paper/Stephenson/output/${DERIVATIVE_NAME}"
+PARENT_BEFORE="$(md5_of "${DERIVATIVE_PARENT}")"
+DERIVATIVE_INPUTS="${TMP_DIR}/stephenson-inputs.tsv"
+printf 'Stephenson\tbenchmark_analysis\t%s\t%s\t%s\t%s.md5\n' \
+  "${DERIVATIVE_PARENT}" "${PARENT_BEFORE}" "$(wc -c < "${DERIVATIVE_PARENT}" | tr -d '[:space:]')" \
+  "${DERIVATIVE_PARENT}" > "${DERIVATIVE_INPUTS}"
+: > "${CAPTURE}"
+DERIVATIVE_OUTPUT="$(ECODA_RUN_ID=stage4-derivative-fixture run_stage4 "${DERIVATIVE_BASE}" "${VALID_SNAPSHOT}" 0 \
+  "${VALID_TREE}/src/4_cell_type_annotation/1_submit_onboarding_stage.sh" \
+  "${RUNTIME_IMAGE}" "${RUNTIME_MANIFEST}" --selection-file "${DERIVATIVE_SELECTION}" \
+  --derivative-release topology-test --input-artifacts "${DERIVATIVE_INPUTS}")"
+DERIVATIVE_RUN="${DERIVATIVE_BASE}/scratch/ECODA_paper/_ecoda_runs/stage4-derivative-fixture"
+[[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" == 6 ]]
+[[ "$(cat "${DERIVATIVE_RUN}/manifests/selection.tsv")" == $'Stephenson\tbenchmark_analysis' ]]
+[[ "$(md5_of "${DERIVATIVE_PARENT}")" == "${PARENT_BEFORE}" ]]
+[[ -d "${DERIVATIVE_RUN}/datasets/Stephenson/union" && -d "${DERIVATIVE_RUN}/datasets/Stephenson/chunks" ]]
+(
+  export PROJECT_ROOT="${VALID_TREE}" ECODA_SOURCE_ROOT="${VALID_TREE}" DATASETS_JSON_FILE="${VALID_TREE}/datasets.json"
+  export ECODA_RUN_ID=stage4-derivative-fixture ECODA_RUN_ROOT="${DERIVATIVE_RUN}"
+  export HPC_SCRATCH_DIR="${DERIVATIVE_BASE}/scratch/ECODA_paper" NAS_TARGET_DIR="${DERIVATIVE_BASE}/nas"
+  export ECODA_ARTIFACT_BINDING="${DERIVATIVE_RUN}/manifests/artifact_bindings.json" PYTHON_BIN="${HOST_ENV_PREFIX}/bin/python"
+  export ECODA_AUX_ROOT="${VALID_TREE}/aux"
+  source "${VALID_TREE}/src/utils/bash/ecoda_run_common.sh"
+  source "${VALID_TREE}/src/utils/bash/ecoda_derivative_artifacts.sh"
+  TISSUE_TYPE=Tumor NORMAL_TISSUE=false
+  ecoda_stage4_annotation_config Stephenson
+  [[ "${TISSUE_TYPE}" == Blood && "${NORMAL_TISSUE}" == true ]]
+  ecoda_stage4_validate_copy_receipt Stephenson benchmark_analysis
+  ecoda_stage4_validate_nas Stephenson benchmark_analysis
+  receipt="${DERIVATIVE_RUN}/manifests/stage4_input_Stephenson_benchmark_analysis.json"
+  mv "${receipt}" "${receipt}.hidden"
+  if ecoda_stage4_validate_copy_receipt Stephenson benchmark_analysis >/dev/null 2>&1; then fail 'missing copy receipt accepted'; fi
+  mv "${receipt}.hidden" "${receipt}"
+  chmod u+w "${receipt}"; cp "${receipt}" "${TMP_DIR}/receipt.saved"
+  printf 'corrupt\n' >> "${receipt}"
+  if ecoda_stage4_validate_copy_receipt Stephenson benchmark_analysis >/dev/null 2>&1; then fail 'corrupt copy receipt accepted'; fi
+  cp "${TMP_DIR}/receipt.saved" "${receipt}"; chmod a-w "${receipt}"
+  nas_output="$(ecoda_stage4_path Stephenson benchmark_analysis nas)"
+  chmod 644 "${nas_output}"
+  if ecoda_stage4_validate_nas Stephenson benchmark_analysis >/dev/null 2>&1; then fail 'NAS mode mismatch accepted'; fi
+  chmod 666 "${nas_output}"
+  printf 'corrupt\n' >> "${nas_output}"
+  if ecoda_stage4_validate_nas Stephenson benchmark_analysis >/dev/null 2>&1; then fail 'NAS corruption accepted'; fi
+)
 echo "annotation stage submitter: OK"

@@ -492,7 +492,12 @@ def validate_run_context(run_root, run_id, ds_name, scratch_dir):
             metadata[key] = value
     if metadata.get("STAGE") != "stage4" or metadata.get("RUN_ID") != run_id:
         raise ValueError(f"Stage 4 run metadata does not match {run_id}: {metadata_path}")
-    safe_dataset = re.sub(r"[/,:	 |]", "_", ds_name)
+    owner_key = ds_name
+    if os.environ.get("ECODA_ARTIFACT_BINDING"):
+        from src.utils.py.derivative_artifacts import active_binding
+        active_binding(Path(os.environ["DATASETS_JSON_FILE"]), stage="stage4")
+        owner_key = f"derivative/{run_id}/{ds_name}"
+    safe_dataset = re.sub(r"[/,:\t |]", "_", owner_key)
     owner_dir = Path(scratch_dir) / "_ecoda_owners" / "stage4" / safe_dataset
     owner_path = owner_dir / "owner"
     if not owner_path.is_file() or owner_path.stat().st_size == 0:
@@ -505,7 +510,7 @@ def validate_run_context(run_root, run_id, ds_name, scratch_dir):
     if (
         owner.get("RUN_ID") != run_id
         or owner.get("STAGE") != "stage4"
-        or owner.get("KEY") != ds_name
+        or owner.get("KEY") != owner_key
         or owner.get("STATE") not in {"ACTIVE", "OK"}
     ):
         raise ValueError(f"Stage 4 dataset owner does not match {ds_name}: {owner_path}")
@@ -583,6 +588,10 @@ def main():
     if args.view and args.views:
         raise ValueError("use exactly one of --view and --views")
     path_data = Path(hpc_scratch_dir) / ds_name / "output"
+    if os.environ.get("ECODA_ARTIFACT_BINDING"):
+        from src.utils.py.derivative_artifacts import active_binding, context_root
+        binding, _ = active_binding(Path(datasets_json), stage="stage4")
+        path_data = context_root(binding, "datasets") / ds_name / "output"
     requested_run_root = args.run_root or os.environ.get("ANNOTATION_RUN_ROOT")
     if requested_run_root:
         run_id = os.environ.get("ANNOTATION_RUN_ID") or os.environ.get("RUN_ID")

@@ -106,6 +106,7 @@ if [[ "${ECODA_RUNTIME_IN_CONTAINER:-0}" != "1" ]]; then
   ecoda_runtime_validate_bound_run || exit 1
 fi
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_derivative_artifacts.sh"
 cd "${PROJECT_ROOT}"
 ECODA_RUNS_ROOT="${BOUND_RUN_ROOT%/*}"
 
@@ -138,6 +139,9 @@ NORMAL_TISSUE="$(jq -r --arg ds "${DS_NAME}" '
 [[ "${NORMAL_TISSUE}" == "true" || "${NORMAL_TISSUE}" == "false" ]] ||
   { echo "ERROR: configured normal_tissue is missing or invalid for ${DS_NAME}." >&2; exit 1; }
 export NORMAL_TISSUE
+if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+  ecoda_stage4_annotation_config "${DS_NAME}" || { echo 'ERROR: pinned Stephenson Blood/normal annotation config is invalid.' >&2; exit 1; }
+fi
 [[ -f "${CHUNK_FILE}" ]] || { echo "ERROR: chunk file not found: ${CHUNK_FILE}" >&2; exit 1; }
 
 CHUNK_NUM="$(basename "${CHUNK_FILE}")"

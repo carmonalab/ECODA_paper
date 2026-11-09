@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_derivative_artifacts.sh"
 cd "${PROJECT_ROOT}"
 
 [[ $# -ge 4 ]] || {
@@ -23,6 +24,7 @@ case "${PHASE}" in
 esac
 ecoda_validate_run_id "${RUN_ID}" || exit 1
 RUN_ROOT="${HPC_SCRATCH_DIR}/_ecoda_runs/${RUN_ID}"
+export ECODA_RUN_ROOT="${RUN_ROOT}" ECODA_RUN_ID="${RUN_ID}"
 [[ -d "${RUN_ROOT}" ]] || { echo "ERROR: Stage 4 run root is missing: ${RUN_ROOT}" >&2; exit 1; }
 ecoda_validate_run_owned_path "${ROOT_MANIFEST}" "${RUN_ROOT}" || exit 1
 ecoda_validate_manifest "${ROOT_MANIFEST}" 3 || exit 1
@@ -131,7 +133,7 @@ validate_merge() {
         '.[$ds].views[$view].output_file_name // .[$ds].views[$view].output_file // empty' \
         "${DATASETS_JSON_FILE}")"
       [[ -n "${name}" ]] || return 1
-      path="${HPC_SCRATCH_DIR}/${ds}/output/${name}"
+      path="$(ecoda_stage4_path "${ds}" "${view}")" || return 1
       [[ -s "${path}" ]] || return 1
       validate_artifact "${path}" stage4_merge || return 1
       source_md5="${ECODA_CHECKSUM_MD5}"

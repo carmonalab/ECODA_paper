@@ -106,6 +106,7 @@ if [[ "${ECODA_RUNTIME_IN_CONTAINER:-0}" != "1" ]]; then
   ecoda_runtime_validate_bound_run || exit 1
 fi
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_derivative_artifacts.sh"
 cd "${PROJECT_ROOT}"
 
 MANIFEST="${ANNOTATION_PREP_MANIFEST:-}"
@@ -124,6 +125,11 @@ run_root_real="$(ecoda_realpath_existing "${RUN_ROOT}" 2>/dev/null || true)"
 [[ -n "${expected_root_real}" && "${expected_root_real}" == "${run_root_real}" ]] ||
   { echo "ERROR: annotation prep row run root is not canonical." >&2; exit 1; }
 export DS_NAME ANNOTATION_VIEWS="${VIEWS}" ANNOTATION_RUN_ROOT="${RUN_ROOT}" ANNOTATION_RUN_ID="${RUN_ID}"
+if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+  export ECODA_RUN_ROOT="${RUN_ROOT}" ECODA_RUN_ID="${RUN_ID}"
+  IFS=',' read -r -a COPY_VIEWS <<< "${VIEWS}"
+  for view in "${COPY_VIEWS[@]}"; do ecoda_stage4_prepare_copy "${DS_NAME}" "${view}" || exit 1; done
+fi
 FORCE_FLAG=()
 [[ "${FORCE_ANNOTATION:-0}" == "1" ]] && FORCE_FLAG=(--force)
 

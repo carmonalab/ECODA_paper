@@ -1631,7 +1631,7 @@ _ecoda_expand_output_selection() {
   local path name old_ifs expected_script expected_outputs write_flag
   _ecoda_init_output_arrays
   [[ "${scope}" == all || "${scope}" == scratch ]] || return 1
-  [[ "${scope}" != scratch || "${stage}" == stage2 || "${stage}" == stage3 ]] || return 1
+  [[ "${scope}" != scratch || "${stage}" == stage2 || "${stage}" == stage3 || "${stage}" == stage4 ]] || return 1
 
   [[ -r "${selection}" && ! -L "${selection}" ]] || {
     _ecoda_die "selection manifest is missing or unreadable: ${selection}"
@@ -1701,7 +1701,7 @@ _ecoda_expand_output_selection() {
         [[ -n "${name}" && "${name}" != */* &&
            "${name}" != *$'\n'* && "${name}" != *$'\t'* ]] || return 1
         if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
-          [[ "${stage}" == stage3 ]] || return 1
+          [[ "${stage}" == stage3 || "${stage}" == stage4 ]] || return 1
           if [[ "${scope}" == scratch ]]; then
             _ecoda_output_add_path "$(ecoda_derivative_dataset_output "${ds}" "${view}")" || return 1
           else

@@ -8,6 +8,7 @@ source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 export ECODA_GATE_STAGE=stage4
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_derivative_artifacts.sh"
 cd "${PROJECT_ROOT}"
 
 DATASETS_ARG=""
@@ -32,8 +33,10 @@ THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 export ANNOTATION_WORKER_TIME_LIMIT="${ANNOTATION_WORKER_TIME_LIMIT:-02:00:00}"
 RUNTIME_EXPORT=""
 STAGE4_BOUND_RUN=0
-STAGE4_INPUT_PRODUCER_RUN_ID="${PREPROCESS_RUN_ID:-${STAGE3_RUN_ID:-${INPUT_PRODUCER_RUN_ID:-}}}"
+STAGE4_INPUT_PRODUCER_RUN_ID="${STAGE4_INPUT_PRODUCER_RUN_ID:-${PREPROCESS_RUN_ID:-${STAGE3_RUN_ID:-${INPUT_PRODUCER_RUN_ID:-}}}}"
 STAGE4_SOURCE_CHECKSUMS=""
+DERIVATIVE_RELEASE=""
+INPUT_ARTIFACTS=""
 
 usage() {
   cat <<'EOF'
@@ -41,6 +44,7 @@ Usage: 1_submit_onboarding_stage.sh [--datasets LIST] [--views LIST]
        [--selection-file TSV] [--exact-batch-selection] [--skip-prepare
        --reuse-run RUN_ID] [--force] [--sync-only RUN_ID]
        [--mem VALUE] [--max-mem VALUE] [--partition NAME] [--throttle N]
+       [--derivative-release ID --input-artifacts TSV]
 
 Selection rows are DATASET<TAB>VIEW. --view is accepted as a compatibility
 alias for --views. Exact batch mode requires the immutable twelve-row
@@ -56,6 +60,8 @@ while [[ $# -gt 0 ]]; do
     --selection-file) SELECTION_FILE_ARG="${2:-}"; SELECTION_FILE_SET=1; shift 2 ;;
     --selection-file=*) SELECTION_FILE_ARG="${1#*=}"; SELECTION_FILE_SET=1; shift ;;
     --exact-batch-selection) EXACT_BATCH_SELECTION=1; shift ;;
+    --derivative-release) DERIVATIVE_RELEASE="${2:-}"; shift 2 ;;
+    --input-artifacts) INPUT_ARTIFACTS="${2:-}"; shift 2 ;;
     --reuse-run) REUSE_RUN_ARG="${2:-}"; shift 2 ;;
     --reuse-run=*) REUSE_RUN_ARG="${1#*=}"; shift ;;
     --skip-prepare) SKIP_PREPARE=1; shift ;;
@@ -74,6 +80,20 @@ while [[ $# -gt 0 ]]; do
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
+if [[ -n "${DERIVATIVE_RELEASE}" || -n "${INPUT_ARTIFACTS}" ]]; then
+  [[ -n "${DERIVATIVE_RELEASE}" && -n "${INPUT_ARTIFACTS}" &&
+     -n "${SELECTION_FILE_ARG}" && -z "${DATASETS_ARG}" && -z "${VIEWS_ARG}" &&
+     -z "${SYNC_ONLY_RUN}" && -z "${REUSE_RUN_ARG}" && ${SKIP_PREPARE} -eq 0 &&
+     ${EXACT_BATCH_SELECTION} -eq 0 && ${FORCE_ARG} -eq 0 ]] || {
+    echo 'ERROR: fresh derivative annotation requires an exact selection and input references, without legacy reuse/force selectors.' >&2; exit 1;
+  }
+  [[ "$(cat "${SELECTION_FILE_ARG}")" == $'Stephenson\tbenchmark_analysis' ]] || {
+    echo 'ERROR: this derivative annotation wave selects only Stephenson benchmark_analysis.' >&2; exit 1;
+  }
+  jq -e '.Stephenson.tissue == "Blood" and .Stephenson.normal_tissue == true' "${DATASETS_JSON_FILE}" >/dev/null || {
+    echo 'ERROR: bound Stephenson annotation requires configured Blood models and normal_tissue=true.' >&2; exit 1;
+  }
+fi
 if [[ -n "${SYNC_ONLY_RUN}" && ${FORCE_ARG} -eq 1 ]]; then
   echo "ERROR: --sync-only cannot be combined with --force." >&2
   exit 1
@@ -121,10 +141,7 @@ if [[ ${EXACT_BATCH_SELECTION} -eq 1 ]]; then
 fi
 
 output_path_for() {
-  local ds="$1" view="$2" name
-  name="$(ecoda_view_output_name "${ds}" "${view}")"
-  [[ -n "${name}" ]] || return 1
-  printf '%s/%s/output/%s' "${HPC_SCRATCH_DIR}" "${ds}" "${name}"
+  ecoda_stage4_path "$1" "$2" output
 }
 stage4_record_source_checksum() {
   STAGE4_SOURCE_CHECKSUMS="${STAGE4_SOURCE_CHECKSUMS}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${ECODA_CHECKSUM_MD5}"$'\t'"${ECODA_CHECKSUM_SIZE}"$'\n'
@@ -181,7 +198,11 @@ stage4_finalize_owner_manifest() {
 stage4_abort() {
   local reason="$1"
   local rc=0
-  ecoda_owner_finalize_tracked FAIL "${reason}" || rc=1
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    ecoda_stage4_finalize_failure "${reason}" || rc=1
+  else
+    ecoda_owner_finalize_tracked FAIL "${reason}" || rc=1
+  fi
   if [[ -n "${ECODA_RUN_ROOT:-}" && -r "${ECODA_RUN_ROOT}/manifests/owners.tsv" ]]; then
     stage4_finalize_owner_manifest FAIL "${reason}" || rc=1
   fi
@@ -383,6 +404,11 @@ stage4_load_bound_identity() {
   export PROJECT_ROOT="${source_root}"
   export DATASETS_JSON_FILE="${source_root}/datasets.json"
   export SCGATE_DB_PATH="${ECODA_AUX_ROOT}/scGateDB.rds"
+  if [[ -f "${ECODA_RUN_ROOT}/manifests/artifact_bindings.json" ]]; then
+    export ECODA_ARTIFACT_BINDING="${ECODA_RUN_ROOT}/manifests/artifact_bindings.json"
+    source "${source_root}/src/utils/bash/ecoda_derivative_artifacts.sh"
+    ecoda_derivative_load stage4 || return 1
+  fi
   stage4_validate_snapshot_inputs || return 1
 }
 
@@ -480,6 +506,17 @@ sync_one_dataset() {
   local path view output remote_dir dataset_root lock
   local transfer_manifest verify_manifest local_digest local_size
   local rc=0 selected=0
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    while IFS=$'\t' read -r row_ds view; do
+      [[ "${row_ds}" == "${ds}" ]] || continue
+      selected=1
+      ecoda_stage4_publish "${ds}" "${view}" || return 1
+    done < "${manifest}"
+    [[ ${selected} -eq 1 ]] || return 1
+    mkdir -p "${sync_dir}" || return 1
+    printf 'OK\n' > "${sync_dir}/${ds}.status"
+    return
+  fi
   mkdir -p "${sync_dir}" || return 1
   lock="${sync_dir}/${ds}.lock"
   mkdir "${lock}" 2>/dev/null || return 1
@@ -599,7 +636,7 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   owner_failed=0
   sync_datasets=""
   while IFS=$'\t' read -r ds owner; do
-    expected_owner="$(ecoda_owner_dir stage4 "${ds}")"
+    expected_owner="$(ecoda_owner_dir stage4 "$(ecoda_stage4_owner_key "${ds}")")"
     [[ "${owner}" == "${expected_owner}" ]] || { owner_failed=1; continue; }
     owner_state="$(ecoda_owner_state "${owner}" 2>/dev/null || true)"
     owner_run="$(ecoda_owner_run "${owner}" 2>/dev/null || true)"
@@ -735,6 +772,17 @@ while IFS=$'\t' read -r row_ds row_view; do
   esac
   FULL_SELECTION_SEEN="${FULL_SELECTION_SEEN} ${full_row}"
 done < "${MANIFEST}"
+if [[ -n "${DERIVATIVE_RELEASE}" ]]; then
+  [[ -n "${STAGE4_INPUT_PRODUCER_RUN_ID}" ]] || stage4_abort "missing Stage 3 producer identity"
+  export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT ECODA_RUNTIME_PROFILE=stage4 ECODA_RUNTIME_MODE=apptainer
+  ecoda_runtime_validate_submission apptainer || stage4_abort "Stage 4 derivative runtime identity failed"
+  [[ "${ECODA_RUNTIME_FORMAT:-}" == 2 ]] || stage4_abort "Stage 4 derivative requires FORMAT=2 runtime"
+  stage4_record_run_identity_metadata || stage4_abort "failed to record derivative source/runtime identities"
+  STAGE4_BOUND_RUN=1
+  ecoda_derivative_bind stage4 "${DERIVATIVE_RELEASE}" "${MANIFEST}" "${INPUT_ARTIFACTS}" ||
+    stage4_abort "failed to bind exact Stage 4 inputs and derivative roots"
+  ecoda_stage4_annotation_config Stephenson || stage4_abort "invalid bound annotation model configuration"
+fi
 
 # Remove explicitly skipped cohorts from the runnable manifest and reject
 # duplicate dataset/view owners.
@@ -791,9 +839,10 @@ while IFS=$'\t' read -r ds view; do
     *" ${row} "*) stage4_abort "duplicate Stage 4 row ${row}" ;;
   esac
   SEEN="${SEEN} ${row}"
-  input_path="$(output_path_for "${ds}" "${view}")" ||
+  input_path="$(ecoda_stage4_path "${ds}" "${view}" input)" ||
     stage4_abort "missing Stage 4 output contract ${row}"
   if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
+    ecoda_stage4_parent_check "${ds}" "${view}" || stage4_abort "Stage 4 parent producer identity failed"
     ecoda_require_input_ownership "${input_path}" "${RUN_ID}" ||
       stage4_abort "active Stage 4 input writer for ${row}"
     "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
@@ -842,7 +891,7 @@ ecoda_atomic_install_manifest "${RUNNABLE_TMP}" "${RUNNABLE_MANIFEST}" 2 ||
   stage4_abort "failed to install Stage 4 runnable manifest atomically"
 rm -f "${RUNNABLE_TMP}"
 WORK_MANIFEST="${RUNNABLE_MANIFEST}"
-if [[ ${FORCE_ARG} -eq 0 && "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
+if [[ -z "${ECODA_ARTIFACT_BINDING:-}" && ${FORCE_ARG} -eq 0 && "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
   VALIDATION_MANIFEST="${ECODA_RUN_ROOT}/manifests/runnable_validated.tsv"
   VALIDATION_TMP="${VALIDATION_MANIFEST}.build.$$"
   : > "${VALIDATION_TMP}"
@@ -903,7 +952,7 @@ if [[ ${SKIP_PREPARE} -eq 1 ]]; then
   done < "${WORK_MANIFEST}"
   for ds in ${DATASET_GROUPS}; do
     set +e
-    owner_dir="$(ecoda_owner_acquire stage4 "${ds}" "${RUN_ID}" "${FORCE_ARG}" 0)"
+    owner_dir="$(ecoda_owner_acquire stage4 "$(ecoda_stage4_owner_key "${ds}")" "${RUN_ID}" "${FORCE_ARG}" 0)"
     owner_rc=$?
     set -e
     [[ ${owner_rc} -eq 0 ]] || stage4_abort "ownership conflict for ${ds}"
@@ -930,7 +979,7 @@ else
       views="${views}${view}"
     done < "${WORK_MANIFEST}"
     set +e
-    owner_dir="$(ecoda_owner_acquire stage4 "${ds}" "${RUN_ID}" "${FORCE_ARG}" 0)"
+    owner_dir="$(ecoda_owner_acquire stage4 "$(ecoda_stage4_owner_key "${ds}")" "${RUN_ID}" "${FORCE_ARG}" 0)"
     owner_rc=$?
     set -e
     [[ ${owner_rc} -eq 0 ]] || stage4_abort "ownership conflict for ${ds}"
@@ -976,7 +1025,9 @@ if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" &&
   stage4_abort "legacy_source_unpinned: Stage 4 compute requires an immutable source snapshot"
 fi
 if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
-  if ! "${SCRIPT_DIR}/1.0_stage_reference_maps.sh"; then
+  ref_args=()
+  [[ -z "${ECODA_ARTIFACT_BINDING:-}" ]] || ref_args=(--validate-only)
+  if ! "${SCRIPT_DIR}/1.0_stage_reference_maps.sh" ${ref_args[@]+"${ref_args[@]}"}; then
     stage4_abort "Stage 4 reference-map staging failed"
   fi
 fi
@@ -999,6 +1050,7 @@ fi
 RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage4 0)" || {
   stage4_abort "Stage 4 runtime export construction failed."
 }
+[[ -z "${ECODA_ARTIFACT_BINDING:-}" ]] || RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_ARTIFACT_BINDING=${ECODA_ARTIFACT_BINDING}"
 if [[ ${STAGE4_BOUND_RUN} -eq 0 && stage4_is_snapshot_mode ]]; then
   [[ -s "${ECODA_RUN_ROOT}/manifests/runtime.identity" ]] ||
     stage4_abort "Stage 4 runtime identity was not recorded"

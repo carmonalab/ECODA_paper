@@ -4,6 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
+VALIDATE_ONLY=0
+if [[ "${1:-}" == --validate-only && $# -eq 1 ]]; then VALIDATE_ONLY=1
+elif [[ $# -ne 0 ]]; then echo 'Usage: 1.0_stage_reference_maps.sh [--validate-only]' >&2; exit 2; fi
 
 REF_MAP_NAMES=(
   sketched_CD8T_human_ref_v1.rds
@@ -32,12 +35,13 @@ ref_map_md5() {
 md5_of() {
   if command -v md5sum >/dev/null 2>&1; then md5sum "$1" | cut -d' ' -f1; else md5 -q "$1"; fi
 }
-mkdir -p "${HOME_REF_DIR}"
+[[ ${VALIDATE_ONLY} -eq 1 ]] || mkdir -p "${HOME_REF_DIR}"
 for name in "${REF_MAP_NAMES[@]}"; do
   destination="${HOME_REF_DIR}/${name}"
   if [[ -s "${destination}" && "$(md5_of "${destination}")" == "$(ref_map_md5 "${name}")" ]]; then
     continue
   fi
+  [[ ${VALIDATE_ONLY} -eq 0 ]] || { echo "ERROR: immutable annotation reference is missing or invalid: ${destination}" >&2; exit 1; }
   rm -f "${destination}"
   if [[ -r "${NAS_REF_DIR}/${name}" ]]; then
     tmp="${destination}.tmp.$$"

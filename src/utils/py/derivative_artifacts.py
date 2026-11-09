@@ -3,7 +3,7 @@
 Input TSV: dataset, view, absolute input path, MD5, size, checksum-proof path.
 Proofs use the existing MD5/SIZE/PATH record format. Binding checks metadata;
 compute-node consumers can request content verification before reading inputs.
-No scientific artifact is copied, renamed, repaired, or removed here.
+Stage 4 may seed an explicit create-only working copy; parents stay read-only.
 """
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import tempfile
 
 SCHEMA = "ecoda_derivative_artifacts_v1"
 COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -61,7 +63,9 @@ def configured_files(config: dict, dataset: str, view: str, stage: str) -> list[
     spec = entry.get("views", {}).get(view)
     if not isinstance(spec, dict) or "columns" in spec:
         raise ValueError(f"unknown or invalid dataset/view: {dataset}/{view}")
-    value = spec.get("output_file_name") if stage == "stage5" else spec.get("input_file_name")
+    value = spec.get("output_file_name") if stage in {"stage4", "stage5"} else spec.get("input_file_name")
+    if stage == "stage4" and (view != "benchmark_analysis" or entry.get("use_for_benchmark") is not True):
+        raise ValueError("Stage 4 derivatives require an eligible benchmark view")
     names = value if isinstance(value, list) else [value]
     if not names or any(not isinstance(name, str) or component(name) != name for name in names):
         raise ValueError(f"missing configured input filenames: {dataset}/{view}")
@@ -114,15 +118,19 @@ def create_only(path: Path, payload: bytes) -> None:
 
 
 def bind(*, run_root: Path, release_id: str, nas_root: Path, stage: str,
-         config_path: Path, selection: Path, input_artifacts: Path) -> Path:
+         config_path: Path, selection: Path, input_artifacts: Path, producer_run: str | None = None) -> Path:
     run_root = absolute(run_root)
     nas_root = absolute(nas_root)
     release_id = component(release_id)
     run_id = component(run_root.name)
     if run_root.parent.name != "_ecoda_runs" or not run_root.is_dir() or not nas_root.is_dir():
         raise ValueError("derivative binding requires an existing exact run root and NAS base")
-    if stage not in {"stage2", "stage3", "stage5"}:
+    if stage not in {"stage2", "stage3", "stage4", "stage5"}:
         raise ValueError("unsupported derivative stage")
+    if (stage == "stage4") != (producer_run is not None):
+        raise ValueError("Stage 4 requires an explicit upstream producer run only")
+    if producer_run is not None:
+        component(producer_run)
     config = json.loads(config_path.read_text())
     source = run_root / "manifests/source.manifest"
     runtime = run_root / "manifests/runtime.identity"
@@ -153,6 +161,8 @@ def bind(*, run_root: Path, release_id: str, nas_root: Path, stage: str,
                  identities={str(path): digest(path) for path in
                              (source, runtime, selection, copied_inputs, config_path)})
     requested = source.parent / "requested_selection.tsv"
+    if stage == "stage4":
+        value["input_producer_run"] = producer_run
     if stage == "stage5" and requested.exists():
         absolute(requested)
         if not requested.is_file() or requested.stat().st_size == 0:
@@ -176,10 +186,12 @@ def load(binding: str | Path, config_path: str | Path, *, verify_content: bool =
     nas_base = absolute(value["nas_base"], exists=False)
     if (value["schema"] != SCHEMA or binding != run_root / "manifests/artifact_bindings.json"
         or run_root.parent.name != "_ecoda_runs" or value["run_id"] != run_root.name
-        or value["stage"] not in {"stage2", "stage3", "stage5"}
+        or value["stage"] not in {"stage2", "stage3", "stage4", "stage5"}
         or value["artifact_root"] != str(run_root / "artifacts")
         or value["nas_root"] != str(nas_base / "releases" / component(value["release_id"]) / run_root.name)):
         raise ValueError("derivative binding root/run identity differs")
+    if value["stage"] == "stage4":
+        component(value["input_producer_run"])
     expected = {str(run_root / "manifests" / name) for name in
                 ("source.manifest", "runtime.identity", "input_artifacts.tsv")}
     expected.update((value["selection"], str(absolute(config_path))))
@@ -220,7 +232,7 @@ def resolve_input(binding: str | Path, config_path: str | Path, dataset: str, vi
 def context_root(value: dict, context: str, *, nas: bool = False) -> Path:
     if context not in CONTEXTS:
         raise ValueError(f"invalid derivative output context: {context}")
-    if (value["stage"] in {"stage2", "stage3"}) != (context == "datasets"):
+    if (value["stage"] in {"stage2", "stage3", "stage4"}) != (context == "datasets"):
         raise ValueError("derivative context disagrees with the selected stage")
     root = Path(value["nas_root"] if nas else value["artifact_root"]) / context
     return absolute(root, exists=False)
@@ -241,15 +253,54 @@ def active_binding(config_path: str | Path, *, stage: str = "stage5") -> tuple[d
     return value, binding
 
 
+def stage4_input_copy(binding: Path, config_path: Path, dataset: str, view: str) -> Path:
+    """Seed a new annotation working copy; the immutable parent stays read-only."""
+    value, _ = active_binding(config_path, stage="stage4")
+    if binding != Path(value["run_root"]) / "manifests/artifact_bindings.json":
+        raise ValueError("annotation copy requires the active binding")
+    source = resolve_input(binding, config_path, dataset, view, verify_content=True)
+    root = context_root(value, "datasets")
+    output = absolute(root / component(dataset) / "output" / source.name, exists=False)
+    receipt = Path(value["run_root"]) / "manifests" / f"stage4_input_{component(dataset)}_{component(view)}.json"
+    copy_identity = dict(schema="ecoda_stage4_input_copy_v1", binding_sha256=digest(binding),
+                         source=str(source), source_md5=digest(source, "md5"), size=source.stat().st_size,
+                         output=str(output), input_producer_run=value["input_producer_run"])
+    sidecar = Path(f"{output}.md5")
+    if any(path.exists() or path.is_symlink() for path in (output, sidecar, receipt)):
+        if (not output.is_file() or output.is_symlink() or not receipt.is_file()
+                or receipt.is_symlink() or json.loads(receipt.read_text()) != copy_identity
+                or digest(output, "md5") != copy_identity["source_md5"]):
+            raise ValueError("existing annotation working copy/proof differs; preserved")
+        proof(sidecar, output, copy_identity["source_md5"], copy_identity["size"])
+        return output
+    output.parent.mkdir(parents=True, exist_ok=True)
+    absolute(output.parent)
+    descriptor, filename = tempfile.mkstemp(prefix=f".{output.name}.copy-", dir=output.parent)
+    os.close(descriptor)
+    temporary = Path(filename)
+    try:
+        shutil.copyfile(source, temporary)
+        if digest(temporary, "md5") != copy_identity["source_md5"]:
+            raise ValueError("annotation input copy checksum differs")
+        resolve_input(binding, config_path, dataset, view, verify_content=True)
+        create_only(receipt, (json.dumps(copy_identity, sort_keys=True) + "\n").encode())
+        create_only(sidecar, (f"MD5={copy_identity['source_md5']}\nSIZE={copy_identity['size']}\nPATH={output}\n").encode())
+        os.link(temporary, output)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return output
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("bind", "validate", "input", "root"))
+    parser.add_argument("command", choices=("bind", "validate", "input", "root", "copy-stage4"))
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--binding", type=Path)
     parser.add_argument("--run-root", type=Path)
     parser.add_argument("--release-id")
     parser.add_argument("--nas-root", type=Path)
     parser.add_argument("--stage")
+    parser.add_argument("--producer-run")
     parser.add_argument("--selection", type=Path)
     parser.add_argument("--input-artifacts", type=Path)
     parser.add_argument("--dataset")
@@ -262,7 +313,9 @@ def main() -> None:
     if args.command == "bind":
         print(bind(run_root=args.run_root, release_id=args.release_id, nas_root=args.nas_root,
                    stage=args.stage, config_path=args.config, selection=args.selection,
-                   input_artifacts=args.input_artifacts))
+                   input_artifacts=args.input_artifacts, producer_run=args.producer_run))
+    elif args.command == "copy-stage4":
+        print(stage4_input_copy(args.binding, args.config, args.dataset, args.view))
     else:
         value, _ = load(args.binding, args.config,
                         verify_content=args.verify_content and args.command != "input")

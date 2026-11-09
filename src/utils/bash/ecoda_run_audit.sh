@@ -790,6 +790,10 @@ _audit_semantic_artifact() {
       esac
       ;;
     stage4)
+      if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+        ecoda_stage4_parent_check "${dataset}" "${view}" || return 1
+        ecoda_stage4_validate_copy_receipt "${dataset}" "${view}" || return 1
+      fi
       case "${path}" in
         *.h5ad)
           ecoda_validate_checksum "${path}" || return 1
@@ -910,6 +914,9 @@ _audit_selected_artifacts() {
     owner_run="${ECODA_ARTIFACT_OWNER_RUN}"
     if [[ -n "${NAS_TARGET_DIR:-}" &&
           "${path}" == "${NAS_TARGET_DIR}"/* ]]; then
+      if [[ "${STAGE_ARG}" == stage4 && -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+        ecoda_stage4_validate_nas "${semantic_dataset}" "${semantic_view}" || return 1
+      fi
       if [[ "${STAGE_ARG}" == stage2 &&
             -f "${RUN_ROOT_REAL}/manifests/bassez_metadata.json" ]]; then
         _audit_bassez_nas_artifact "${path}" || return 1
