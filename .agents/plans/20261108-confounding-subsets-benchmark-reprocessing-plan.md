@@ -61,7 +61,7 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, recovery reviewed and READY to launch
+## Live checkpoint — 2026-11-09, recovery RUNNING since09:18 CET
 
 - P0/P1 DONE: logical checkpoints and harmonized documentation are pushed.
   Latest reviewed controller/reuse source is9ca2453, committed/pushed and
@@ -2276,7 +2276,7 @@ changes; the orchestrator owns Git, plan, controls and HPC execution.
   selected pending row count and exact wrapper will be recorded before launch.
 
 
-## Recovery parallel method wave v2 — READY, not yet launched
+## Recovery parallel method wave v2 — RUNNING since2026-11-09 08:18:46Z
 
 - Gate `ecoda_stage5_main_confounds_20261109_v2`; parent
   `stage5_main_confounds_20261109_v2`; existing group `ecoda-benchmark`.
@@ -2329,3 +2329,22 @@ Exact immutable wrapper command:
 ```bash
 env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper BENCHMARK_MEM=128G BENCHMARK_MEM_MAX=500G BENCHMARK_CPU_CPUS_PER_TASK=16 BENCHMARK_GPU_CPUS_PER_TASK=8 BENCHMARK_CPU_TIME_LIMIT=12:00:00 BENCHMARK_GPU_DEFAULT_TIME_LIMIT=12:00:00 BENCHMARK_GPU_ANY_TIME_LIMIT=12:00:00 WATCHDOG_TIME_LIMIT=12:00:00 MAX_NUM_CHUNKS_PARALLEL=1000 BENCHMARK_GPU_DEFAULT_ARRAY_THROTTLE=4 BENCHMARK_GPU_ANY_ARRAY_THROTTLE=4 /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-main-confounds-recovery-v1/9ca2453eea7320a721ef6dfd458f9db108abecac/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-main-confounds-recovery-v1/9ca2453eea7320a721ef6dfd458f9db108abecac/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-main-confounds-recovery-v1/9ca2453eea7320a721ef6dfd458f9db108abecac/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage5_main_confounds_20261109_v2 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage5_main_confounds_20261109_v2 --script src/5_run_benchmark_methods/stage5_campaign.sh -- --contexts /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/main-confounds-v2/contexts.tsv --derivative-release 20261108-confounding-subsets-v1 --prepared-adoption /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/main-confounds-v2/prepared_adoption.json --prepared-adoption-sha256 be7cfc7ab3dda369c8167c4fdef043f3501d4f97b87e823f63f194f73cfe1800
 ```
+
+
+### Recovery exact-once launch — 2026-11-09 08:18:46Z /09:18CET
+
+Gate `ecoda_stage5_main_confounds_20261109_v2` prepare succeeded; reconcile
+classifiedABSENT with no discrepancies and every profile invariant passing.
+Launch returnedRUNNING and accepted only the two approved Stage2/Stage4
+dependencies. Command SHA256
+`ad0a8c35f98860c8e3626e843f2023fa6ef9d876b941ea325e5717666c4463ee`.
+Exactly one unbounded durable waiter is armed (local exec36153); no scheduler
+polling and no duplicate runner/waiter. Immutable scientific source remains
+9ca2453; later plan-only commits do not change the executing snapshot.
+
+Startup may still be in copy-validation/preflight/submission. RUNNING refers
+to the durable campaign, not a claim that every method array has already
+started or completed. Inspect actual run-owned adoption/classification/ID
+records for scope evidence. The formerv1 gate remainsFAILED unchanged.
+Terminal accounting and pinned artifact/source/runtime/NAS review remain
+required before accepting scientific results or releasing downstream gates.
