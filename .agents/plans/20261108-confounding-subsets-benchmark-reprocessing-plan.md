@@ -74,11 +74,13 @@ decisions have been applied to existing artifacts.
   waiter 3808 / cell 236 is active, with sleep prevention bound to PID 60360.
   It observes the old tail and approves no science. No persistent power
   setting was changed.
-- **Latest preserved queue evidence, 19:31:29 UTC:** the original two
+- **Latest preserved queue evidence, 20:27:18 UTC:** the original two
   benchmark scPoli tasks remain pending their required H200 hardware:
   `4665568_1` is Stephenson and `4665568_2` is Bassez, both HR dims15.
   Their watchdog, aggregate and monitor-only barrier `4666208` are pending
-  dependencies. No start estimate is established. Benchmark CPU hardware stays
+  dependencies. The user-requested single `squeue --start` snapshot reports
+  `N/A` start times and `ReqNodeNotAvail` for both scientific tasks. No
+  polling loop or additional accounting query was used. Benchmark CPU hardware stays
   EPYC-7742; batch analyses may use any suitable CPU/GPU. The failed16 startup
   failures remain unresolved; the additional one-off allocation diagnostic
   query explicitly requested from the user has not been approved or run.
@@ -3994,3 +3996,51 @@ and verified mode444 under the fresh Bamboo input namespace
 `e2fccf70bb928c807d0adfd833c657e85468a13839e443209614ddc1e55594df`.
 The next old56 step is a finite derived-payload/hash/owner inventory; existing
 ACTIVE/FAIL owner states must remain facts and cannot bypass input guards.
+
+
+### Existing 153 integrity inventory passed; scientific ownership remains separate
+
+The independently reviewed finite observer hashed exactly 153 derived payloads
+(58 core files, 39 runtime JSON files, 56 timing Feathers) for 56 physical rows.
+All 153 have matching full MD5 and strict PUBLISHED producer proofs; sources,
+sidecars, producer records and observed owners stayed stable. Observation SHA
+`24d22117c1df6f458eaa7222d1d5414debc324b078e160149412ac2608479223`;
+executed collector SHA
+`7c3ffb5ed89db6e4786a1fb148a838b5f39c357c7a81d93de09a5515d4d23d65`.
+No RDS/Feather deserialization, H5AD read, fit, score, scheduler query or old
+write occurred. Independent and operating reviews approve this integrity
+witness only; no scientific artifact/reuse/gate/publication approval follows.
+
+The 42 family owners are 30 ACTIVE, 8 OK and 4 FAIL. Combined ownership blockers
+are 76 ACTIVE observations, 4 FAIL and 99 absent artifact owners. These are
+administrative observations, not 179 failed methods. Absence comprises 56 timing
+files, 39 runtime companions and four selected Stephenson GloScope RDS arms
+(pcadims10/50, hvg1000/3000); all four still have valid PUBLISHED proofs.
+Do not refit solely because an owner is absent. Generic input guards remain
+unchanged. Current RDS32 eligibility is eight uncorrected GloScope aggregates
+with OK owners; 20 benchmark RDS have ACTIVE owners and four have no owner.
+A bounded scientific diagnostic for the eight eligible aggregates is being
+prepared, reporting the other 24 as blocked rather than reading through guards.
+
+Five exact observer/control/review files were preserved create-only, verified
+mode444 in Bamboo input namespace `old-main-present56-payload-proofs-v1`.
+Review SHA
+`536e4d9bd52caa47cee88e37e6257c6cf11af8ea6dc818f84285a3f64478742c`;
+staging SHA
+`91a17268d4551ed6dd0d9c9ed1b85bcaffb1f011740e4fedaffe56cb29e7ce3f`.
+No original owner, checksum, status or gate was repaired/promoted.
+
+The synthetic remaining95 rehearsal has now finished local cleanup. All three
+fake controllers and their parent record expected FAIL because fake Slurm
+produced no fitted outputs; graph proof 47/138/95 remains valid. Terminal
+follow-up SHA
+`ad876f9b1c64fe51be1c77565e2c6c93a7357dda3a810131000b71d9f5b0468c`.
+No synthetic terminal scientific pass is claimed, and no cleanup task remains.
+
+At 20:27:18 UTC the explicitly requested one-time queue estimate still shows
+both original scPoli tasks pending unavailable nodes, with `N/A` start times.
+The watchdog, aggregate and observer 4666208 wait on dependencies. Raw snapshot
+is `.gate/orphaned_main_20261109_v1/user_requested_start_estimate.observed.txt`.
+This answers the start-estimate request without repeating accounting. The
+additional node-allocation accounting exception remains pending and unexecuted;
+the new 95-row scientific wave remains unlaunched.
