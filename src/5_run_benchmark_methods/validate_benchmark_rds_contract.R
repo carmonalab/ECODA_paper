@@ -1982,6 +1982,13 @@ validate_result_file <- function(
 
   required <- c("scores", "feat_mat", "dist_mat", "labels")
   is_combo <- is.list(bundle) && all(required %in% names(bundle))
+  is_bl_result<-!batch&&grepl('_Pseudobulk_hvg2000_bl\\.rds$',basename(file))
+  if(is_bl_result) {
+    if(!is_combo) stop('Standalone BL result must contain one scored bundle: ',file)
+    .validate_pseudobulk_blacklist(bundle,colnames(bundle$feat_mat),file)
+  } else if(is_combo&&any(grepl('^blacklist_',names(bundle)))) {
+    stop('Blacklist metadata is restricted to the exact BL result suffix: ',file)
+  }
   standalone_composition <- identical(batch_pass, "corrected") && method %in% c(
     "ECODA_authors_HR", "ECODA_authors_HR_NULL",
     "ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma"
@@ -2030,6 +2037,10 @@ validate_result_file <- function(
       }
     }
     combos <- bundle
+    if(!batch&&'Pseudobulk_hvg2000_bl'%in%names(combos)) {
+      bl<-combos[['Pseudobulk_hvg2000_bl']]
+      .validate_pseudobulk_blacklist(bl,colnames(bl$feat_mat),file)
+    }
   }
   if (identical(batch_pass, "corrected") && identical(method, "composition")) {
     .validate_corrected_composition_nested(
@@ -2072,6 +2083,57 @@ validate_memory_scalar <- function(value, field, file) {
   "ecoda_batch_contract", "_ecoda_batch_contract"
 )
 
+.validate_pseudobulk_blacklist <- function(value,genes,file,cache=FALSE) {
+  # This module contains definitions and the frozen auxiliary-mask reader;
+  # filtering a one-column identifier fixture never calls normalization/fit.
+  helper<-new.env(parent=baseenv())
+  sys.source(file.path(validator_dir,'../utils/pseudobulk.R'),envir=helper)
+  resolved<-helper$pseudobulk_blacklist()
+  if(!identical(value$blacklist_policy,resolved$policy))
+    stop('BL pseudobulk requires the current pre-fit five-group policy: ',file)
+  fields<-if(cache)c('blacklist_policy','blacklist_audit','blacklist_aggregate_time_secs') else
+    c('blacklist_policy','blacklist_audit','blacklist_source_timing_id')
+  if(!setequal(grep('^blacklist_',names(value),value=TRUE),fields))
+    stop('BL pseudobulk metadata fields are incomplete or unexpected: ',file)
+  audit<-value$blacklist_audit
+  wanted<-c('input_genes','excluded_genes','retained_genes','matched_rows_per_group')
+  integer_scalar<-function(x)is.numeric(x)&&length(x)==1L&&!is.na(x)&&is.finite(x)&&x>=0&&x==floor(x)
+  if(!is.list(audit)||!identical(names(audit),wanted)||
+     !integer_scalar(audit$input_genes)||!integer_scalar(audit$retained_genes)||
+     !is.character(audit$excluded_genes)||anyNA(audit$excluded_genes)||
+     any(!nzchar(trimws(audit$excluded_genes)))||anyDuplicated(audit$excluded_genes)||
+     audit$retained_genes<length(genes)||audit$retained_genes<1||
+     audit$input_genes!=audit$retained_genes+length(audit$excluded_genes)||
+     !is.numeric(audit$matched_rows_per_group)||
+     !identical(names(audit$matched_rows_per_group),resolved$policy$groups)||
+     any(!is.finite(audit$matched_rows_per_group))||any(audit$matched_rows_per_group<0)||
+     any(audit$matched_rows_per_group!=floor(audit$matched_rows_per_group)))
+    stop('BL pseudobulk exclusion audit is malformed: ',file)
+  if(is.null(genes)||anyNA(genes)||any(!nzchar(trimws(genes)))||anyDuplicated(genes)||
+     any(genes%in%audit$excluded_genes)) stop('BL pseudobulk feature identities are invalid: ',file)
+  ids<-c(audit$excluded_genes,genes)
+  filtered<-helper$filter_pseudobulk_blacklist(matrix(1,nrow=length(ids),ncol=1,
+    dimnames=list(ids,'identifier_check')),'human_aux_five_groups')
+  if(!identical(rownames(filtered$counts),genes)||
+     !identical(filtered$audit$excluded_genes,audit$excluded_genes)||
+     !identical(as.numeric(filtered$audit$matched_rows_per_group),as.numeric(audit$matched_rows_per_group)))
+    stop('BL pseudobulk contains blocked features or an inconsistent exclusion audit: ',file)
+  if(cache) {
+    validate_timing_scalar(value$blacklist_aggregate_time_secs,'blacklist_aggregate_time_secs',file)
+    if(any(vapply(c('aggregate_time_secs','shared_fit_time_secs','shared_time_secs'),
+         function(field)!identical(as.numeric(value[[field]]),0),logical(1)))||
+       value$blacklist_aggregate_time_secs>value$variant_time_secs)
+      stop('BL pseudobulk cache requires self-contained timing: ',file)
+  } else {
+    id<-value$blacklist_source_timing_id
+    if(!is.character(id)||length(id)!=1L||is.na(id)||!nzchar(id)||
+       length(strsplit(id,':',fixed=TRUE)[[1]])!=4L||
+       any(!nzchar(trimws(strsplit(id,':',fixed=TRUE)[[1]])))||grepl('[[:cntrl:]]',id))
+      stop('BL pseudobulk result has an invalid preparation identity: ',file)
+  }
+  invisible(TRUE)
+}
+
 .validate_pseudobulk_value <- function(
   value,
   file,
@@ -2099,6 +2161,12 @@ validate_memory_scalar <- function(value, field, file) {
   memory <- NULL
   has_pb <- is.list(value) && !is.data.frame(value) &&
     "pb" %in% names(value)
+  is_bl_cache<-!batch&&grepl('_pseudobulk_hvg2000_bl\\.rds$',basename(file))
+  bl_fields<-c('blacklist_policy','blacklist_audit','blacklist_aggregate_time_secs')
+  if(is_bl_cache&&(!has_pb||!all(c('timing_schema',bl_fields)%in%names(value))))
+    stop('BL pseudobulk cache requires current policy/audit and schema-2 timing: ',file)
+  if(!is_bl_cache&&is.list(value)&&any(grepl('^blacklist_',names(value))))
+    stop('Blacklist metadata is restricted to the exact BL cache suffix: ',file)
   if (has_pb) {
     if (!isTRUE(allow_legacy_value_pb)) {
       stop(
@@ -2118,7 +2186,8 @@ validate_memory_scalar <- function(value, field, file) {
       required_schema2 <- c(
         "pb", "time_secs", "mem_GB", "aggregate_time_secs",
         "shared_fit_time_secs", "shared_time_secs", "variant_time_secs",
-        "shared_mem_GB", "timing_id", "timing_schema"
+        "shared_mem_GB", "timing_id", "timing_schema",
+        if(is_bl_cache) bl_fields
       )
       actual_fields <- if (identity_validation_active) {
         setdiff(names(value), .pseudobulk_contract_aliases)
@@ -2186,6 +2255,7 @@ validate_memory_scalar <- function(value, field, file) {
     ))) {
       stop("Pseudobulk schema-2 timing fields are incomplete: ", file)
     }
+    if(is_bl_cache) .validate_pseudobulk_blacklist(value,colnames(value$pb),file,cache=TRUE)
     value <- value$pb
   }
   dimensions <- dim(value)
