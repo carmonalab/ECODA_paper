@@ -2003,14 +2003,18 @@ stage5_require_input_ownerships() {
 
 
 stage5_validate_source_artifact_records() {
-  local ds view source_path identity_path row seen_sources="" producer="stage5_preflight"
+  local ds view source_path identity_path checksum_proof row seen_sources="" producer="stage5_preflight"
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
   while IFS=$'\t' read -r ds view _scope; do
     row="${ds}/${view}"
     case " ${seen_sources} " in *" ${row} "*) continue ;; esac
     seen_sources="${seen_sources} ${row}"
     source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
-    ecoda_validate_artifact_record "${source_path}" "${producer}" "${RUN_ID}" ||
+    checksum_proof="${source_path}.md5"
+    if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+      checksum_proof="$(ecoda_derivative_input_proof "${ds}" "${view}" "${source_path}")" || return 1
+    fi
+    ecoda_validate_artifact_record "${source_path}" "${producer}" "${RUN_ID}" "${checksum_proof}" ||
       return 1
     if [[ "${PASS_ARG:-}" == corrected ]]; then
       identity_path="$(
@@ -2030,13 +2034,12 @@ stage5_validate_source_artifact_records() {
 
 
 stage5_validate_derivative_input_row() {
-  local ds="$1" view="$2" path verified owner producer_run record producer owned_run
+  local ds="$1" view="$2" path verified owner producer_run record producer owned_run checksum_proof
   path="$(ecoda_derivative_input "${ds}" "${view}")" || return 1
   ecoda_require_input_ownership "${path}" "${RUN_ID}" || return 1
   verified="$(ecoda_derivative_input "${ds}" "${view}" file content)" || return 1
-  # Compute preflight still requires an existing adjacent receipt. Diagnose
-  # its absence here; derivative input validation never repairs old files.
-  [[ "${verified}" == "${path}" && -s "${path}.md5" && ! -L "${path}.md5" ]] || return 1
+  [[ "${verified}" == "${path}" ]] || return 1
+  checksum_proof="$(ecoda_derivative_input_proof "${ds}" "${view}" "${path}")" || return 1
   owner="$(ecoda_artifact_owner_dir "${path}")" || return 1
   owned_run=""
   case "${path}" in "${ECODA_RUNS_ROOT}/"*) owned_run="${path#${ECODA_RUNS_ROOT}/}"; owned_run="${owned_run%%/*}" ;; esac
@@ -2047,7 +2050,7 @@ stage5_validate_derivative_input_row() {
     [[ -z "${owned_run}" || "${owned_run}" == "${producer_run}" ]] || return 1
     record="$(ecoda_artifact_record_path "${path}" "${producer_run}")" || return 1
     producer="$(stage5_recorded_producer "${record}")" || return 1
-    ecoda_validate_artifact_record "${path}" "${producer}" "${producer_run}" >/dev/null || return 1
+    ecoda_validate_artifact_record "${path}" "${producer}" "${producer_run}" "${checksum_proof}" >/dev/null || return 1
   elif [[ -n "${owned_run}" ]]; then
     echo "ERROR: run-owned derivative input has no published producer owner: ${path}" >&2
     return 1
@@ -2238,7 +2241,7 @@ stage5_compute_h5ad_preflight() {
   local preflight_logs="${ECODA_RUN_ROOT}/logs"
   local ds view source_path safe status state status_run status_dataset status_view status_task
   local preflight_id preflight_rc count=0 preflight_expected
-  local identity_path
+  local identity_path checksum_proof
   local preflight_runtime_export
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
 
@@ -2262,7 +2265,11 @@ stage5_compute_h5ad_preflight() {
           --path "${source_path}" --view "${view}" --method "Stage 5 sync recovery" \
           >/dev/null 2>&1 || return 1
       fi
-      ecoda_validate_checksum "${source_path}" || return 1
+      checksum_proof="${source_path}.md5"
+      if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+        checksum_proof="$(ecoda_derivative_input_proof "${ds}" "${view}" "${source_path}")" || return 1
+      fi
+      ecoda_validate_checksum "${source_path}" "${checksum_proof}" || return 1
     done < "${MANIFEST}"
     return 0
   fi

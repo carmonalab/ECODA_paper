@@ -240,23 +240,36 @@ status_file="${status_dir}/${safe}.status"
 state="OK"
 contract_rc=0
 checksum_rc=0
+checksum_proof="${path}.md5"
+preserve_input=0
+if [[ "${ECODA_RUNTIME_PROFILE:-stage3}" == stage5 &&
+      -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+  source "${SCRIPT_DIR}/ecoda_derivative_artifacts.sh"
+  if ecoda_derivative_load stage5 &&
+     checksum_proof="$(ecoda_derivative_input_proof "${dataset}" "${view}" "${path}")"; then
+    preserve_input=1
+  else
+    checksum_rc=$?
+    echo "ERROR: H5AD preflight phase=bound_input_proof rc=${checksum_rc} path=${path}" >&2
+  fi
+fi
 if [[ ! -s "${path}" ]]; then
   contract_rc=1
   checksum_rc=1
-else
+elif [[ ${checksum_rc} -eq 0 ]]; then
   set +e
   if [[ -n "${corrected_identity_path}" ]]; then
     "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
       --path "${path}" --view "${view}" --method "${validator_method}" \
       --expected-batch-contract "${corrected_identity_path}" \
-      "${contract_allow_missing_summary[@]}" >/dev/null 2>&1
+      "${contract_allow_missing_summary[@]}" >/dev/null
   else
     "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
-      --path "${path}" --view "${view}" --method "${validator_method}" >/dev/null 2>&1
+      --path "${path}" --view "${view}" --method "${validator_method}" >/dev/null
   fi
   contract_rc=$?
   if [[ ${contract_rc} -eq 0 ]]; then
-    ecoda_validate_checksum "${path}"
+    ecoda_validate_checksum "${path}" "${checksum_proof}"
     checksum_rc=$?
   else
     checksum_rc=1
@@ -264,6 +277,7 @@ else
   set -e
 fi
 if [[ ${contract_rc} -ne 0 || ${checksum_rc} -ne 0 ]]; then
+  echo "ERROR: H5AD preflight phase=contract_and_checksum contract_rc=${contract_rc} checksum_rc=${checksum_rc} path=${path}" >&2
   if [[ "${mode}" == "classify" ]]; then
     state="REBUILD"
   else
@@ -277,8 +291,9 @@ if [[ "${state}" == "OK" ]]; then
     stage5) producer="stage5_preflight" ;;
     *) producer="h5ad_preflight" ;;
   esac
-  if ! ecoda_validate_artifact_record "${path}" "${producer}" "${run_id}" >/dev/null 2>&1; then
-    if ! ecoda_write_artifact_record "${path}" "${producer}" "${run_id}" >/dev/null; then
+  if ! ecoda_validate_artifact_record "${path}" "${producer}" "${run_id}" "${checksum_proof}" >/dev/null 2>&1; then
+    if ! ecoda_write_artifact_record "${path}" "${producer}" "${run_id}" "${checksum_proof}" "${preserve_input}" >/dev/null; then
+      echo "ERROR: H5AD preflight phase=input_record rc=1 path=${path}" >&2
       if [[ "${mode}" == "classify" ]]; then
         state="REBUILD"
       else

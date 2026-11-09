@@ -42,6 +42,14 @@ _audit_stage5_input_path() {
   fi
 }
 
+_audit_stage5_input_proof() {
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    ecoda_derivative_input_proof "$1" "$2" "$3"
+  else
+    printf '%s.md5' "$3"
+  fi
+}
+
 _audit_benchmark_h5ad() {
   local path="$1" view="$2" method="$3" identity_path="${4:-}"
   local python_bin validator variant="${AUDIT_METADATA_VARIANT:-}"
@@ -1181,7 +1189,7 @@ _audit_stage5_scope_selection() {
   AUDIT_STAGE5_SCOPE_SELECTION="${scope}"
 }
 _audit_corrected_source_contracts() {
-  local dataset view source_path source_record identity_path output_name key seen=""
+  local dataset view source_path source_record identity_path checksum_proof output_name key seen=""
   local index
   [[ "${STAGE_ARG}" == stage5 &&
      "${AUDIT_METADATA_PASS:-}" == corrected ]] || return 0
@@ -1223,11 +1231,12 @@ _audit_corrected_source_contracts() {
     seen="${seen} ${key}"
     output_name="$(ecoda_view_output_name "${dataset}" "${view}")" || return 1
     source_path="$(_audit_stage5_input_path "${dataset}" "${view}")" || return 1
+    checksum_proof="$(_audit_stage5_input_proof "${dataset}" "${view}" "${source_path}")" || return 1
     source_record="$(ecoda_artifact_record_path "${source_path}" "${RUN_ID}")" || return 1
     if [[ -e "${source_record}" || -L "${source_record}" ]]; then
       # The current run's preflight already checked this input's contract and
       # bytes. Reuse its published proof; the helper rehashes writable inputs.
-      ecoda_validate_artifact_record "${source_path}" stage5_preflight "${RUN_ID}" \
+      ecoda_validate_artifact_record "${source_path}" stage5_preflight "${RUN_ID}" "${checksum_proof}" \
         >/dev/null || {
         _audit_die "current-run source preflight proof is invalid: ${source_path}"
         return 1
@@ -1237,7 +1246,7 @@ _audit_corrected_source_contracts() {
     identity_path="$(
       _audit_batch_contract_identity_path "${dataset}" "${view}" preprocess
     )" || return 1
-    ecoda_validate_checksum "${source_path}" || {
+    ecoda_validate_checksum "${source_path}" "${checksum_proof}" || {
       _audit_die "corrected source H5AD checksum is invalid: ${source_path}"
       return 1
     }
@@ -1262,7 +1271,7 @@ _audit_metadata_export_manifest() {
   local status_report="${AUDIT_METADATA_EXPORT_STATUS:-}"
   local expected_view="batch_effect_${AUDIT_METADATA_ANALYSIS_PASS:-}"
   local manifest_real status_real
-  local dataset view input output extra key name expected_input expected_output
+  local dataset view input output extra key name expected_input expected_output checksum_proof
   local row_count=0 actual_count=0 found
   local status_field
   local expected_keys="" actual_keys=""
@@ -1362,7 +1371,8 @@ _audit_metadata_export_manifest() {
     # Corrected inputs are checked once by _audit_corrected_source_contracts,
     # after the batch-contract manifest proves complete selected-row coverage.
     if [[ "${AUDIT_METADATA_PASS:-}" != corrected ]]; then
-      ecoda_validate_checksum "${input}" || {
+      checksum_proof="$(_audit_stage5_input_proof "${dataset}" "${view}" "${input}")" || return 1
+      ecoda_validate_checksum "${input}" "${checksum_proof}" || {
         _audit_die "metadata-export input H5AD checksum is invalid: ${input}"
         return 1
       }

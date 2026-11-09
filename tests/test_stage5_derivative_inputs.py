@@ -129,9 +129,9 @@ def run():
             shell(f'ecoda_artifact_owner_set_state "$REPAIRED" {state} fixture >/dev/null', env)
             shell(preflight, env, valid=False)
         shell('ecoda_artifact_owner_set_state "$REPAIRED" OK fixture >/dev/null', env)
-        # Missing adjacent receipts are diagnosed without a repair/write.
+        # Bound external receipts do not require or repair an old adjacent receipt.
         missing = legacy_sidecar.with_suffix(".saved")
-        legacy_sidecar.rename(missing); shell(preflight, env, valid=False); missing.rename(legacy_sidecar)
+        legacy_sidecar.rename(missing); shell(preflight, env); missing.rename(legacy_sidecar)
         shell(preflight, env)
         for path, (content, mode) in protected.items():
             assert path.read_bytes() == content and path.stat().st_mode == mode, path

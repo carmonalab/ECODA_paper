@@ -44,7 +44,7 @@ SOURCE_ARCHIVE="${SOURCE_IDENTITY}/source.tar"
 mkdir -p "${SOURCE_ROOT}/src/utils/bash" "${SOURCE_ROOT}/src/utils/py" \
   "${SOURCE_ROOT}/aux" "${SOURCE_IDENTITY}"
 cp "${ROOT}/src/slurm_config.sh" "${SOURCE_ROOT}/src/slurm_config.sh"
-for source_file in ecoda_run_common.sh ecoda_runtime.sh h5ad_preflight_worker.sh; do
+for source_file in ecoda_run_common.sh ecoda_runtime.sh h5ad_preflight_worker.sh ecoda_derivative_artifacts.sh; do
   cp "${ROOT}/src/utils/bash/${source_file}" \
     "${SOURCE_ROOT}/src/utils/bash/${source_file}"
 done
@@ -52,6 +52,7 @@ cp "${ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
   "${SOURCE_ROOT}/src/utils/py/benchmark_h5ad_contract.py"
 cp "${ROOT}/src/utils/py/batch_contract.py" \
   "${SOURCE_ROOT}/src/utils/py/batch_contract.py"
+cp "${ROOT}/src/utils/py/derivative_artifacts.py" "${SOURCE_ROOT}/src/utils/py/derivative_artifacts.py"
 for source_file in config_helper.R datasets.json pixi.toml pixi.lock; do
   cp "${ROOT}/${source_file}" "${SOURCE_ROOT}/${source_file}"
 done
@@ -176,12 +177,12 @@ mkdir -p "${STATUS_DIR}"
 printf 'Adams\tbenchmark_analysis\t%s\n' "${SOURCE}" > "${MANIFEST}"
 
 run_worker() {
-  local mode="$1"
+  local mode="$1" profile="${2:-stage3}"
   ECODA_SOURCE_ROOT="${SOURCE_ROOT}" \
   ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST}" \
   ECODA_SOURCE_SNAPSHOT_REQUIRED=1 ECODA_HOST_ENV_PREFIX="${HOST_ENV_PREFIX}" \
   ECODA_RUNTIME_MODE=host ECODA_RUNTIME_IN_CONTAINER=0 \
-  ECODA_RUNTIME_PROFILE=stage3 ECODA_RUNTIME_IMAGE="${RUNTIME_IMAGE}" \
+  ECODA_RUNTIME_PROFILE="${profile}" ECODA_RUNTIME_IMAGE="${RUNTIME_IMAGE}" \
   ECODA_RUNTIME_MANIFEST="${RUNTIME_MANIFEST}" HPC_SCRATCH_DIR="${HPC_SCRATCH_DIR}" \
   ECODA_SCRATCH_ROOT="${HPC_SCRATCH_DIR}" ECODA_LOGS_DIR="${ECODA_LOGS_DIR}" \
   ECODA_AUX_ROOT="${SOURCE_ROOT}/aux" ECODA_RUN_ROOT="${RUN_ROOT}" \
@@ -422,5 +423,98 @@ failed_id="$(ecoda_submit_h5ad_preflight \
 failed_rc=$?
 set -e
 [[ "${failed_id}" == "812346" && ${failed_rc} -ne 0 ]]
+
+
+# Container-like Stage5 input: the historical home alias disappears after
+# binding. Only the exact external canonical receipt may validate this input;
+# a consumer record must not freeze the writable legacy source or either proof.
+export PROJECT_ROOT="${SOURCE_ROOT}" DATASETS_JSON_FILE="${SOURCE_ROOT}/datasets.json"
+export PYTHON_BIN="${ROOT}/.pixi/envs/default/bin/python"
+source "${SOURCE_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+RUN_ID=bound-input
+RUN_ROOT="${HPC_SCRATCH_DIR}/_ecoda_runs/${RUN_ID}"
+export ECODA_RUN_ROOT="${RUN_ROOT}" ECODA_RUN_ID="${RUN_ID}"
+mkdir -p "${RUN_ROOT}/manifests" "${RUN_ROOT}/status" "${RUN_ROOT}/logs"
+printf 'STAGE=stage5\nRUN_ID=%s\nSTATE=ACTIVE\n' "${RUN_ID}" > "${RUN_ROOT}/metadata"
+cp "${SOURCE_MANIFEST}" "${RUN_ROOT}/manifests/source.manifest"
+cp "${HPC_SCRATCH_DIR}/_ecoda_runs/run/manifests/runtime.identity" "${RUN_ROOT}/manifests/runtime.identity"
+output_name="$("${PYTHON_BIN}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["Adams"]["views"]["benchmark_analysis"]["output_file_name"])' "${DATASETS_JSON_FILE}")"
+BOUND_SOURCE="${HPC_SCRATCH_DIR}/Adams/output/${output_name}"
+mkdir -p "$(dirname "${BOUND_SOURCE}")" "${TMP_DIR}/receipts"
+cp "${VALID_SOURCE}" "${BOUND_SOURCE}"
+chmod 644 "${BOUND_SOURCE}"
+write_sidecar "${BOUND_SOURCE}"
+BOUND_PROOF="${TMP_DIR}/receipts/Adams.expected.md5"
+cp "${BOUND_SOURCE}.md5" "${BOUND_PROOF}"
+HOME_ALIAS="${TMP_DIR}/legacy-home-scratch"
+ln -s "${HPC_SCRATCH_DIR}" "${HOME_ALIAS}"
+"${PYTHON_BIN}" - "${BOUND_SOURCE}.md5" "${HPC_SCRATCH_DIR}" "${HOME_ALIAS}" <<'PY_FIXTURE'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]); p.write_text(p.read_text().replace(sys.argv[2],sys.argv[3]))
+PY_FIXTURE
+cp "${BOUND_SOURCE}.md5" "${TMP_DIR}/old-proof.bytes"
+cp "${BOUND_PROOF}" "${TMP_DIR}/bound-proof.bytes"
+bound_input_modes() {
+  "${PYTHON_BIN}" - "${BOUND_SOURCE}" "${BOUND_SOURCE}.md5" "${BOUND_PROOF}" <<'PY_MODES'
+from pathlib import Path
+import stat,sys
+print([stat.S_IMODE(Path(p).stat().st_mode) for p in sys.argv[1:]])
+PY_MODES
+}
+BOUND_INPUT_MODES="$(bound_input_modes)"
+"${PYTHON_BIN}" - "${BOUND_SOURCE}" "${BOUND_PROOF}" "${RUN_ROOT}" <<'PY_FIXTURE'
+from pathlib import Path
+import hashlib,sys
+p,proof,run=map(Path,sys.argv[1:]); m=run/'manifests'
+(m/'selection.tsv').write_text('Adams\tbenchmark_analysis\tpseudobulk\n')
+(m/'preflight.tsv').write_text(f'Adams\tbenchmark_analysis\t{p}\n')
+(m/'inputs.tsv').write_text(f'Adams\tbenchmark_analysis\t{p}\t{hashlib.md5(p.read_bytes()).hexdigest()}\t{p.stat().st_size}\t{proof}\n')
+PY_FIXTURE
+ecoda_derivative_bind stage5 test-release "${RUN_ROOT}/manifests/selection.tsv" "${RUN_ROOT}/manifests/inputs.tsv"
+mv "${HOME_ALIAS}" "${HOME_ALIAS}.hidden"
+MANIFEST="${RUN_ROOT}/manifests/preflight.tsv"
+STATUS_DIR="${RUN_ROOT}/status/preflight"
+run_worker require stage5
+[[ "$(sed -n 's/^STATE=//p' "${STATUS_DIR}/Adams__benchmark_analysis.status")" == OK ]]
+[[ -w "${BOUND_SOURCE}" && "$(bound_input_modes)" == "${BOUND_INPUT_MODES}" ]]
+cmp "${BOUND_SOURCE}" "${VALID_SOURCE}"
+cmp "${BOUND_SOURCE}.md5" "${TMP_DIR}/old-proof.bytes"
+cmp "${BOUND_PROOF}" "${TMP_DIR}/bound-proof.bytes"
+if ecoda_validate_checksum "${BOUND_SOURCE}"; then echo 'unbound alias proof accepted' >&2; exit 1; fi
+if ecoda_validate_artifact_record "${BOUND_SOURCE}" stage5_preflight "${RUN_ID}"; then echo 'unbound record accepted alias proof' >&2; exit 1; fi
+ecoda_validate_artifact_record "${BOUND_SOURCE}" stage5_preflight "${RUN_ID}" "${BOUND_PROOF}"
+# Execute the dispatcher's real downstream source-record/scientific boundary.
+eval "$(awk '/^stage5_validate_source_artifact_records\(\) \{/{copy=1} copy{print} copy && /^}$/{exit}' "${ROOT}/src/5_run_benchmark_methods/stage5_dispatcher.sh")"
+stage5_input_path() { ecoda_derivative_input "$1" "$2"; }
+MANIFEST="${RUN_ROOT}/manifests/selection.tsv"
+stage5_validate_source_artifact_records
+# Writable inputs must still be fully hashed even after a consumer record exists.
+export MD5_COUNT PATH="${COUNT_BIN}:${ORIGINAL_PATH}"
+if ecoda_validate_artifact_record "${BOUND_SOURCE}" stage5_preflight "${RUN_ID}" "${BOUND_PROOF}"; then echo 'writable source bypassed full hash' >&2; exit 1; fi
+[[ -s "${MD5_COUNT}" ]]
+export PATH="${ORIGINAL_PATH}"
+# The narrow no-freeze exception is unavailable for any other producer/run/proof.
+for bad_flag in 2 true; do
+  if ecoda_write_artifact_record "${BOUND_SOURCE}" stage5_preflight "${RUN_ID}" "${BOUND_PROOF}" "${bad_flag}"; then exit 1; fi
+done
+if ecoda_write_artifact_record "${BOUND_SOURCE}" stage3_preflight "${RUN_ID}" "${BOUND_PROOF}" 1; then exit 1; fi
+if ecoda_write_artifact_record "${BOUND_SOURCE}" stage5_preflight other-run "${BOUND_PROOF}" 1; then exit 1; fi
+cp "${BOUND_PROOF}" "${TMP_DIR}/foreign-proof"
+if ecoda_write_artifact_record "${BOUND_SOURCE}" stage5_preflight "${RUN_ID}" "${TMP_DIR}/foreign-proof" 1; then exit 1; fi
+if (unset ECODA_ARTIFACT_BINDING; ecoda_write_artifact_record "${BOUND_SOURCE}" stage5_preflight "${RUN_ID}" "${BOUND_PROOF}" 1); then exit 1; fi
+cp "${BOUND_SOURCE}" "${TMP_DIR}/source.saved"
+printf X | dd of="${BOUND_SOURCE}" bs=1 count=1 conv=notrunc >/dev/null 2>&1
+if stage5_validate_source_artifact_records; then echo 'downstream accepted same-size source mutation' >&2; exit 1; fi
+MANIFEST="${RUN_ROOT}/manifests/preflight.tsv"
+if run_worker require stage5 >"${TMP_DIR}/mutation.log" 2>&1; then exit 1; fi
+grep -q 'phase=contract_and_checksum.*path=' "${TMP_DIR}/mutation.log"
+cp "${TMP_DIR}/source.saved" "${BOUND_SOURCE}"
+# Repeated preflight preserves the old payload/receipt modes and bytes too.
+run_worker require stage5
+[[ -w "${BOUND_SOURCE}" && "$(bound_input_modes)" == "${BOUND_INPUT_MODES}" ]]
+cmp "${BOUND_SOURCE}" "${VALID_SOURCE}"
+cmp "${BOUND_SOURCE}.md5" "${TMP_DIR}/old-proof.bytes"
+cmp "${BOUND_PROOF}" "${TMP_DIR}/bound-proof.bytes"
 
 echo "h5ad preflight worker: OK"

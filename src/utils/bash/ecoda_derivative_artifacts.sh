@@ -209,6 +209,21 @@ ecoda_derivative_input() {
     --dataset "${dataset}" --view "${view}" ${extra[@]+"${extra[@]}"}
 }
 
+ecoda_derivative_input_proof() {
+  local dataset="$1" view="$2" path="$3"
+  [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]] || return 1
+  _ecoda_derivative_cli input --binding "${ECODA_ARTIFACT_BINDING}" \
+    --run-root "${ECODA_RUN_ROOT}" --nas-root "${NAS_TARGET_DIR}" \
+    --dataset "${dataset}" --view "${view}" --proof --path "${path}"
+}
+
+ecoda_derivative_proof_for_path() {
+  [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]] || return 1
+  _ecoda_derivative_cli input --binding "${ECODA_ARTIFACT_BINDING}" \
+    --run-root "${ECODA_RUN_ROOT}" --nas-root "${NAS_TARGET_DIR}" \
+    --proof --path "$1"
+}
+
 ecoda_derivative_dataset_output() {
   local dataset="$1" view="$2" destination="${3:-scratch}" root name path
   root="$(ecoda_derivative_root datasets "${destination}")" || return 1

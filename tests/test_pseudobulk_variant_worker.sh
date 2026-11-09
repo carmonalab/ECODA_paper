@@ -99,8 +99,10 @@ import hashlib, pathlib, sys
 root = pathlib.Path(sys.argv[1]); source = root / 'canonical/toy.h5ad'
 source.write_bytes(b'canonical unchanged fixture')
 md5 = hashlib.md5(source.read_bytes()).hexdigest(); size = source.stat().st_size
-proof = pathlib.Path(str(source) + '.md5')
+proof = root/'canonical.expected.md5'
 proof.write_text(f'MD5={md5}\nSIZE={size}\nPATH={source}\n')
+# Container-like topology: the old adjacent HOME alias is absent.
+pathlib.Path(str(source)+'.md5').write_text(f'MD5={md5}\nSIZE={size}\nPATH={root}/unmounted-home/toy.h5ad\n')
 (root/'inputs.tsv').write_text(f'Toy\tbenchmark_analysis\t{source}\t{md5}\t{size}\t{proof}\n')
 PY
 TEST_ARTIFACT_BINDING="$("${ROOT}/.pixi/envs/default/bin/python" \

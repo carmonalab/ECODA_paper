@@ -988,8 +988,9 @@ ecoda_artifact_record_path() {
 }
 
 ecoda_write_artifact_record() {
-  local path="${1:-}" producer="${2:-}" run_id="${3:-}"
-  local canonical record digest size content reused=0
+  local path="${1:-}" producer="${2:-}" run_id="${3:-}" checksum_proof="${4:-${1:-}.md5}"
+  local preserve_input="${5:-0}" canonical record digest size content reused=0 selected_proof
+  [[ "${preserve_input}" == 0 || "${preserve_input}" == 1 ]] || return 1
   ecoda_validate_run_id "${run_id}" || return 1
   [[ -n "${producer}" && "${producer}" != *$'\n'* &&
      "${producer}" != *$'\t'* && "${producer}" != *'='* ]] || {
@@ -1000,6 +1001,15 @@ ecoda_write_artifact_record() {
     _ecoda_die "artifact path is missing or cannot be canonicalized: ${path}"
     return 1
   }
+  if [[ "${preserve_input}" == 1 ]]; then
+    [[ "${producer}" == stage5_preflight && -n "${4:-}" &&
+       "${run_id}" == "${ECODA_RUN_ID:-}" &&
+       -n "${ECODA_ARTIFACT_BINDING:-}" ]] || return 1
+    command -v ecoda_derivative_proof_for_path >/dev/null 2>&1 || return 1
+    ecoda_derivative_load stage5 || return 1
+    selected_proof="$(ecoda_derivative_proof_for_path "${canonical}")" || return 1
+    [[ "${checksum_proof}" == "${selected_proof}" ]] || return 1
+  fi
   # A worker may have just performed the strict full-file preflight.  Reuse
   # that immediately preceding digest only after checking its sidecar fields
   # and current size; otherwise this function is itself the first strict
@@ -1010,17 +1020,17 @@ ecoda_write_artifact_record() {
         "${ECODA_CHECKSUM_MD5:-}" =~ ^[[:xdigit:]]{32}$ &&
         "${ECODA_CHECKSUM_SIZE:-}" =~ ^[1-9][0-9]*$ ]]; then
     if ecoda_validate_checksum_record "${path}" \
-        "${ECODA_CHECKSUM_MD5}" "${ECODA_CHECKSUM_SIZE}"; then
+        "${ECODA_CHECKSUM_MD5}" "${ECODA_CHECKSUM_SIZE}" "${checksum_proof}"; then
       reused=1
     elif [[ "${path}" != "${canonical}" ]] &&
          ecoda_validate_checksum_record "${canonical}" \
            "${ECODA_CHECKSUM_MD5}" "${ECODA_CHECKSUM_SIZE}" \
-           "${path}.md5"; then
+           "${checksum_proof}"; then
       reused=1
     fi
   fi
   if [[ ${reused} -eq 0 ]]; then
-    ecoda_validate_checksum "${path}" || {
+    ecoda_validate_checksum "${path}" "${checksum_proof}" || {
       _ecoda_die "artifact cannot be published without a strict checksum: ${path}"
       return 1
     }
@@ -1036,12 +1046,14 @@ ecoda_write_artifact_record() {
       _ecoda_die "artifact record already exists with different content: ${record}"
       return 1
     }
-    _ecoda_artifact_make_nonwritable "${canonical}" || return 1
+    # This exception publishes a consumer's validated-input receipt, not a
+    # scientific producer artifact. Preserve the input and both proof modes.
+    [[ "${preserve_input}" == 1 ]] || _ecoda_artifact_make_nonwritable "${canonical}" || return 1
     printf '%s' "${record}"
     return 0
   fi
   ecoda_atomic_write "${record}" "${content}" || return 1
-  if ! _ecoda_artifact_make_nonwritable "${canonical}"; then
+  if [[ "${preserve_input}" == 0 ]] && ! _ecoda_artifact_make_nonwritable "${canonical}"; then
     if ! rm -f "${record}" >/dev/null 2>&1; then
       _ecoda_die "could not roll back writable artifact record: ${record}"
     fi
@@ -1051,7 +1063,7 @@ ecoda_write_artifact_record() {
 }
 
 ecoda_validate_artifact_record() {
-  local path="${1:-}" producer="${2:-}" run_id="${3:-}"
+  local path="${1:-}" producer="${2:-}" run_id="${3:-}" checksum_proof="${4:-${1:-}.md5}"
   local canonical record sidecar_ok=1 immutable=0
   ecoda_validate_run_id "${run_id}" || return 1
   [[ -n "${producer}" && "${producer}" != *$'\n'* &&
@@ -1074,33 +1086,33 @@ ecoda_validate_artifact_record() {
   # spelling, but never skip digest/size validation.
   if [[ ${immutable} -eq 1 ]]; then
     if ecoda_validate_checksum_record "${path}" \
-        "${ECODA_ARTIFACT_RECORD_MD5}" "${ECODA_ARTIFACT_RECORD_SIZE}"; then
+        "${ECODA_ARTIFACT_RECORD_MD5}" "${ECODA_ARTIFACT_RECORD_SIZE}" "${checksum_proof}"; then
       sidecar_ok=0
     elif [[ "${path}" != "${canonical}" ]] &&
          ecoda_validate_checksum_record "${canonical}" \
-           "${ECODA_ARTIFACT_RECORD_MD5}" "${ECODA_ARTIFACT_RECORD_SIZE}"; then
+           "${ECODA_ARTIFACT_RECORD_MD5}" "${ECODA_ARTIFACT_RECORD_SIZE}" "${4:-${canonical}.md5}"; then
       sidecar_ok=0
     elif [[ "${path}" != "${canonical}" ]] &&
          ecoda_validate_checksum_record "${canonical}" \
            "${ECODA_ARTIFACT_RECORD_MD5}" "${ECODA_ARTIFACT_RECORD_SIZE}" \
-           "${path}.md5"; then
+           "${checksum_proof}"; then
       sidecar_ok=0
     fi
   else
     # Writable/legacy artifacts are not eligible for record-only reuse.  A
     # fresh full checksum catches same-size mutations before trusting the
     # published digest, while immutable artifacts retain the fast path above.
-    if ecoda_validate_checksum "${path}" &&
+    if ecoda_validate_checksum "${path}" "${checksum_proof}" &&
        [[ "${ECODA_CHECKSUM_MD5}" == "${ECODA_ARTIFACT_RECORD_MD5}" &&
           "${ECODA_CHECKSUM_SIZE}" == "${ECODA_ARTIFACT_RECORD_SIZE}" ]]; then
       sidecar_ok=0
     elif [[ "${path}" != "${canonical}" ]] &&
-         ecoda_validate_checksum "${canonical}" &&
+         ecoda_validate_checksum "${canonical}" "${4:-${canonical}.md5}" &&
          [[ "${ECODA_CHECKSUM_MD5}" == "${ECODA_ARTIFACT_RECORD_MD5}" &&
             "${ECODA_CHECKSUM_SIZE}" == "${ECODA_ARTIFACT_RECORD_SIZE}" ]]; then
       sidecar_ok=0
     elif [[ "${path}" != "${canonical}" ]] &&
-         ecoda_validate_checksum "${canonical}" "${path}.md5" &&
+         ecoda_validate_checksum "${canonical}" "${checksum_proof}" &&
          [[ "${ECODA_CHECKSUM_MD5}" == "${ECODA_ARTIFACT_RECORD_MD5}" &&
             "${ECODA_CHECKSUM_SIZE}" == "${ECODA_ARTIFACT_RECORD_SIZE}" ]]; then
       sidecar_ok=0

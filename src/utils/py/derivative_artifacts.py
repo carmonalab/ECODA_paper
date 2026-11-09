@@ -229,6 +229,26 @@ def resolve_input(binding: str | Path, config_path: str | Path, dataset: str, vi
     return selected[0]
 
 
+def resolve_input_proof(binding: str | Path, config_path: str | Path, dataset: str | None,
+                        view: str | None, *, expected_path: str | Path | None = None) -> Path:
+    value, rows = load(binding, config_path)
+    if dataset is None and view is None and expected_path is not None:
+        canonical = absolute(expected_path)
+        matches = [key[:2] for key, source in rows.items() if source == canonical]
+        if len(matches) != 1:
+            raise ValueError("input proof requires one exact bound source path")
+        dataset, view = matches[0]
+    source = resolve_input(binding, config_path, dataset, view)
+    if expected_path is not None and source != absolute(expected_path):
+        raise ValueError("input proof does not belong to the exact selected source path")
+    selected = [Path(fields[5])
+                for line in Path(value["input_artifacts"]).read_text().splitlines()
+                if (fields := line.split("\t"))[:3] == [dataset, view, str(source)]]
+    if len(selected) != 1:
+        raise ValueError("input checksum proof is not uniquely bound")
+    return selected[0]
+
+
 def context_root(value: dict, context: str, *, nas: bool = False) -> Path:
     if context not in CONTEXTS:
         raise ValueError(f"invalid derivative output context: {context}")
@@ -306,6 +326,8 @@ def main() -> None:
     parser.add_argument("--dataset")
     parser.add_argument("--view")
     parser.add_argument("--directory", action="store_true")
+    parser.add_argument("--proof", action="store_true")
+    parser.add_argument("--path", type=Path)
     parser.add_argument("--verify-content", action="store_true")
     parser.add_argument("--context")
     parser.add_argument("--nas", action="store_true")
@@ -324,8 +346,14 @@ def main() -> None:
             (args.stage is not None and value["stage"] != args.stage)):
             raise ValueError("derivative binding disagrees with the active run/stage/NAS base")
         if args.command == "input":
-            print(resolve_input(args.binding, args.config, args.dataset, args.view,
-                                directory=args.directory, verify_content=args.verify_content))
+            if args.proof:
+                if args.directory or args.verify_content:
+                    raise ValueError("proof selection cannot request directory/content modes")
+                print(resolve_input_proof(args.binding, args.config, args.dataset, args.view,
+                                          expected_path=args.path))
+            else:
+                print(resolve_input(args.binding, args.config, args.dataset, args.view,
+                                    directory=args.directory, verify_content=args.verify_content))
         else:
             print(context_root(value, args.context, nas=args.nas) if args.command == "root" else "DERIVATIVE_BINDING_VALIDATED")
 
