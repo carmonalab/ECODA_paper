@@ -1,5 +1,5 @@
 #!/bin/bash
-# Finite publication of reviewed BL10 bytes; no scheduler, fit, or old-run write.
+# Fixed BL10/HR22 publication; no scheduler, fit, or old-run write.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${SCRIPT_DIR}/../../slurm_config.sh"
@@ -46,6 +46,18 @@ ecoda_atomic_copy "${CONTROL}" "${ECODA_RUN_ROOT}/manifests/control.json"
 [[ "$(ecoda_md5_file "${CONTROL}")" == "${CONTROL_MD5}" &&
    "$(ecoda_md5_file "${ECODA_RUN_ROOT}/manifests/control.json")" == "${CONTROL_MD5}" ]]
 CONTROL="${ECODA_RUN_ROOT}/manifests/control.json"
+campaign_schema="$("${PYTHON_BIN}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema"])' "${CONTROL}")"
+case "${campaign_schema}" in
+  ecoda_bl_publication_control_v1)
+    COPY_PRODUCER=stage5_bl_science_release_copy; SCOPE_PRODUCER=bl_publication_scope
+    REPORT_PRODUCER=bl_science_publication; REPORT_NAME=bl_publication.json
+    VALIDATION_MARKER=BL_PUBLICATION_VALIDATED ;;
+  ecoda_bassez_hr22_publication_control_v1)
+    COPY_PRODUCER=stage5_bassez_hr22_release_copy; SCOPE_PRODUCER=bassez_hr22_publication_scope
+    REPORT_PRODUCER=bassez_hr22_science_publication; REPORT_NAME=bassez_hr22_publication.json
+    VALIDATION_MARKER=BASSEZ_HR22_PUBLICATION_VALIDATED ;;
+  *) echo 'ERROR: unsupported fixed publication campaign' >&2; exit 1 ;;
+esac
 ecoda_atomic_copy "${ECODA_SOURCE_MANIFEST}" "${ECODA_RUN_ROOT}/manifests/source.manifest"
 export ECODA_RUNTIME_PROFILE=stage5
 ecoda_runtime_validate_submission apptainer
@@ -57,7 +69,7 @@ DESTINATION="$("${PYTHON_BIN}" "${helper}" plan --control "${CONTROL}" --control
 bash "${nas_helper}" preflight --nas-root "${NAS_TARGET_DIR}" --report "${ECODA_RUN_ROOT}/manifests/nas_preflight.json"
 for name in control.json source.manifest runtime.identity publication_inventory.tsv nas_preflight.json; do
   ecoda_write_checksum "${ECODA_RUN_ROOT}/manifests/${name}"
-  ecoda_write_artifact_record "${ECODA_RUN_ROOT}/manifests/${name}" bl_publication_scope "${ECODA_RUN_ID}" >/dev/null
+  ecoda_write_artifact_record "${ECODA_RUN_ROOT}/manifests/${name}" "${SCOPE_PRODUCER}" "${ECODA_RUN_ID}" >/dev/null
 done
 SYNC_OWNER="$(ecoda_owner_acquire stage5 "sync/${ANALYSIS_ROOT}" "${ECODA_RUN_ID}" 0 1)"
 mkdir "${SYNC_OWNER}.publication.lock"
@@ -65,7 +77,7 @@ SYNC_LOCK="${SYNC_OWNER}.publication.lock"
 _ecoda_validate_path_ancestors "${DESTINATION}" "${NAS_TARGET_DIR}"
 mkdir -p "${DESTINATION%/*}" "${ANALYSIS_ROOT}"
 mkdir "${DESTINATION}"
-REPORT="${ECODA_RUN_ROOT}/artifacts/evidence/bl_publication.json"
+REPORT="${ECODA_RUN_ROOT}/artifacts/evidence/${REPORT_NAME}"
 mkdir -p "${REPORT%/*}"
 ecoda_artifact_owner_acquire "${REPORT}" stage5 "${ECODA_RUN_ID}" 0 0 0 >/dev/null
 OWNED+=("${REPORT}")
@@ -102,8 +114,8 @@ while IFS=$'\t' read -r dataset kind source relative md5 size producer extra; do
     "${PYTHON_BIN}" "${helper}" copy --source "${copy_source}" --destination "${target}" \
       --boundary "${boundary}" --md5 "${md5}" --size "${size}"
     ecoda_write_checksum "${target}"
-    ecoda_write_artifact_record "${target}" stage5_bl_science_release_copy "${ECODA_RUN_ID}" >/dev/null
-    ecoda_validate_artifact_record "${target}" stage5_bl_science_release_copy "${ECODA_RUN_ID}" >/dev/null
+    ecoda_write_artifact_record "${target}" "${COPY_PRODUCER}" "${ECODA_RUN_ID}" >/dev/null
+    ecoda_validate_artifact_record "${target}" "${COPY_PRODUCER}" "${ECODA_RUN_ID}" >/dev/null
     if [[ "${target}" == "${published}" ]]; then
       normalize_nas "${target}" || exit 1
       normalize_nas "${target}.md5" || exit 1
@@ -113,17 +125,17 @@ while IFS=$'\t' read -r dataset kind source relative md5 size producer extra; do
   printf '%s  %s.md5\n' "$(ecoda_md5_file "${published}.md5")" "${relative}" >> "${CHECKSUMS}"
 done < "${INVENTORY}"
 ecoda_write_checksum "${CHECKSUMS}"
-ecoda_write_artifact_record "${CHECKSUMS}" bl_publication_scope "${ECODA_RUN_ID}" >/dev/null
+ecoda_write_artifact_record "${CHECKSUMS}" "${SCOPE_PRODUCER}" "${ECODA_RUN_ID}" >/dev/null
 "${PYTHON_BIN}" "${helper}" copy --source "${CHECKSUMS}" --destination "${DESTINATION}/checksums.md5" \
   --boundary "${NAS_TARGET_DIR}" --md5 "$(ecoda_md5_file "${CHECKSUMS}")" --size "$(wc -c < "${CHECKSUMS}" | tr -d '[:space:]')"
 normalize_nas "${DESTINATION}/checksums.md5" || exit 1
 (cd "${DESTINATION}" && md5sum -c checksums.md5)
 bash "${nas_helper}" preflight --nas-root "${NAS_TARGET_DIR}" --report "${ECODA_RUN_ROOT}/manifests/nas_postflight.json"
 ecoda_write_checksum "${ECODA_RUN_ROOT}/manifests/nas_postflight.json"
-ecoda_write_artifact_record "${ECODA_RUN_ROOT}/manifests/nas_postflight.json" bl_publication_scope "${ECODA_RUN_ID}" >/dev/null
+ecoda_write_artifact_record "${ECODA_RUN_ROOT}/manifests/nas_postflight.json" "${SCOPE_PRODUCER}" "${ECODA_RUN_ID}" >/dev/null
 ecoda_runtime_validate_bound_run
 for name in control.json source.manifest runtime.identity publication_inventory.tsv nas_preflight.json nas_postflight.json nas_checksums.md5; do
-  ecoda_validate_artifact_record "${ECODA_RUN_ROOT}/manifests/${name}" bl_publication_scope "${ECODA_RUN_ID}" >/dev/null
+  ecoda_validate_artifact_record "${ECODA_RUN_ROOT}/manifests/${name}" "${SCOPE_PRODUCER}" "${ECODA_RUN_ID}" >/dev/null
 done
 "${PYTHON_BIN}" "${helper}" verify --control "${CONTROL}" --control-md5 "${CONTROL_MD5}" \
   --run-root "${ECODA_RUN_ROOT}" --nas-root "${NAS_TARGET_DIR}" --inventory "${INVENTORY}"
@@ -133,11 +145,11 @@ done
 "${PYTHON_BIN}" "${helper}" finish --control "${CONTROL}" --control-md5 "${CONTROL_MD5}" \
   --run-root "${ECODA_RUN_ROOT}" --nas-root "${NAS_TARGET_DIR}" --inventory "${INVENTORY}" --report "${REPORT}"
 ecoda_write_checksum "${REPORT}"
-ecoda_write_artifact_record "${REPORT}" bl_science_publication "${ECODA_RUN_ID}" >/dev/null
-ecoda_validate_artifact_record "${REPORT}" bl_science_publication "${ECODA_RUN_ID}" >/dev/null
+ecoda_write_artifact_record "${REPORT}" "${REPORT_PRODUCER}" "${ECODA_RUN_ID}" >/dev/null
+ecoda_validate_artifact_record "${REPORT}" "${REPORT_PRODUCER}" "${ECODA_RUN_ID}" >/dev/null
 ecoda_artifact_owner_set_state "${REPORT}" OK reviewed_publication_complete >/dev/null
 ecoda_owner_set_state "${SYNC_OWNER}" OK reviewed_publication_complete
 rmdir "${SYNC_LOCK}"; SYNC_LOCK=""
 ecoda_set_run_state NOOP_VALIDATED reviewed_science_published_without_refit_original_gate_failed
 trap - EXIT
-printf 'BL_PUBLICATION_VALIDATED=%s\nPUBLICATION_COMPLETED=1\nNEW_MODEL_FIT=0\n' "${REPORT}"
+printf '%s=%s\nPUBLICATION_COMPLETED=1\nNEW_MODEL_FIT=0\n' "${VALIDATION_MARKER}" "${REPORT}"

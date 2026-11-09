@@ -1,15 +1,18 @@
-"""Finite BL10 release: verify reviewed bytes; never read H5ADs or fit models.
+"""Fixed BL10 and Bassez HR22 releases; never read H5ADs or fit models.
 
 Control schema ecoda_bl_publication_control_v1 contains run_id, release_id,
 nas_root, science_receipt and review (the latter two are {path, sha256}).
 The review is APPROVED_SCIENTIFIC_ARTIFACT_REUSE, binds receipt_sha256 and
 declares datasets=10, rds_artifacts=20, timing_feathers=10,
 original_gate_status=FAILED, publication_completed=false.
+The second fixed schema is ecoda_bassez_hr22_publication_control_v1, with
+the same keys and review fields but datasets=1, rds_artifacts=23, timings=1.
 """
 import argparse
 import datetime
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -20,6 +23,15 @@ import sys
 STAT_KEYS = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
 ORIGINAL = 'stage5_benchmark_bl10_20261109_v2'
 PRODUCER = 'stage5_bl_science_release_copy'
+HR_SCHEMA = 'ecoda_bassez_hr22_publication_control_v1'
+
+
+def campaign(control):
+    if control['schema'] == HR_SCHEMA:
+        return ('stage5_bassez_hr22_release_copy', 'bassez_hr22_publication.json',
+                'ecoda_bassez_hr22_publication_receipt_v1', 'bassez_hr22_science_publication')
+    require(control['schema'] == 'ecoda_bl_publication_control_v1', 'Unknown publication campaign')
+    return (PRODUCER, 'bl_publication.json', 'ecoda_bl_publication_receipt_v1', 'bl_science_publication')
 
 
 def require(ok, message):
@@ -99,13 +111,15 @@ def verified_scope(args):
     require(digest(control_path, 'md5') == args.control_md5, 'Control MD5 differs')
     control = read_json(control_path)
     require(set(control) == {'schema', 'run_id', 'release_id', 'nas_root', 'science_receipt', 'review'}
-            and control['schema'] == 'ecoda_bl_publication_control_v1', 'Unknown publication control')
+            and control['schema'] in {'ecoda_bl_publication_control_v1', HR_SCHEMA}, 'Unknown publication control')
     run = safe(args.run_root); nas = safe(args.nas_root)
     require(run.is_dir() and run.parent.name == '_ecoda_runs' and control['run_id'] == run.name
             and control['nas_root'] == str(nas) and nas.is_dir()
             and re.fullmatch('[A-Za-z0-9][A-Za-z0-9_-]*', control['release_id']), 'Publication roots differ')
     require(control_path == run / 'manifests/control.json', 'Publication control must be run-owned')
     receipt_path = proof(control['science_receipt']); review = read_json(proof(control['review'])); science = read_json(receipt_path)
+    if control['schema'] == HR_SCHEMA:
+        return verified_hr22_scope(control, science, review, receipt_path, run, nas)
     require(review['status'] == 'APPROVED_SCIENTIFIC_ARTIFACT_REUSE'
             and review['receipt_sha256'] == control['science_receipt']['sha256']
             and review['datasets'] == 10 and review['rds_artifacts'] == 20 and review['timing_feathers'] == 10
@@ -166,6 +180,79 @@ def verified_scope(args):
                 previous_owner = artifacts['owners'][0 if kind == 'cache' else 1]
                 require(owner(path, original, {'OK', 'FAIL', 'ACTIVE'}) == {k: previous_owner[k] for k in ('path', 'sha256', 'fields')}, 'Original owner changed')
             inventory.append(dict(dataset=ds, kind=kind, source=str(path), relative=relative, md5=item['md5'], size=item['size'], original_producer=producer))
+    destination = safe(str(nas / 'releases' / control['release_id'] / run.name / 'benchmark'), False)
+    return control, science, inventory, run, nas, destination
+
+
+def verified_hr22_scope(control, science, review, receipt_path, run, nas):
+    from benchmark_request_scope import AUTHOR_HR
+    require(review['status'] == 'APPROVED_SCIENTIFIC_ARTIFACT_REUSE'
+            and review['receipt_sha256'] == control['science_receipt']['sha256']
+            and review['datasets'] == 1 and review['rds_artifacts'] == 23 and review['timing_feathers'] == 1
+            and review['original_gate_status'] == 'FAILED' and review['publication_completed'] is False, 'HR22 review does not approve this receipt')
+    require(science['schema'] == 'ecoda_bassez_hr22_science_receipt_v1' and science['status'] == 'NOOP_VALIDATED'
+            and science['science_validated'] is True and science['publication_completed'] is False
+            and science['original_gate_status'] == 'FAILED' and science['source_commit'] == '129c1a46ee7d282773eb090448ed3d061ac8ecf5'
+            and (science['n_samples'], science['n_cells'], science['n_cell_types_high_res']) == (26, 74948, 40)
+            and science['counts_pseudocount'] == 0.5, 'Wrong fixed HR22 science audit')
+    original = safe(science['original_run_root'])
+    require(original.name == 'stage5_bassez_author_hr22_20261109_v1' and original.parent == run.parent and original != run
+            and run.parent.parent / '_ecoda_inputs' in receipt_path.parents, 'Wrong HR22 original/receipt namespace')
+    for key in ('inventory', 'inspection', 'source_manifest', 'runtime_identity', 'source_identity', 'input_record',
+                'input_checksum_proof', 'validation_script', 'ari_source'):
+        proof(science[key])
+    observed = read_json(science['inventory']['path'])
+    require(observed['schema'] == 'ecoda_bassez_hr22_failed_run_inventory_v1' and observed['run_id'] == original.name, 'Wrong original HR22 inventory')
+    for item in observed['text_evidence']:
+        if item.get('exists') and item.get('sha256') and item['path'].startswith(str(original) + '/'):
+            require(not item['truncated'], 'Truncated original proof')
+            proof(item)
+    row_owner = observed['row_owner']; proof(row_owner); row_fields = fields(row_owner['path'])
+    require(row_fields['RUN_ID'] == original.name and row_fields['STATE'] == 'OK' and row_fields['STAGE'] == 'stage5'
+            and row_fields['KEY'] == f'derivative/{original.name}/ordinary/Bassez/benchmark_analysis/composition', 'Original HR22 row owner differs')
+    source = fields(science['source_manifest']['path']); runtime = fields(science['runtime_identity']['path'])
+    require(source['SOURCE_COMMIT'] == science['source_commit'] and source['AUX_ROOT'] == source['SOURCE_ROOT'] + '/aux'
+            and digest(Path(source['SOURCE_ROOT']) / 'datasets.json') == source['DATASETS_SHA256'], 'HR22 source/config identity differs')
+    aux = science['frozen_aux']
+    require(aux['path'] == source['AUX_ROOT'] + '/genes.blocklist.rds' and aux['md5'] == '8cacee7893cbb9d170cc9de87e3bd306'
+            and digest(aux['path'], 'md5') == aux['md5'], 'HR22 frozen auxiliary identity differs')
+    require(digest(runtime['RUNTIME_MANIFEST']) == runtime['RUNTIME_MANIFEST_SHA256']
+            and fields(runtime['RUNTIME_MANIFEST'])['IMAGE_SHA256'] == runtime['RUNTIME_IMAGE_SHA256']
+            and safe(runtime['RUNTIME_IMAGE']).stat().st_size == int(runtime['RUNTIME_IMAGE_SIZE']), 'Original HR22 runtime differs')
+    require(science['validation_execution']['R_version'] == '4.5.2', 'HR22 audit interpreter differs')
+    validator = science['production_validator']; proof(validator); proof(validator['log'])
+    require(validator['actual_exit'] == 0 and 'benchmark RDS artifact-list contract OK' in Path(validator['log']['path']).read_text().splitlines()
+            and validator['path'] == source['SOURCE_ROOT'] + '/src/5_run_benchmark_methods/validate_benchmark_rds_contract.R', 'HR22 strict CLI evidence differs')
+    inspection = read_json(science['inspection']['path']); raw = science['original_accounting']
+    require(inspection['state'] == 'FAILED' and inspection['audit']['accounting'] == raw
+            and raw['attempted'] is True and raw['query_count'] == 1 and raw['actual_exit'] == 0
+            and set(raw['scheduler_ids']) == {'4663753', '4663754', '4663757', '4663759', '4663760'}, 'HR22 failed-controller accounting differs')
+    parsed = [line.split('|') for line in raw['stdout'].splitlines()]
+    require(raw['stdout'].endswith('\n') and len(parsed) == 5 and len({r[0] for r in parsed}) == 5
+            and {r[0] for r in parsed} == set(raw['scheduler_ids']) and all(r[1:] == ['COMPLETED', '0:0'] for r in parsed)
+            and raw['rows'] == [dict(line=i, job_id=r[0], state=r[1], exit_code=r[2]) for i, r in enumerate(parsed, 1)], 'All five original completed rows must remain visible')
+    canonical = {'anosim_score', 'mod_knn3_score', 'cluster_score', 'sil_score', 'lisi_score'}
+    require(set(science['canonical_score_keys']) == canonical and len(science['scores']) == 22
+            and {row['method'] for row in science['scores']} == set(AUTHOR_HR)
+            and all(all(isinstance(row[k], (int, float)) and math.isfinite(row[k]) for k in canonical) for row in science['scores']), 'Exact five-score HR22 screen differs')
+    requested = Path(original / 'manifests/requested_selection.tsv').read_text().splitlines()
+    require(len(requested) == 22 and set(requested) == {f'Bassez\tbenchmark_analysis\tcomposition\t{key}' for key in AUTHOR_HR}, 'HR22 original request differs')
+    expected_names = ['Bassez_metadata.rds', *(f'Bassez_{key}.rds' for key in AUTHOR_HR)]
+    require(len(science['artifacts']) == 23 and [Path(item['path']).name for item in science['artifacts']] == expected_names, 'HR22 artifact coverage/order differs')
+    require(len(science['timing']['rows']) == 22 and {row['method'] for row in science['timing']['rows']} == set(AUTHOR_HR), 'HR22 timing coverage differs')
+    inventory = []
+    items = [(item, 'metadata' if i == 0 else 'result', 'stage5_composition') for i, item in enumerate(science['artifacts'])]
+    items.append((science['timing']['proof'], 'timing', 'stage5_execution_log'))
+    for item, kind, producer in items:
+        path = safe(item['path']); relative = 'embeddings/timing_sources/' + path.name if kind == 'timing' else 'results/' + path.name
+        expected = original / ('logs/execution_times_composition_Bassez_selected.feather' if kind == 'timing' else 'artifacts/benchmark/' + relative)
+        require(path == expected, 'HR22 source payload outside fixed scope')
+        current = record(path, original, producer); proof(item['producer_record']); proof(item['sidecar'])
+        require(current['md5'] == item['md5'] and current['size'] == item['size'] and current['record_path'] == item['producer_record']['path'], 'HR22 approved payload changed')
+        if kind != 'timing':
+            current_owner = owner(path, original, {'OK'}); proof(item['owner'])
+            require(current_owner['path'] == item['owner']['path'] and current_owner['sha256'] == item['owner']['sha256'], 'Original HR22 output owner changed')
+        inventory.append(dict(dataset='Bassez', kind=kind, source=str(path), relative=relative, md5=item['md5'], size=item['size'], original_producer=producer))
     destination = safe(str(nas / 'releases' / control['release_id'] / run.name / 'benchmark'), False)
     return control, science, inventory, run, nas, destination
 
@@ -233,6 +320,7 @@ def main():
         if args.mode == 'copy':
             copy_payload(args); return
         control, science, inventory, run, nas, destination = verified_scope(args)
+        copy_producer, report_name, report_schema, report_producer = campaign(control)
         listing = safe(args.inventory, args.mode != 'plan')
         require(listing == run / 'manifests/publication_inventory.tsv', 'Inventory must be run-owned')
         if args.mode == 'plan':
@@ -243,13 +331,13 @@ def main():
         require(listing.read_text() == tsv(inventory), 'Publication inventory differs')
         if args.mode == 'verify':
             return
-        require(args.report == str(run / 'artifacts/evidence/bl_publication.json'), 'Report must be run-owned')
+        require(args.report == str(run / 'artifacts/evidence' / report_name), 'Report must be run-owned')
         mappings = []
         checksums = []
         for row in inventory:
             copied = run / 'artifacts/benchmark' / row['relative']; published = destination / row['relative']
             for path in (copied, published):
-                item = record(path, run, PRODUCER); owned = owner(path, run, {'OK'})
+                item = record(path, run, copy_producer); owned = owner(path, run, {'OK'})
                 require(item['md5'] == row['md5'] and item['size'] == row['size'], 'Release payload differs from approved science')
                 if path == published:
                     require(path.stat().st_mode & 0o7777 == 0o666 and Path(str(path) + '.md5').stat().st_mode & 0o7777 == 0o666, 'NAS file mode differs')
@@ -260,7 +348,7 @@ def main():
                 else:
                     require(not path.stat().st_mode & 0o222, 'Scratch release copy is writable')
             checksums.extend((f"{row['md5']}  {row['relative']}\n", f"{digest(str(published)+'.md5', 'md5')}  {row['relative']}.md5\n"))
-            mappings.append(dict(**row, scratch=str(copied), nas=str(published), scratch_record=record(copied, run, PRODUCER), nas_record=record(published, run, PRODUCER),
+            mappings.append(dict(**row, scratch=str(copied), nas=str(published), scratch_record=record(copied, run, copy_producer), nas_record=record(published, run, copy_producer),
                                  scratch_owner=owner(copied, run, {'OK'}), nas_owner=owner(published, run, {'OK'})))
         checksum_path = safe(str(destination / 'checksums.md5'))
         require(checksum_path.read_text() == ''.join(checksums) and checksum_path.stat().st_mode & 0o7777 == 0o666, 'Global selected checksum manifest differs')
@@ -276,7 +364,7 @@ def main():
         mounted = [read_json(path) for path in mounts]
         require(mounted[0]['mount_source'] == mounted[1]['mount_source']
                 and all(item['nas_root'] == str(nas) for item in mounted), 'NAS mount evidence differs')
-        result = dict(schema='ecoda_bl_publication_receipt_v1', status='PUBLISHED_VALIDATED', publication_completed=True,
+        result = dict(schema=report_schema, status='PUBLISHED_VALIDATED', publication_completed=True,
                       new_model_fit=False, original_gate_status='FAILED', original_run_root=science['original_run_root'], run_id=run.name,
                       analysis_root=str(run / 'artifacts/benchmark'), destination_root=str(destination),
                       control=dict(path=args.control, md5=args.control_md5), science_receipt=control['science_receipt'], review=control['review'],
@@ -291,7 +379,7 @@ def main():
             require(set(existing) == set(result) and all(existing[k] == value for k, value in result.items() if k != 'completed_at'), 'Publication receipt differs from current verified release')
             completed = datetime.datetime.fromisoformat(existing['completed_at'])
             require(completed.tzinfo is not None and completed <= datetime.datetime.now(datetime.timezone.utc), 'Invalid completion timestamp')
-            record(Path(args.report), run, 'bl_science_publication'); owner(Path(args.report), run, {'OK'})
+            record(Path(args.report), run, report_producer); owner(Path(args.report), run, {'OK'})
             require(fields(run / 'status/terminal')['STATE'] == 'NOOP_VALIDATED', 'Publication run is not terminal validated')
             print('BL_PUBLICATION_CONTRACT_OK'); return
         write_receipt(args.report, result)
