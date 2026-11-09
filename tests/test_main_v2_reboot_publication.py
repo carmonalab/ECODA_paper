@@ -99,9 +99,170 @@ def fixture(base, context):
     return dict(x, **{key: value for key, value in locals().items() if key not in x}) | {'invoke': invoke}
 
 
+def source_precondition_tests(base):
+    """Real file/proof/stat boundaries, with synthetic source bytes explicitly isolated."""
+    import bl_science_publication as mod
+    x = fixture(base, 'benchmark')
+    for snap in x['snapshots']:
+        for kind in ('stdout','stderr','status'):
+            Path(snap[kind]['path']).unlink()
+    scratch=x['scratch']; roots={short:scratch/'_ecoda_runs'/child for short,child in x['names'].items()}
+    original_sources=mod.REBOOT_RETRY_SOURCES
+    # The fixed production allowlist is20 files; fixture bytes never stand in for real9ca approval.
+    assert len(original_sources)==20
+    synthetic_sources={}
+    for relative in original_sources:
+        path=x['source']/relative
+        if not path.exists(): write(path, '# bounded synthetic source fixture\n'+relative+'\n')
+        synthetic_sources[relative]=sha(path)
+    mod.REBOOT_RETRY_SOURCES=synthetic_sources
+    try:
+        pairs=[]; initial=[]; ledgers=[]; serial=20000
+        for short,root in roots.items():
+            context=next(k for k,v in MAIN_RUNS.items() if v==root.name)
+            rows=[['PREFLIGHT',str(serial)],['PREFLIGHT',str(serial+1)]];serial+=2
+            for index in range(18 if short=='benchmark' else 7):
+                if short=='benchmark' and index<2: array,wd=str(101+2*index),str(102+2*index)
+                else: array,wd=str(serial),str(serial+1);serial+=2
+                label=(('benchmark_analysis' if short=='benchmark' else 'batch_effect_'+short)+'__fixture'+str(index))
+                matrix=write(root/'manifests'/('matrix_'+label.replace('__','_')+'.tsv'),'Stephenson\tbenchmark_analysis\tgloscope\n')
+                write(Path(str(matrix)+'.md5'),f'MD5={hashlib.md5(matrix.read_bytes()).hexdigest()}\nSIZE={matrix.stat().st_size}\nPATH={matrix}\n')
+                pair=dict(context=context,run_root=str(root),label=label,array_id=array,watchdog_id=wd,matrix=str(matrix));pairs.append(pair)
+                rows.extend([['ARRAY',array],['WATCHDOG',wd]])
+                #14 exact native terminal0 statuses,18 absent records as in the incident.
+                if len(pairs)<=14:
+                    write(root/'status/watchdogs'/(label+'.status'),f'STATE=FAIL\nLABEL={label}\nREASON=fixture\nARRAY_JOB_ID={array}\nRETRY_INDEX=0\nSCHEDULER_ID={array}\n')
+                    write(root/'logs'/('5_matrix_watchdog_'+label+'_'+wd+'.log'),'')
+                    write(root/'logs'/('5_matrix_watchdog_'+label+'_'+wd+'.err'),'')
+            if short=='uncorrected':rows.append(['AGGREGATE_GATE','105'])
+            path=write(root/'manifests/scheduler_ids.tsv',''.join('\t'.join(row)+'\n' for row in rows))
+            write(Path(str(path)+'.md5'),f'PATH={path}\nMD5={hashlib.md5(path.read_bytes()).hexdigest()}\nSIZE={path.stat().st_size}\n')
+            ledgers.append(dict(context=short,**proof(path),sidecar_sha256=sha(Path(str(path)+'.md5'))))
+            initial.extend([[short,root.name,*r] for r in rows])
+            for filename in ('source.manifest','runtime.identity'):
+                if root!=x['old']:write(root/'manifests'/filename,(x['old']/'manifests'/filename).read_text())
+            log=''.join(f'BENCHMARK_ARRAY_JOB_ID={p["label"]}:{p["array_id"]}\nBENCHMARK_WATCHDOG_JOB_ID={p["label"]}:{p["watchdog_id"]}\n' for p in pairs if p['run_root']==str(root))
+            write(x['parent']/'logs'/(short+'.log'),log)
+        initial += [['benchmark',roots['benchmark'].name,'AGGREGATE_GATE','4665612'],['corrected',roots['corrected'].name,'AGGREGATE_GATE','4665633']]
+        assert len(initial)==73
+        write(x['initial_path'],''.join('\t'.join(r)+'\n' for r in initial))
+        initial_proof=json.loads(x['initial_inventory'].read_text());initial_proof.update(catalog_sha256=sha(x['initial_path']),original_child_ledgers=ledgers)
+        write(x['initial_inventory'],json.dumps(initial_proof));write(x['emitted_path'],x['initial_path'].read_text())
+        def snapshot(path):
+            if not path.exists():return dict(path=str(path),exists=False)
+            st=path.stat();return dict(**proof(path),exists=True,size=st.st_size,text=path.read_text(),stat={k:getattr(st,k) for k in ('st_dev','st_ino','st_mode','st_size','st_mtime_ns','st_ctime_ns')})
+        snapshots={}; groups=[];watches=[]
+        def save(path):
+            item=snapshot(path);snapshots[str(path)]=item;return item
+        for root in roots.values():
+            for filename in ('source.manifest','runtime.identity','scheduler_ids.tsv','scheduler_ids.tsv.md5'):save(root/'manifests'/filename)
+        for short in roots:save(x['parent']/'logs'/(short+'.log'))
+        for pair in pairs:
+            root=Path(pair['run_root']);label=pair['label'];wd=pair['watchdog_id'];save(Path(pair['matrix']));save(Path(pair['matrix']+'.md5'))
+            files={k:save(root/('status/watchdogs/'+label+'.status' if k=='status' else 'logs/5_matrix_watchdog_'+label+'_'+wd+suffix)) for k,suffix in [('status',''),('stdout','.log'),('stderr','.err')]}
+            groups.append(dict(pair=pair,files={k:v['path'] for k,v in files.items()}))
+            watches.append(dict(context=next(k for k,v in roots.items() if str(v)==pair['run_root']),watchdog_id=wd,**files))
+            for i in range(1,5):
+                for suffix in ('','_corrected_final'):
+                    path=root/'manifests'/(label+suffix+'.retry_'+str(i)+'.tsv');save(path);save(Path(str(path)+'.md5'))
+        directories=[]
+        for root in roots.values():
+            for name in ('logs','manifests','status/watchdogs'):
+                path=root/name;path.mkdir(parents=True,exist_ok=True)
+                entries=[dict(name=p.name,mode=p.lstat().st_mode,size=p.lstat().st_size,symlink=p.is_symlink()) for p in path.iterdir()]
+                directories.append(dict(path=str(path),exists=True,entries=sorted(entries,key=lambda a:a['name'])))
+        observation=write(x['root']/'coverage.observed.json',json.dumps(dict(schema='ecoda_old_main_catalog32_observation_v1',status='OBSERVED_NOT_APPROVED',initial_ids=73,collector_sha256='9867940459b07962504c35d66a6fcd82aad2de8836f4248f6c79509fab2387f8',control_sha256='ef5d687d045890b31d769bee25bd04de09d4919726bf4c38b8409712dbec9a6a',stable=True,final_emitted_catalog_complete=False,scientific_reuse_approved=False,no_accounting_query=True,no_queue_query=True,no_binary_payload_reads=True,no_remote_writes=True,observed_at_epoch=1,files=list(snapshots.values()),groups=groups,directories=directories)))
+        common=dict(original_source_commit=mod.MAIN_SOURCE,original_run_roots=[str(r) for r in roots.values()],observation_sha256=sha(observation),initial_catalog_sha256=sha(x['initial_path']),original_gate_state='PRELAUNCH_STOP',wrapper_exit_code=None,reviewed_at_epoch=2)
+        preserve=write(x['root']/'preservation.json',json.dumps(dict(common,schema='ecoda_main_v2_retry_manifest_preservation_review_v1',status='APPROVED_SOURCE_PRECONDITION_NO_RETRY_COVERAGE',source_pins_sha256=hashlib.sha256(json.dumps(synthetic_sources,sort_keys=True,separators=(',',':')).encode()).hexdigest(),source_preservation_confirmed=True,no_retry_manifest_deletion_or_controller_reexecution=True)))
+        writer=write(x['root']/'writers.json',json.dumps(dict(common,schema='ecoda_main_v2_scoped_quiescence_review_v1',status='APPROVED_NO_OLD_ROOT_WRITERS',quiescence_observation_sha256=sha(x['quiescence']),no_old_root_writers=True,no_unknown_writers=True,allowed_disjoint_source_commit='32769f1cde54346e8b003ad096ca9e5b7490a517',allowed_disjoint_run_roots=[str(scratch/'_ecoda_runs'/('stage5_remaining95_'+part+'_20261109_v1')) for part in ('benchmark','uncorrected','corrected')]+[str(scratch/'_ecoda_runs/stage5_remaining95_20261109_v1')],evidence=[proof(x['quiescence'])])))
+        coverage_path=write(x['root']/'coverage.json',json.dumps(dict(schema='ecoda_main_v2_no_retry_coverage_v1',status='APPROVED_NO_NEW_RETRY_IDS',source_commit=mod.MAIN_SOURCE,initial_catalog_sha256=sha(x['initial_path']),observation=proof(observation),preservation_review=proof(preserve),writer_review=proof(writer))))
+        final=json.loads(x['final_inventory'].read_text());final.update(catalog_sha256=sha(x['emitted_path']),initial_catalog=proof(x['initial_path']),initial_inventory=proof(x['initial_inventory']),single_inspect_scheduler_ids=[r[3] for r in initial],original_child_ledgers=ledgers,watchdog_evidence=watches);write(x['final_inventory'],json.dumps(final))
+        incident=json.loads(x['incident'].read_text());incident.update(initial_catalog=proof(x['initial_path']),initial_inventory=proof(x['initial_inventory']),emitted_catalog=proof(x['emitted_path']),emitted_inventory=proof(x['final_inventory']),no_retry_coverage=proof(coverage_path));write(x['incident'],json.dumps(incident))
+        def check():
+            ctrl=dict(incident=proof(x['incident']));sc=dict(incident_sha256=sha(x['incident']),orchestration_outcome='LOGIN_REBOOT_LOSS',wrapper_exit_code=None)
+            return mod.verify_login_reboot(ctrl,sc,sc,json.loads(x['gate_path'].read_text()),{},dict(campaign_scheduler_ids=x['emitted_path']),initial,[r[3] for r in initial],x['old'])
+        # No file/status/owner mutation on the diagnostic acceptance path.
+        before={p:(sha(p),p.stat().st_mode) for root in roots.values() for p in root.rglob('*') if p.is_file()}
+        covered=check();assert len(covered['_watchdogs'])==32
+        assert all((sha(p),p.stat().st_mode)==v for p,v in before.items())
+        def negative(path,change,expected):
+            data=path.read_bytes();change()
+            try:check()
+            except (ValueError,KeyError,OSError) as e:assert expected in str(e),(expected,str(e))
+            else:raise AssertionError('accepted '+expected)
+            finally:path.write_bytes(data)
+        # Reseal review references so failures exercise semantic approval checks.
+        old_coverage=coverage_path.read_bytes();old_incident=x['incident'].read_bytes()
+        def reseal_review(path,changes):
+            value=json.loads(path.read_text());value.update(changes);write(path,json.dumps(value));c=json.loads(coverage_path.read_text());c['writer_review' if path==writer else 'preservation_review']=proof(path);write(coverage_path,json.dumps(c));i=json.loads(x['incident'].read_text());i['no_retry_coverage']=proof(coverage_path);write(x['incident'],json.dumps(i))
+        for path,changes,expected in [(preserve,dict(source_preservation_confirmed=False),'preservation approval'),(writer,dict(no_old_root_writers=False),'no-old-writer approval')]:
+            data=path.read_bytes();negative(path,lambda:reseal_review(path,changes),expected);coverage_path.write_bytes(old_coverage);x['incident'].write_bytes(old_incident)
+        changed_source=x['source']/next(iter(synthetic_sources));negative(changed_source,lambda:changed_source.write_text('altered'), 'retry source changed')
+        pair=pairs[-1];new_retry=Path(pair['run_root'])/'manifests'/(pair['label']+'.retry_1.tsv');write(new_retry,'new\n')
+        try:
+            try:check()
+            except ValueError as e:assert 'absent no-retry path appeared' in str(e)
+            else:raise AssertionError('new retry accepted')
+        finally:new_retry.unlink()
+        # Even a resealed approval cannot contradict the native retry counter.
+        status_path=Path(pairs[0]['run_root'])/'status/watchdogs'/(pairs[0]['label']+'.status')
+        old_status=status_path.read_bytes();old_observation=observation.read_bytes();old_preserve=preserve.read_bytes();old_writer=writer.read_bytes()
+        status_path.write_text(status_path.read_text().replace('RETRY_INDEX=0','RETRY_INDEX=1'))
+        value=json.loads(observation.read_text())
+        for idx,item in enumerate(value['files']):
+            if item['path']==str(status_path):value['files'][idx]=snapshot(status_path)
+        write(observation,json.dumps(value))
+        for path in (preserve,writer):
+            value=json.loads(path.read_text());value['observation_sha256']=sha(observation);write(path,json.dumps(value))
+        value=json.loads(coverage_path.read_text());value.update(observation=proof(observation),preservation_review=proof(preserve),writer_review=proof(writer));write(coverage_path,json.dumps(value))
+        value=json.loads(x['incident'].read_text());value['no_retry_coverage']=proof(coverage_path);write(x['incident'],json.dumps(value))
+        try:
+            try:check()
+            except ValueError as e:assert 'Native watchdog contradicts' in str(e),str(e)
+            else:raise AssertionError('contradictory native retry accepted')
+        finally:
+            status_path.write_bytes(old_status)
+            # Restore the exact baseline stat witness after the intentionally modified file.
+            observation.write_bytes(old_observation);preserve.write_bytes(old_preserve);writer.write_bytes(old_writer)
+            coverage_path.write_bytes(old_coverage);x['incident'].write_bytes(old_incident)
+        # Explicit producer-design arm: real PUBLISHED record/proof and family owner, no fabricated global artifact owner.
+        original=x['old'];family_key='derivative/'+original.name+'/ordinary/Stephenson/benchmark_analysis/gloscope'
+        import re
+        family=write(scratch/'_ecoda_owners/stage5'/re.sub(r'[/,:\t |]','_',family_key)/'owner',f'RUN_ID={original.name}\nSTAGE=stage5\nKEY={family_key}\nSTATE=ACTIVE\n')
+        names={'Stephenson_GloScope_'+t+'.rds' for t in ('hvg2000_pcadims10','hvg2000_pcadims50','hvg1000_pcadims30','hvg3000_pcadims30')}
+        review=write(x['root']/'ownerless.json',json.dumps(dict(schema='ecoda_main_v2_ownerless_gloscope_review_v1',status='APPROVED_EXACT_GLOSCOPE_OWNERLESS_PRODUCER_DESIGN',original_source_commit=mod.MAIN_SOURCE,original_run_root=str(original),paths=[str(original/'artifacts/benchmark/results'/n) for n in names],producer='stage5_gloscope',no_original_owner_created=True,writer_review_sha256=sha(writer))))
+        covered['ownerless_gloscope_review']=proof(review)
+        for name in names:
+            path=write(original/'artifacts/benchmark/results'/name,'opaque already-science-validated synthetic bundle\n');md5=hashlib.md5(path.read_bytes()).hexdigest();size=str(path.stat().st_size)
+            write(Path(str(path)+'.md5'),f'PATH={path}\nMD5={md5}\nSIZE={size}\n');record=write(original/'manifests/artifacts'/(hashlib.sha256(str(path).encode()).hexdigest()[:32]+'.record'),f'PATH={path}\nSIZE={size}\nMD5={md5}\nRUN_ID={original.name}\nPRODUCER=stage5_gloscope\nSTATE=PUBLISHED\n')
+            mod.record(path,original,'stage5_gloscope')
+            row=dict(source=str(path),kind='result',original_producer='stage5_gloscope');item=dict(owner=None);checked=dict(row=['Stephenson','benchmark_analysis','gloscope',path.stem.removeprefix('Stephenson_GloScope_')],sample_ids=['s'+str(i) for i in range(53)],dropped_sample_ids=[],artifact_contract_valid=True,current_labels_valid=True,sample_order_valid=True,timing_valid=True)
+            mod.verify_ownerless_gloscope(row,item,'benchmark',original,checked,covered)
+            for key in ('artifact_contract_valid','current_labels_valid','sample_order_valid','timing_valid'):
+                bad=dict(checked,**{key:False})
+                try:mod.verify_ownerless_gloscope(row,item,'benchmark',original,bad,covered)
+                except ValueError:pass
+                else:raise AssertionError('bad science accepted '+key)
+            owner_path=mod.owner_file(path,original);write(owner_path,'RUN_ID=foreign\nSTATE=ACTIVE\n')
+            try:
+                try:mod.verify_ownerless_gloscope(row,item,'benchmark',original,checked,covered)
+                except ValueError:pass
+                else:raise AssertionError('foreign owner accepted')
+            finally:owner_path.unlink()
+            bad=dict(row,source=str(path).replace('pcadims10','pcadims30') if 'pcadims10' in name else str(path)+'other')
+            try:mod.verify_ownerless_gloscope(bad,item,'benchmark',original,checked,covered)
+            except ValueError:pass
+            else:raise AssertionError('unlisted ownerless path accepted')
+        assert family.read_text().endswith('STATE=ACTIVE\n')
+        print('source-precondition32 and exact ownerlessGlo4 tests passed')
+    finally:
+        mod.REBOOT_RETRY_SOURCES=original_sources
+
+
 def run():
     with tempfile.TemporaryDirectory(prefix='ecoda-reboot-publication-') as temporary:
         base = Path(temporary).resolve()
+        source_precondition_tests(base / 'source-precondition')
         for number, context in enumerate(MAIN_RUNS):
             x = fixture(base / str(number), context)
             preserved = {p: (sha(p), p.stat().st_mode) for root in (x['old'].parent, x['scratch'] / '_ecoda_owners', x['scratch'] / 'gates') for p in root.rglob('*') if p.is_file()}

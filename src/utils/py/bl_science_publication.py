@@ -293,10 +293,189 @@ def main_v2_writer_tokens(gate):
         str(contexts), *(str(safe(path)) for row in rows for path in row[2:])]
 
 
+REBOOT_RETRY_SOURCES = {
+    'src/5_run_benchmark_methods/matrix_watchdog.sh': 'a58132d2e63aaddd3622a2b64b6f0ecceb061ae1da2866dba038815712e68ccf',
+    'src/5_run_benchmark_methods/stage5_dispatcher.sh': 'f1c243f80a0c578eba67a5b6b88976d04f113b332feb34010ede27f8354b05a3',
+    'src/5_run_benchmark_methods/benchmark_submit_common.sh': '1729ce35a5002fe85d9ed670fd12addf7e9e41ec7ea62a5270133b0841280844',
+    'src/5_run_benchmark_methods/stage5_campaign.sh': 'b85f11a1f9d976b5263a4a3beb9947bddf9ba4a1751ae7151b2c6197be740cca',
+    'src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh': 'a2591ef9fa889df0685f2103e1133737d15a4da7cd95b9d5b5f1e30279fb23e2',
+    'src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh': '08b13e30d2fc5928860007b4fed4492cc58939354ca983e2d4bfde5b142da17f',
+    'src/5_run_benchmark_methods/matrix_gate.sh': '5130fba6a99e6b22cd6cebd0db125372418a2741149448208a01f7f7bbf48cfd',
+    'src/utils/bash/ecoda_run_common.sh': '0ad37f4feaeca5d561d47da60bfd85db38c3bcb9d33c6f02d9284b61ec844cb1',
+    'src/utils/bash/worker_retry.sh': '404ba975dafa7ecf67302715fc072b398b79457746aea223563f53594782fb0e',
+    'src/utils/bash/ecoda_runtime.sh': '540fb2fd2f9462053ba81382c5890a68da256da3975f392557192f6fb81b2cdd',
+    'src/utils/bash/ecoda_stage5_policy.sh': '8fe00e36ef8a1649a0e37720f89ecc8046f906039615627b574f5e48d7a39e6f',
+    'src/utils/bash/h5ad_preflight_worker.sh': '352a601a435136101b07f4161111543885cb89c10851a5e4d0f25249796c147f',
+    'src/utils/bash/h5ad_obs_audit_worker.sh': 'a109ab63b3b4eea5d77aa15823d5ccf557e661c5ce5db0064021fb00b8eaf4e3',
+    'src/slurm_config.sh': 'c96e7fb8422801f2a76cd2b2df007b81f69bbc6fb0592750a9ceb7ceff7b1a9a',
+    'src/utils/bash/r_environment_preflight_worker.sh': '3ade9d24036b6b74c04d3144b958dc0143b1e699f8072dcd5b42208f3604a1ec',
+    'src/utils/bash/h5ad_preflight_submit.sh': 'e3dd16ebf2e7ddf10d3400d652808cee50c988c1c6c2f3b9fcfab5d67be0afe3',
+    'src/5_run_benchmark_methods/stage5_pending.sh': '9fe6b1403f874ff2d8cf6d396aa8cc5264e0dd3cf40074853d9f8f777060595c',
+    'src/5_run_benchmark_methods/stage5_validated_recovery.sh': '5984b7c6c1dfbb2295aaac93cd5ac88fcf5b45c40dbb90dafc064e682f44ce6b',
+    'src/5_run_benchmark_methods/stage5_prepared_adoption.sh': 'b580a272165e1d1535bb2c7689fef37d6b076f9a4a6d2592ac2d221c76cef57b',
+    'src/utils/bash/ecoda_derivative_artifacts.sh': '2a621812cabbe8fee9fa084fc1cc73725bce767685552ae84fc11bfac7c659ba',
+}
+
+
+def verify_no_retry_coverage(incident, paths, initial, original):
+    """Fixed9ca alternative: a retry cannot be submitted before its preserved manifest."""
+    coverage = read_json(proof(incident['no_retry_coverage']))
+    observed_path = proof(coverage['observation']); observed = read_json(observed_path)
+    roots = {str(original.parent / child) for child in MAIN_RUNS.values()}
+    initial_sha = digest(paths['initial_catalog'])
+    require(coverage['schema'] == 'ecoda_main_v2_no_retry_coverage_v1'
+            and coverage['status'] == 'APPROVED_NO_NEW_RETRY_IDS'
+            and coverage['source_commit'] == MAIN_SOURCE and coverage['initial_catalog_sha256'] == initial_sha
+            and observed['schema'] == 'ecoda_old_main_catalog32_observation_v1'
+            and observed['status'] == 'OBSERVED_NOT_APPROVED' and observed['initial_ids'] == 73
+            and observed['collector_sha256'] == '9867940459b07962504c35d66a6fcd82aad2de8836f4248f6c79509fab2387f8'
+            and observed['control_sha256'] == 'ef5d687d045890b31d769bee25bd04de09d4919726bf4c38b8409712dbec9a6a'
+            and observed['stable'] is True and observed['final_emitted_catalog_complete'] is False
+            and observed['scientific_reuse_approved'] is False
+            and all(observed[k] is True for k in ('no_accounting_query', 'no_queue_query', 'no_binary_payload_reads', 'no_remote_writes')),
+            'No-retry coverage is not its reviewed bounded observation')
+    source_root = Path(fields(original / 'manifests/source.manifest')['SOURCE_ROOT'])
+    for relative, expected in REBOOT_RETRY_SOURCES.items():
+        require(digest(source_root / relative) == expected, 'Exact9ca retry source changed: ' + relative)
+    source_digest = hashlib.sha256(json.dumps(REBOOT_RETRY_SOURCES, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    preservation = read_json(proof(coverage['preservation_review']))
+    writers = read_json(proof(coverage['writer_review']))
+    require(preservation['schema'] == 'ecoda_main_v2_retry_manifest_preservation_review_v1'
+            and preservation['status'] == 'APPROVED_SOURCE_PRECONDITION_NO_RETRY_COVERAGE'
+            and preservation['source_pins_sha256'] == source_digest
+            and preservation['source_preservation_confirmed'] is True
+            and preservation['no_retry_manifest_deletion_or_controller_reexecution'] is True,
+            'Missing exact source/persistent-manifest preservation approval')
+    require(writers['schema'] == 'ecoda_main_v2_scoped_quiescence_review_v1'
+            and writers['status'] == 'APPROVED_NO_OLD_ROOT_WRITERS'
+            and writers['quiescence_observation_sha256'] == digest(paths['quiescence_observation'])
+            and datetime.datetime.fromisoformat(read_json(paths['quiescence_observation'])['observed_at']).timestamp() >= observed['observed_at_epoch']
+            and writers['no_old_root_writers'] is True and writers['no_unknown_writers'] is True
+            and writers['allowed_disjoint_source_commit'] == '32769f1cde54346e8b003ad096ca9e5b7490a517'
+            and set(writers['allowed_disjoint_run_roots']) == {str(original.parent / ('stage5_remaining95_' + part + '_20261109_v1')) for part in ('benchmark', 'uncorrected', 'corrected')} | {str(original.parent / 'stage5_remaining95_20261109_v1')}
+            and writers['evidence'] and all(proof(item) for item in writers['evidence']),
+            'Missing fresh scoped no-old-writer approval')
+    for review in (preservation, writers):
+        require(review['original_source_commit'] == MAIN_SOURCE and set(review['original_run_roots']) == roots
+                and review['observation_sha256'] == digest(observed_path)
+                and review['initial_catalog_sha256'] == initial_sha
+                and review['original_gate_state'] == 'PRELAUNCH_STOP' and review['wrapper_exit_code'] is None
+                and type(review['reviewed_at_epoch']) in (float, int) and review['reviewed_at_epoch'] >= observed['observed_at_epoch'],
+                'No-retry review scope/freshness/unknown wrapper differs')
+    files = {row['path']: row for row in observed['files']}
+    require(len(files) == len(observed['files']), 'Duplicate no-retry snapshot')
+    expected_paths = set()
+    def unchanged(path):
+        path = str(path); expected_paths.add(path)
+        require(path in files and type(files[path]['exists']) is bool, 'Missing explicit no-retry path snapshot')
+        item = files[path]; current = safe(path, item['exists'])
+        if item['exists']:
+            proof(item)
+            require(set(item['stat']) == set(STAT_KEYS) | {'st_mode'}
+                    and current.is_file() and current.stat().st_size == item['size']
+                    and hashlib.sha256(item['text'].encode()).hexdigest() == item['sha256']
+                    and all(getattr(current.stat(), key) == value for key, value in item['stat'].items()),
+                    'No-retry observed text/stat changed')
+        else:
+            require(not current.exists(), 'An absent no-retry path appeared')
+        return item
+    pairs = observed['groups']; by_watchdog = {}
+    require(len(pairs) == 32 and len({g['pair']['watchdog_id'] for g in pairs}) == 32, 'Incomplete32 native/precondition coverage')
+    for root in roots:
+        for name in ('source.manifest', 'runtime.identity', 'scheduler_ids.tsv', 'scheduler_ids.tsv.md5'):
+            unchanged(Path(root) / 'manifests' / name)
+    parent = original.parent / 'stage5_main_confounds_20261109_v2'
+    controller_pairs = {}
+    for short in ('benchmark', 'uncorrected', 'corrected'):
+        log = unchanged(parent / 'logs' / (short + '.log'))
+        require(log['exists'], 'Missing original controller pairing evidence')
+        arrays = re.findall(r'(?:BENCHMARK|BATCH_EFFECT)_ARRAY_JOB_ID=([^\s:]+):([1-9][0-9]*)', log['text'])
+        watches = re.findall(r'(?:BENCHMARK|BATCH_EFFECT)_WATCHDOG_JOB_ID=([^\s:]+):([1-9][0-9]*)', log['text'])
+        require(len(dict(arrays)) == len(arrays) and len(dict(watches)) == len(watches)
+                and dict(arrays).keys() == dict(watches).keys(), 'Ambiguous original controller pairings')
+        for label, wd in watches:
+            require(wd not in controller_pairs, 'Duplicate original watchdog pairing')
+            controller_pairs[wd] = (short, label, dict(arrays)[label])
+    for group in pairs:
+        pair = group['pair']; child = Path(pair['run_root']); label = pair['label']; wd = pair['watchdog_id']
+        require(str(child) in roots and re.fullmatch('[A-Za-z0-9_]+', label)
+                and MAIN_RUNS.get(pair['context']) == child.name, 'Foreign no-retry root')
+        short = next(k for k,v in {'benchmark': MAIN_RUNS['benchmark'], 'uncorrected': MAIN_RUNS['batch_effect/uncorrected_final'], 'corrected': MAIN_RUNS['batch_effect/corrected_final']}.items() if v == child.name)
+        require(controller_pairs.get(wd) == (short, label, pair['array_id'])
+                and [short, child.name, 'WATCHDOG', wd] in initial and [short, child.name, 'ARRAY', pair['array_id']] in initial
+                and pair['matrix'] == str(child / 'manifests' / ('matrix_' + label.replace('__', '_') + '.tsv')),
+                'No-retry pair differs from original ledger/matrix')
+        matrix = unchanged(pair['matrix']); unchanged(pair['matrix'] + '.md5')
+        require(matrix['exists'], 'Original matrix disappeared')
+        snapshots = {}
+        for kind, suffix in (('status', ''), ('stdout', '.log'), ('stderr', '.err')):
+            path = child / ('status/watchdogs/' + label + '.status' if kind == 'status' else 'logs/5_matrix_watchdog_' + label + '_' + wd + suffix)
+            require(group['files'][kind] == str(path), 'Foreign watchdog evidence path')
+            snapshots[kind] = unchanged(path)
+        status = snapshots['status']
+        if status['exists']:
+            lines = status['text'].splitlines(); ids = [line[13:] for line in lines if line.startswith('SCHEDULER_ID=')]
+            ordinary = [line for line in lines if not line.startswith('SCHEDULER_ID=')]
+            values = unique(line.split('=', 1) for line in ordinary)
+            require(set(values) == {'STATE','LABEL','REASON','ARRAY_JOB_ID','RETRY_INDEX'}
+                    and values['STATE'] in {'OK','FAIL'} and values['LABEL'] == label
+                    and values['ARRAY_JOB_ID'] == pair['array_id'] and values['RETRY_INDEX'] == '0' and ids == [pair['array_id']],
+                    'Native watchdog contradicts no-new-retry coverage')
+        for item in snapshots.values():
+            require(not item['exists'] or not re.search(r'^(?:MATRIX|BATCH_EFFECT)_RETRY_ARRAY_JOB_ID=', item['text'], re.M), 'Recorded retry contradicts coverage')
+        for index in range(1,5):
+            for suffix in ('', '_corrected_final'):
+                path = child / 'manifests' / (label + suffix + '.retry_' + str(index) + '.tsv')
+                require(not unchanged(path)['exists'] and not unchanged(str(path) + '.md5')['exists'], 'A retry pre-submission manifest/proof exists')
+        by_watchdog[wd] = snapshots
+    require(set(controller_pairs) == set(by_watchdog) and len(controller_pairs) == 32, 'Incomplete original controller pairing coverage')
+    require(set(files) == expected_paths, 'Unexpected/missing finite no-retry metadata paths')
+    directories = observed['directories']
+    require(len(directories) == 9 and {row['path'] for row in directories} == {str(Path(root)/name) for root in roots for name in ('logs','manifests','status/watchdogs')}, 'Wrong bounded directory scope')
+    for row in directories:
+        directory = safe(row['path']); entries = []
+        for entry in directory.iterdir():
+            st = entry.lstat()
+            require('retry' not in entry.name.lower(), 'Unexpected retry filename contradicts coverage')
+            if directory.name == 'watchdogs' or entry.name.startswith('5_matrix_watchdog_'):
+                require(str(entry) in expected_paths, 'Unclassified native watchdog evidence')
+            entries.append(dict(name=entry.name, mode=st.st_mode, size=st.st_size, symlink=entry.is_symlink()))
+            require(len(entries) <= 10000, 'Unbounded original metadata directory')
+        require(row['exists'] is True and sorted(entries, key=lambda item:item['name']) == row['entries'], 'No-retry directory listing changed')
+    coverage['_watchdogs'] = by_watchdog
+    return coverage
+
+
+def verify_ownerless_gloscope(row, item, context, original, checked, coverage):
+    require(coverage is not None and 'ownerless_gloscope_review' in coverage, 'Missing explicit ownerless GloScope review')
+    review = read_json(proof(coverage['ownerless_gloscope_review']))
+    names = {'Stephenson_GloScope_' + token + '.rds' for token in ('hvg2000_pcadims10','hvg2000_pcadims50','hvg1000_pcadims30','hvg3000_pcadims30')}
+    paths = {str(original / 'artifacts/benchmark/results' / name) for name in names}
+    family_key = 'derivative/' + original.name + '/ordinary/Stephenson/benchmark_analysis/gloscope'
+    family_path = original.parent.parent / '_ecoda_owners/stage5' / re.sub(r'[/,:\t |]', '_', family_key) / 'owner'
+    family = fields(family_path)
+    require(family['RUN_ID'] == original.name and family['STAGE'] == 'stage5'
+            and family['KEY'] == family_key and family['STATE'] in {'OK', 'FAIL', 'ACTIVE'}, 'Wrong original GloScope family owner')
+    safe(str(owner_file(Path(row['source']), original)), False)
+    require(context == 'benchmark' and original.name == MAIN_RUNS['benchmark']
+            and review['schema'] == 'ecoda_main_v2_ownerless_gloscope_review_v1'
+            and review['status'] == 'APPROVED_EXACT_GLOSCOPE_OWNERLESS_PRODUCER_DESIGN'
+            and review['original_source_commit'] == MAIN_SOURCE and review['original_run_root'] == str(original)
+            and set(review['paths']) == paths and review['producer'] == 'stage5_gloscope'
+            and review['no_original_owner_created'] is True and review['writer_review_sha256'] == coverage['writer_review']['sha256']
+            and row['source'] in paths and row['kind'] == 'result' and row['original_producer'] == 'stage5_gloscope'
+            and item['owner'] is None and not owner_file(Path(row['source']), original).exists()
+            and not owner_file(Path(row['source']), original).is_symlink()
+            and checked['row'] == ['Stephenson','benchmark_analysis','gloscope',Path(row['source']).stem.removeprefix('Stephenson_GloScope_')]
+            and len(checked['sample_ids']) == 53 and checked['dropped_sample_ids'] == []
+            and all(checked[k] is True for k in ('artifact_contract_valid','current_labels_valid','sample_order_valid','timing_valid')),
+            'Ownerless permission is limited to four reviewed53-sample GloScope shards')
+
+
 def verify_login_reboot(control, science, review, gate, inspected, evidence, schedulers, ids, original):
     """One fixed reboot incident; never turn missing wrapper status into success."""
     incident = read_json(proof(control['incident']))
-    require(set(incident) == {'schema', 'orchestration_outcome', 'wrapper_exit_code', 'observation',
+    require(set(incident) - {'no_retry_coverage'} == {'schema', 'orchestration_outcome', 'wrapper_exit_code', 'observation',
                              'aggregate_evidence', 'initial_catalog', 'initial_inventory', 'emitted_catalog',
                              'emitted_inventory', 'quiescence_observation'}
             and incident['schema'] == 'ecoda_main_v2_login_reboot_incident_v1'
@@ -400,6 +579,7 @@ def verify_login_reboot(control, science, review, gate, inspected, evidence, sch
             proof(item)
     expected |= additional
     watchdogs = {row[3]: row[:2] for row in initial if row[2] == 'WATCHDOG'}
+    coverage = verify_no_retry_coverage(incident, paths, initial, original) if 'no_retry_coverage' in incident else None
     watches = final['watchdog_evidence']
     require(len(watches) == len(watchdogs) and {item['watchdog_id'] for item in watches} == set(watchdogs),
             'Final catalog lacks complete watchdog/retry evidence')
@@ -407,7 +587,11 @@ def verify_login_reboot(control, science, review, gate, inspected, evidence, sch
         context, child_name = watchdogs[item['watchdog_id']]
         require(item['context'] == context, 'Foreign watchdog evidence')
         child = original.parent / child_name
-        require(item['stdout']['exists'] is True, 'Complete retry coverage requires every original watchdog stdout')
+        require(item['stdout']['exists'] is True or coverage is not None, 'Complete retry coverage requires every original watchdog stdout')
+        if coverage is not None:
+            require(item['watchdog_id'] in coverage['_watchdogs']
+                    and all(item[kind] == coverage['_watchdogs'][item['watchdog_id']][kind] for kind in ('stdout','stderr','status')),
+                    'Final watchdog evidence differs from approved precondition coverage')
         retry_ids = set()
         log_match = re.fullmatch(r'5_matrix_watchdog_(.+)_' + item['watchdog_id'] + r'\.log', Path(item['stdout']['path']).name)
         require(log_match is not None, 'Watchdog stdout is not its production log')
@@ -431,8 +615,11 @@ def verify_login_reboot(control, science, review, gate, inspected, evidence, sch
             if job not in {row[3] for row in initial}:
                 expected.add((context, child_name, 'RETRY_ARRAY', job))
     require(expected == set(map(tuple, schedulers)), 'Final emitted catalog differs from complete original/retry evidence')
+    if coverage is not None:
+        require(expected == set(map(tuple, initial)), 'No-new-retry coverage cannot add scheduler IDs')
     queued = quiescence['queue']['stdout']
     require(not any(re.search(r'(?<![0-9])' + job + r'(?:_|\b)', queued) for job in ids), 'An original scheduler job remains queued')
+    return coverage
 
 
 def verified_main_v2_scope(control, science, review, run, nas):
@@ -541,8 +728,9 @@ def verified_main_v2_scope(control, science, review, run, nas):
                  else child_ids == [r[2:] for r in schedulers if r[1] == original.name]), 'Original campaign/child scheduler scope differs')
     parent = original.parent / 'stage5_main_confounds_20261109_v2'
     require(evidence['campaign_contexts'] == parent / 'manifests/campaign_contexts.tsv', 'Wrong original parent context namespace')
+    reboot_coverage = None
     if reboot:
-        verify_login_reboot(control, science, review, gate, inspected, evidence, schedulers, ids, original)
+        reboot_coverage = verify_login_reboot(control, science, review, gate, inspected, evidence, schedulers, ids, original)
     else:
         require(evidence['campaign_scheduler_ids'] == parent / 'manifests/campaign_scheduler_ids.tsv', 'Wrong original parent scheduler namespace')
     selected_context = next(r for r in contexts if r[1] == original.name)
@@ -622,6 +810,7 @@ def verified_main_v2_scope(control, science, review, run, nas):
     references = rows(evidence['input_artifacts']); input_map = {(r[0], r[1]): r for r in references if len(r) == 6}
     require(len(identities) == len(source_ids) and len(input_map) == len(references), 'Duplicate/malformed original input identities')
     allowed_arrays = {r[1] for r in child_ids if r[0] == 'ARRAY'}
+    checked_by_path = {}
     covered = set(); expected_payloads = set(); expected_timings = set(); expected_rds_inputs = set(); validated = validation['rows']
     require(catalog['rows'] and len(validated) == len(catalog['rows']), 'Missing selected scientific validation rows')
     for selected, checked in zip(catalog['rows'], validated):
@@ -668,6 +857,8 @@ def verified_main_v2_scope(control, science, review, run, nas):
         expected, expected_inputs = main_v2_expected_artifacts(original, source, config, binding, context, selected)
         expected_rds_inputs.update(expected_inputs)
         require(expected and set(checked['expected_artifacts']) == expected, 'Incomplete per-row production artifact contract')
+        for expected_path in expected:
+            checked_by_path[expected_path] = checked
         expected_payloads.update(expected)
         require(checked['timing_artifacts'], 'Selected timing input list missing')
         expected_timings.update(checked['timing_artifacts'])
@@ -726,7 +917,10 @@ def verified_main_v2_scope(control, science, review, run, nas):
         if item['owner'] is not None:
             require(owner(path, original, {'OK', 'FAIL', 'ACTIVE'}) == item['owner'], 'Original payload ownership snapshot changed')
         else:
-            require(row['kind'] == 'timing' and not owner_file(path, original).exists(), 'Only an actually unowned timing shard may lack an original owner')
+            if row['kind'] == 'timing':
+                require(not owner_file(path, original).exists(), 'An unowned timing shard acquired an owner')
+            else:
+                verify_ownerless_gloscope(row, item, context, original, checked_by_path[str(path)], reboot_coverage)
         for runtime_proof in item['runtime_evidence']:
             proof(runtime_proof)
     adoption = original / 'manifests/prepared_adoption.tsv'
