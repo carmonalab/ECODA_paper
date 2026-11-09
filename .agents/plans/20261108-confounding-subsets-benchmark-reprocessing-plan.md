@@ -82,8 +82,10 @@ decisions have been applied to existing artifacts.
   The new derivative filled 50,809 HR labels (33 to 40 categories), retaining
   74,948 cells and 26 samples. All protected data are unchanged. Its MD5 is
   `678656c738597471d884f88e345e6970`; the legacy input remains unchanged.
-- Stage 5 method jobs have **not yet launched**. First prepare one ten-row
-  blacklist-only benchmark wave excluding Stephenson, using the approved
+- Stage 5 early BL10 controller is **RUNNING**, launched
+  `2026-11-09T00:17:52Z` from immutable `9b06d15`; its input preflight
+  precedes the ten selected pseudobulk workers. One unbounded waiter is armed
+  (local exec `24353`). This wave excludes Stephenson, using the approved
   Bassez derivative and nine unchanged benchmark inputs. Stephenson's BL
   result belongs only to its later full rerun. Retain the one existing
   `ecoda-benchmark` serialization group and review the early gate before
@@ -92,8 +94,10 @@ decisions have been applied to existing artifacts.
   cannot mount NAS (17 missing / 0 existing outputs). Its evidence is retained;
   the reviewed fix validates scratch on compute and publishes NAS from the
   controller. The current recovery uses fresh roots without force.
-- The multi-child accounting adapter remains implementation/review work;
-  it does not affect the current single-child gates or the early BL wave.
+- The multi-child accounting adapter is accepted and committed in `eb26bdb`;
+  12 tests pass, including seven unchanged single-child cases. It preserves
+  one raw capture and derives three exact child projections before three
+  pinned audits. No ordinary parent audit or extra accounting query.
 
 ## 2. Confirmed scientific decisions
 
@@ -498,7 +502,7 @@ statuses, scientific output roots and one synchronization owner per root.
 | P2: scoped contracts | IN_PROGRESS | Cohort/BL core, derivative roots and two corrected Harmony arms committed; exact rerun selectors, failure isolation, Bassez Stage 2 wrapper and gate evidence integration continue |
 | P3: source reconciliation | IN_PROGRESS | Orchestrator handles bounded read-only Bamboo source/runtime/NAS preflight; targeted Bassez scope is already user-approved, subject to unchanged-input proof |
 | P4: changed inputs | IN_PROGRESS | Generate and validate 16 batch-view derivatives, Stephenson benchmark derivative, and only the necessary Bassez repair; satisfy benchmark annotation contracts |
-| P5: method waves | PLANNED | Run three independent concurrent contexts with exact deduplicated scope, durable evidence, focused recovery and root-specific sync |
+| P5: method waves | IN_PROGRESS | Run three independent concurrent contexts with exact deduplicated scope, durable evidence, focused recovery and root-specific sync |
 | P6: evaluation/reporting | PLANNED | Complete five-metric scores, score both Kidney axes, refresh all affected maintained reports/figures from approved results, verify plots and document limitations/provenance |
 
 ### P0: first implementation action, before harmonization or pipeline changes
@@ -921,6 +925,92 @@ and approved output-manifest location.
   the legacy sidecar repair preflight compares against canonical NAS even
   when the input binding deliberately selects a derivative release. The
   implementor is adding a narrow derivative-mode read-only validation branch
-  with a regression fixture; legacy behavior remains unchanged. Do not launch
-  BL or HR methods until that fix is independently reviewed, committed and
-  deployed. Other active preprocessing jobs are unaffected.
+  with a regression fixture; legacy behavior remains unchanged. This fix is
+  now independently accepted, root-tested, committed/pushed as `9b06d15` and
+  deployed in the new snapshot. Bound source identity uses the exact selected
+  canonical checksum proof; original adjacent receipts remain unchanged.
+  Other active preprocessing jobs are unaffected.
+
+
+### Early BL10 gate — exact immutable launch contract
+
+- Status **RUNNING**; launched `2026-11-09T00:17:52Z`; host Bamboo; gate
+  `ecoda_stage5_benchmark_bl10_20261109_v1`, child
+  `stage5_benchmark_bl10_20261109_v1`; serialization group `ecoda-benchmark`.
+  This gate is independent of the active Stage 3 gate. Review it before a
+  later same-group Stage 5 gate; no second synchronization group.
+- Source full commit `9b06d15cf6388225b2523aeb2677eadf68338937`, archive SHA256
+  `b0809b3ffeced3fd6845880786650a0219edaaba0eafdf99b8f2ea760b783b86`.
+  Snapshot has its own parent `20261109-benchmark-bl10-v1`; source manifest:
+  `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-benchmark-bl10-v1/9b06d15cf6388225b2523aeb2677eadf68338937/identity/source.manifest`.
+- Same verified relocated format-2 runtime and manifest as previous gates;
+  image SHA256 `8fcd00b7a02592f82e8ad96ec9dffdcfb40214b3c47218f770dfb8e828e05e34`,
+  manifest SHA256 `1c4c2cc340353fe86f1b89235f1f3e5c7b3545f7f303d2b85612cfa8cdedfd50`.
+  Auxiliary root is the snapshot's `tree/aux`; unchanged blacklist pickle
+  SHA256 `0bbf15296350940082b843f6cc8505f24a14f3365af569435aa2c7598d6a3113`.
+  Five configured gene groups are excluded before fitting; no sex mask.
+- Exact 10 selection rows and their input/provenance digests are recorded
+  above. One standalone `hvg2000_bl` result and one BL preparation/cache per
+  dataset: **20 RDS outputs**, no ordinary/PCA/CT/aggregate method results.
+  No `prepare_pseudobulk` task, broad force, screen, GPU method or Stephenson.
+- Expected initial scheduling: H5AD preflight array (10 tasks), R environment
+  preflight (one task), pseudobulk array (10 tasks), its watchdog (one task),
+  aggregate gate (one task): **five scheduler IDs / 23 scheduled tasks**.
+  Zero sample metadata export tasks in this benchmark-only wave. Extra work
+  is limited to documented OOM-only retries for failed selected PB rows.
+- CPU workers: existing shared-cpu/EPYC-7742/16 CPU contract, four hours;
+  initial 128G, OOM-only ceiling 500G. Explicit preflight throttle 10; the
+  method array's default throttle is 1000 but its ten-row scope permits only
+  ten concurrent tasks. No GPU requests or environment refresh.
+- New scratch root `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runs/stage5_benchmark_bl10_20261109_v1`;
+  outputs under `artifacts/benchmark`, separate NAS release under
+  `releases/20261108-confounding-subsets-v1/stage5_benchmark_bl10_20261109_v1`.
+  Fresh run/log/NAS destinations checked absent. Existing artifacts immutable.
+- Local gate evidence prefix `.gate/ecoda_stage5_benchmark_bl10_20261109_v1`;
+  wrapper SHA256 `396a9b39b247a5f2d37a2117368888c8d3b05091578f1ac22472746bd201178b`.
+  Prepare, reconcile, launch exactly once and arm one unbounded waiter.
+  Before release use one accounting inspection, single-child bridge, pinned
+  Stage 5 audit, selected NAS integrity checks, and reviewer approval.
+
+Exact wrapper (no additional broad selectors):
+
+```bash
+env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper BENCHMARK_CPU_TIME_LIMIT=04:00:00 /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-benchmark-bl10-v1/9b06d15cf6388225b2523aeb2677eadf68338937/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-benchmark-bl10-v1/9b06d15cf6388225b2523aeb2677eadf68338937/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-benchmark-bl10-v1/9b06d15cf6388225b2523aeb2677eadf68338937/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage5_benchmark_bl10_20261109_v1 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage5_benchmark_bl10_20261109_v1 --script src/5_run_benchmark_methods/1_submit_hpc_array.sh -- --selection-file /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/benchmark-bl10-inputs-v1/selection.tsv --derivative-release 20261108-confounding-subsets-v1 --input-artifacts /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/benchmark-bl10-inputs-v1/input_artifacts.tsv --mem=128G --max-mem=500G --throttle=10
+```
+
+### Stephenson benchmark annotation dependency
+
+Pipeline 4's existing canonical entry point cannot yet safely target the new
+Stage 3 derivative: it hardcodes canonical input/output paths and modifies
+the H5AD during merge. A bounded implementation is underway to reuse the
+existing annotation engine with a strict Stage 4 input binding and a new
+run-owned H5AD copy. It must preserve the Stage 3 producer, use fresh owned
+chunks/checkpoints, dual HiTME/scATOMIC annotation, scratch-only compute
+ownership and controller NAS publication. Batch-only views remain exempt.
+The intended scope is one Stephenson benchmark input, one preparation task,
+27 two-sample annotation tasks for 53 samples, and one merge task, with the
+existing phase watchdogs. Final exact resource/reference/wrapper contract
+must be recorded after review and before launch.
+
+Audit additionally found that the existing annotation worker exports
+`normal_tissue` but otherwise defaults HiTME tissue to Tumor. The bounded new
+Stephenson mode must use its already-declared registry `tissue=Blood` and
+`normal_tissue=true` explicitly, pinned by the source configuration identity.
+This is an additional reason not to adopt unproven legacy model checkpoints.
+It does not authorize a broad annotation rerun of other cohorts.
+
+
+### 2026-11-09 BL10 launch event
+
+Prepare and reconcile passed; reconciliation found ABSENT remote execution
+with all invariants green. The controller launched exactly once at
+`2026-11-09T00:17:52Z`, wrapper digest
+`396a9b39b247a5f2d37a2117368888c8d3b05091578f1ac22472746bd201178b`.
+One unbounded durable waiter is armed (local exec session `24353`);
+`.gate/ecoda_stage5_benchmark_bl10_20261109_v1.wait.json` is its final output.
+Do not relaunch or arm another waiter. Initial log read was empty while the
+immutable executor performs its validation; no scheduler IDs observed yet.
+The exact expected ten method rows/five initial scheduler IDs remain the scope
+contract above. Stage 3's independent waiter `69025` is still active. Method
+results are not release-eligible until terminal accounting, pinned audits,
+selected NAS integrity checks and reviewer approval pass.
