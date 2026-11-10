@@ -537,6 +537,12 @@ _audit_analysis_release() {
       submission_producer=saved_cluster_submission
       validator_name=saved_cluster_screen.sh
       ;;
+    counts_only_zeroimp_screen)
+      expected_operation=zeroimp-count-screen
+      scope_producer=zeroimp_scope
+      submission_producer=zeroimp_submission
+      validator_name=zeroimp_count_screen.sh
+      ;;
     legacy_analysis_compatibility_audit)
       expected_operation=legacy-audit
       scope_producer=legacy_analysis_audit_scope
