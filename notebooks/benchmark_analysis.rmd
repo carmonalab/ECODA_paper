@@ -368,7 +368,7 @@ p1 <- df_plot %>%
   geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
   scale_shape_manual(values=1:length(unique((df_plot$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
-  labs(x = "", y = "ANOSIM score") +
+  labs(x = "", y = "Separation score (ANOSIM)") +
   theme_classic() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 
@@ -381,7 +381,7 @@ p2 <- df_plot %>%
   geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
   scale_shape_manual(values=1:length(unique((df_plot$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
-  labs(x = "", y = "Modularity score") +
+  labs(x = "", y = "Separation score (Modularity (knn3))") +
   theme_classic() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 
@@ -394,7 +394,7 @@ p3 <- df_plot %>%
   geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
   scale_shape_manual(values=1:length(unique((df_plot$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
-  labs(x = "", y = "ARI score") +
+  labs(x = "", y = "Separation score (ARI)") +
   theme_classic() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 
@@ -407,7 +407,8 @@ extra_metric_plots <- lapply(c("sil_score", "lisi_score"), function(metric) {
     geom_point(aes(shape = dataset, color = dataset), size = pointsize) +
     scale_shape_manual(values = seq_along(unique(df_plot$dataset))) +
     geom_line(aes(group = dataset, linetype = dataset, color = dataset)) +
-    labs(x = "", y = paste("Raw", score_facet_labels[[metric]])) + theme_classic() +
+    labs(x = "", y = paste0("Separation score (",
+      c(sil_score = "Silhouette", lisi_score = "LISI")[[metric]], ")")) + theme_classic() +
     theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 })
 metric_plots <- setNames(c(list(p1, p2, p3), extra_metric_plots), benchmark_metrics)
@@ -417,7 +418,7 @@ for (metric in benchmark_metrics) {
 }
 combined_plot <- wrap_plots(metric_plots, nrow = 1) +
   plot_layout(guides = "collect") & # Collects all legends into one
-  theme(legend.position = "right") # Places the shared legend at the bottom
+  theme(legend.position = "bottom", axis.title.y = element_text(size = 9))
 combined_plot
 
 # Save the combined plot
@@ -596,7 +597,7 @@ p_kfoury <- wrap_plots(list(p1, p2, p3)) +
 # NOTE (review): the dataset name was previously duplicated in the filename
 # (Supp_fig_18_Kfoury_PCA_authors_vs_auto_Kfoury.pdf); fixed to drop the
 # trailing duplicate.
-ggsave(file.path(path_plots, "Supp_fig_18_Kfoury_PCA_authors_vs_auto.pdf"),
+ggsave(file.path(path_plots, "Supp_fig_18_Kfoury_PCA_authors_vs_auto_old.pdf"),
        width = 15,
        height = 6)
 
@@ -632,14 +633,14 @@ print(p3)
 
 p_wu <- wrap_plots(list(p1, p2, p3)) +
   plot_layout(nrow = 1, guides = "collect")
-ggsave(file.path(path_plots, "Supp_fig_18_Wu_PCA_authors_vs_auto.pdf"),
+ggsave(file.path(path_plots, "Supp_fig_18_Wu_PCA_authors_vs_auto_old.pdf"),
        width = 15,
        height = 6)
 
 p_combined <- wrap_plots(list(p_kfoury + labs(tag = "Kfoury"), p_wu + labs(tag = "Wu"))) +
   plot_layout(nrow = 2) & 
   theme(plot.tag = element_text(face = "bold"))
-ggsave(file.path(path_plots, paste0("Supp_fig_18_combined.pdf")),
+ggsave(file.path(path_plots, "Supp_fig_18_combined_old.pdf"),
        width = 15,
        height = 6)
 ```
@@ -700,7 +701,8 @@ for (ds in names(result_list$bmark)) {
 
 ### Supp fig 3-13: MDS for all datasets
 
-Subtitles use Figure 2A's complete default normalization pool, including NULL.
+All datasets share the overall five-metric benchmark order, with ECODA and
+Pseudobulk first. MDS panels show method names without score subtitles.
 
 ```{r fig.height=9, fig.width=11}
 methods <- list(
@@ -724,6 +726,15 @@ methods <- list(
   "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"
 )
 methods <- methods_in_scope_named(methods)
+
+supp_mds_rank <- prepare_evaluation_plot_data(df_benchmark,
+  benchmark_main_normalization_methods, expected_grid = benchmark_expected_grid) %>%
+  group_by(method) %>% summarize(mean_score = mean(scaled_value), .groups = "drop") %>%
+  arrange(desc(mean_score), method)
+supp_mds_order <- c(intersect(c("ECODA_authors_HR", "Pseudobulk_hvg2000"), names(methods)),
+  setdiff(as.character(supp_mds_rank$method), c("ECODA_authors_HR", "Pseudobulk_hvg2000")))
+stopifnot(setequal(intersect(supp_mds_order, names(methods)), names(methods)))
+methods <- methods[intersect(supp_mds_order, names(methods))]
 
 idx <- 3
 
@@ -753,19 +764,23 @@ for (ds in names(result_list[["bmark"]])) {
       labels,
       cluster_score = FALSE, mod_score = FALSE, anosim_score = FALSE,
       coord_equal = TRUE,
-      title = methods[[m]],
-      separation_score = benchmark_normalized_mean(df_benchmark, ds, m, benchmark_main_normalization_methods)
-    )
+      title = methods[[m]]
+    ) +
+      scale_colour_discrete(limits = sort(all_possible_labels), drop = FALSE) +
+      scale_shape_manual(values = rep(19, length(all_possible_labels)),
+        limits = sort(all_possible_labels), drop = FALSE)
+    if (m != names(methods)[[1]]) plot_list[[m]] <- plot_list[[m]] +
+      guides(colour = "none", shape = "none")
     if (ds == "Bassez") plot_list[[m]] <- plot_list[[m]] +
       labs(color = "Clonal expansion", shape = "Clonal expansion")
   }
   
   wrap_plots(plot_list) +
-    plot_layout(nrow = 3, guides = "collect")
+    plot_layout(ncol = 3, guides = "collect") & theme(legend.position = "bottom")
   
   ggsave(file.path(path_plots, paste0("Supp_fig_", idx, "_benchmark_mds_", ds, ".pdf")),
-         width = 11,
-         height = 9)
+         width = 9,
+         height = 11)
   
   idx <- idx + 1
 }
@@ -1140,18 +1155,20 @@ if (!nzchar(bassez_annotation_path)) {
 }
 ```
 
-### Figure 3 A: ECODA annotation method comparison
+### Figure 3 B: ECODA annotation method comparison
 
-The original Figure 3A export is retained. The additional
-`Figure_3_A_annotationmethods_barplot_anosim_cleanlabels_45deg.pdf` uses the
-same data and comparisons, removes `ECODA_` from display labels, capitalizes
-their first letter, and rotates them 45° with extra left margin.
+The Figure 3B export and the additional
+`Figure_3_B_annotationmethods_barplot_anosim_cleanlabels_45deg.pdf` use the
+same data and comparisons, with explicit display labels (including `scATOMIC`)
+rotated 45° with extra left margin. Both barplots use the fixed annotation
+order below, with numerically increasing Leiden resolutions and Harmony
+resolution 2 immediately after uncorrected resolution 2.
 The `_noharmony.pdf` variant additionally excludes Harmony Leiden resolution 2,
 retaining the remaining methods, their order, and the paired comparisons.
 
 ### Supp fig 18: paired annotation-method metric companions
 
-Modularity (k=3), ARI, Silhouette and LISI separation complement Figure 3A's
+Modularity (k=3), ARI, Silhouette and LISI separation complement Figure 3B's
 explicit raw ANOSIM panel. These panels retain each metric's original units.
 
 
@@ -1160,22 +1177,41 @@ pointsize <- 1.5
 
 annotation_filter_methods <- c(
   "ECODA_authors_HR",
-  "ECODA_authors_LR",
-  "ECODA_deconv",
-  "ECODA_HiTME_HR_layer2",
-  # "ECODA_HiTME_HR_layer3",
-  "ECODA_scATOMIC_HR",
   "ECODA_seuratres_0.1",
   "ECODA_seuratres_0.4",
   "ECODA_seuratres_2",
   "ECODA_seuratres_2_harmony",
   "ECODA_seuratres_5",
   "ECODA_seuratres_20",
-  "ECODA_seuratres_50"
+  "ECODA_seuratres_50",
+  "ECODA_scATOMIC_HR",
+  "ECODA_HiTME_HR_layer2",
+  "ECODA_authors_LR",
+  "ECODA_deconv"
 )
 
 # The selected comparison requires explicit reviewed rows for every arm.
 filter_methods <- methods_in_scope(annotation_filter_methods)
+
+# Keep internal keys for comparisons; display labels do not change the inputs.
+annotation_method_order <- unname(dplyr::recode(
+  filter_methods, !!!method_label_map_annotation
+))
+annotation_clean_labels <- c(
+  "ECODA_authors_HR" = "Authors_HR",
+  "ECODA_Leiden_res_0.1" = "Leiden_res_0.1",
+  "ECODA_Leiden_res_0.4" = "Leiden_res_0.4",
+  "ECODA_Leiden_res_2" = "Leiden_res_2",
+  "ECODA_Leiden_res_2_harmony" = "Leiden_res_2_harmony",
+  "ECODA_Leiden_res_5" = "Leiden_res_5",
+  "ECODA_Leiden_res_20" = "Leiden_res_20",
+  "ECODA_Leiden_res_50" = "Leiden_res_50",
+  "ECODA_scATOMIC" = "scATOMIC",
+  "ECODA_HiTME" = "HiTME",
+  "ECODA_authors_LR" = "Authors_LR",
+  "ECODA_deconv" = "Pseudobulk_deconvolution"
+)
+stopifnot(!anyNA(annotation_clean_labels[annotation_method_order]))
 
 # Keep the display labels explicit here while using the centralized map for
 # every annotation plot below.
@@ -1196,10 +1232,7 @@ df_plot <- df_benchmark %>%
   filter(method %in% filter_methods) %>%
   flag_drop_annotation_methods() %>%
   apply_method_labels(method_label_map_annotation) %>%
-  mutate(method = fct_reorder(method, value, .desc = TRUE, .fun = mean))
-
-# Reuse Figure 3 A's ANOSIM-derived method order for all annotation panels.
-annotation_method_order <- levels(df_plot$method)
+  mutate(method = factor(method, levels = annotation_method_order))
 
 p <- ggplot(df_plot, aes(x = method, y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
@@ -1221,24 +1254,21 @@ p <- ggplot(df_plot, aes(x = method, y = value)) +
   theme_classic() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 print(p)
-ggsave(file.path(path_plots, "Figure_3_A_annotationmethods_barplot_anosim.pdf"),
+ggsave(file.path(path_plots, "Figure_3_B_annotationmethods_barplot_anosim.pdf"),
        plot = p,
        width = 5,
        height = 5)
 
-# Display-only variant: retain method keys, ordering, and paired comparisons.
+# Display-only variant: retain method keys and paired comparisons.
 # Extra left margin keeps the first right-aligned, rotated label on the page.
 p_annotation_clean_labels <- p +
-  scale_x_discrete(labels = function(x) {
-    labels <- sub("^ECODA_", "", x)
-    paste0(toupper(substr(labels, 1, 1)), substring(labels, 2))
-  }) +
+  scale_x_discrete(labels = annotation_clean_labels, drop = FALSE) +
   theme(
     axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
     plot.margin = margin(t = 5.5, r = 5.5, b = 5.5, l = 24)
   )
 print(p_annotation_clean_labels)
-ggsave(file.path(path_plots, "Figure_3_A_annotationmethods_barplot_anosim_cleanlabels_45deg.pdf"),
+ggsave(file.path(path_plots, "Figure_3_B_annotationmethods_barplot_anosim_cleanlabels_45deg.pdf"),
        plot = p_annotation_clean_labels,
        width = 5,
        height = 5)
@@ -1247,8 +1277,13 @@ p_annotation_clean_labels_noharmony <- p_annotation_clean_labels
 p_annotation_clean_labels_noharmony$data <- filter(
   p_annotation_clean_labels$data, method != "ECODA_Leiden_res_2_harmony"
 )
+p_annotation_clean_labels_noharmony <- p_annotation_clean_labels_noharmony +
+  scale_x_discrete(
+    labels = annotation_clean_labels,
+    limits = setdiff(annotation_method_order, "ECODA_Leiden_res_2_harmony")
+  )
 print(p_annotation_clean_labels_noharmony)
-ggsave(file.path(path_plots, "Figure_3_A_annotationmethods_barplot_anosim_cleanlabels_45deg_noharmony.pdf"),
+ggsave(file.path(path_plots, "Figure_3_B_annotationmethods_barplot_anosim_cleanlabels_45deg_noharmony.pdf"),
        plot = p_annotation_clean_labels_noharmony,
        width = 5,
        height = 5)
@@ -1277,7 +1312,7 @@ p_mod <- ggplot(df_plot, aes(x = method, y = value)) +
     size = 3,
     label.y = 1.1
   ) +
-  labs(x = "", y = "Separation score (Modularity)") +
+  labs(x = "", y = "Separation score\n(Modularity (knn3))") +
   ylim(c(min(df_plot$value), max(df_plot$value) + 0.15)) +
   theme_classic() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
@@ -1285,7 +1320,7 @@ print(p_mod)
 ggsave(file.path(path_plots, "benchmark_summary_barplot_modularity_annotationmethods_refECODAhr.pdf"),
        plot = p_mod,
        width = 7,
-       height = 4)
+       height = 5)
 
 
 df_plot <- df_benchmark %>%
@@ -1318,7 +1353,7 @@ print(p_ari)
 ggsave(file.path(path_plots, "benchmark_summary_barplot_ari_annotationmethods_refECODAhr.pdf"),
        plot = p_ari,
        width = 7,
-       height = 4)
+       height = 5)
 
 
 annotation_metric_scores <- prepare_evaluation_plot_data(df_benchmark, filter_methods,
@@ -1328,19 +1363,31 @@ p_annotation_sil <- plot_benchmark_raw_metric(annotation_metric_scores, "sil_sco
   method_order = annotation_method_order, reference = "ECODA_authors_HR")
 p_annotation_lisi <- plot_benchmark_raw_metric(annotation_metric_scores, "lisi_score",
   method_order = annotation_method_order, reference = "ECODA_authors_HR")
+p_annotation_sil <- p_annotation_sil + labs(y = "Separation score (Silhouette)")
+p_annotation_lisi <- p_annotation_lisi + labs(y = "Separation score (LISI)")
 ggsave(file.path(path_plots, "Supp_fig_18_annotationmethods_barplot_sil_lisi.pdf"),
   plot = wrap_plots(list(p_annotation_sil, p_annotation_lisi), nrow = 1, guides = "collect"),
   width = 9, height = 5)
-supp_fig_18_annotation <- wrap_plots(list(p_mod, p_ari, p_annotation_sil, p_annotation_lisi)) +
-  plot_layout(ncol = 2, guides = "collect")
+supp_fig_18_annotation <- wrap_plots(list(
+  p_mod + labs(y = "Separation score\n(Modularity (knn3))"),
+  p_ari + labs(y = "Separation score\n(ARI)") + guides(colour = "none", shape = "none", linetype = "none"),
+  p_annotation_sil + labs(y = "Separation score\n(Silhouette)") + guides(colour = "none", shape = "none", linetype = "none"),
+  p_annotation_lisi + labs(y = "Separation score\n(LISI)") + guides(colour = "none", shape = "none", linetype = "none"))) +
+  plot_layout(nrow = 1, guides = "collect") &
+  labs(colour = "Dataset", shape = "Dataset", linetype = "Dataset") &
+  scale_colour_discrete(limits = unique(annotation_metric_scores$dataset)) &
+  scale_shape_manual(values = seq_along(unique(annotation_metric_scores$dataset)),
+    limits = unique(annotation_metric_scores$dataset)) &
+  scale_linetype_discrete(limits = unique(annotation_metric_scores$dataset)) &
+  theme(legend.position = "bottom", axis.title.y = element_text(size = 9))
 print(supp_fig_18_annotation)
 ggsave(file.path(path_plots, "Supp_fig_18_annotationmethods_barplot_mod_ari.pdf"),
        plot = supp_fig_18_annotation,
-       width = 9,
-       height = 10)
+       width = 20,
+       height = 5)
 
 ```
-### Figure X3 B: Number of cell types by annotation method
+### Figure 3 A: Number of cell types by annotation method
 
 ```{r fig.height=6, fig.width=5}
 
@@ -1360,7 +1407,7 @@ df_celltype_counts <- imap_dfr(bmark_result_list, function(ds_results, dataset_n
 })
 
 if (!setequal(unique(df_celltype_counts$method), filter_methods)) {
-  stop("Figure X3 B annotation method selection is incomplete.")
+  stop("Figure 3 A annotation method selection is incomplete.")
 }
 
 df_celltype_counts <- df_celltype_counts %>%
@@ -1368,7 +1415,7 @@ df_celltype_counts <- df_celltype_counts %>%
   mutate(method = factor(method, levels = annotation_method_order))
 
 if (anyNA(df_celltype_counts$method)) {
-  stop("Figure X3 B method labels do not match Figure 3 A's method order.")
+  stop("Figure 3 A method labels do not match Figure 3 B's method order.")
 }
 
 p_celltypes <- ggplot(
@@ -1383,23 +1430,28 @@ p_celltypes <- ggplot(
     aes(group = dataset, linetype = dataset, color = dataset),
     alpha = 1
   ) +
+  scale_x_discrete(labels = annotation_clean_labels, drop = FALSE) +
   scale_y_log10(
-    breaks = c(2, 3, 5, 10, 20, 50, 100, 200, 500, 1000),
+    breaks = c(2, 10, 50, 200, 1000),
     labels = scales::label_number(accuracy = 1)
   ) +
-  coord_cartesian(ylim = c(2, NA_real_), expand = FALSE) +
-  labs(x = "", y = "Number of cell types (log10 scale)") +
+  coord_cartesian(expand = TRUE) +
+  labs(x = "", y = "Cell types (log scale)") +
   theme_classic() +
-  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    plot.margin = margin(t = 5.5, r = 5.5, b = 5.5, l = 24)
+  )
 print(p_celltypes)
 ggsave(
-  file.path(path_plots, "Figure_X3_B_number_of_celltypes.pdf"),
+  file.path(path_plots, "Figure_3_A_number_of_celltypes.pdf"),
+  plot = p_celltypes,
   width = 5,
   height = 5
 )
 ```
 
-#### Figure 3 B: Plot PCA for selected annot. methods (Adams)
+#### Figure 3 C: Plot PCA for selected annot. methods (Adams)
 
 Panel titles omit `ECODA_` and start with a capital letter. The unsupervised
 panel uses non-Harmony Leiden resolution 0.4; the other PCA inputs are unchanged.
@@ -1434,12 +1486,59 @@ for (m in names(methods)) {
   )
 }
 
-wrap_plots(plot_list) +
+p_annotation_pca <- wrap_plots(plot_list) +
   plot_layout(nrow = 2, guides = "collect")
+print(p_annotation_pca)
 
-ggsave(file.path(path_plots, "Figure_3_B_annotationmethods_pca_adams.pdf"),
+ggsave(file.path(path_plots, "Figure_3_C_annotationmethods_pca_adams.pdf"),
+       plot = p_annotation_pca,
        width = 8,
        height = 7)
+```
+
+#### Figure 3: Annotation counts, ANOSIM, and Adams PCA
+
+The left column shares annotation positions and one set of 45° labels:
+cell-type counts above ANOSIM. The right column retains the four Adams PCAs.
+The dataset legend sits to the right of the two barplots; the disease-group
+legend remains below the PCA grid.
+This composition uses the same reviewed inputs as its component panels; it
+does not load data or rerun benchmark methods.
+
+```{r figure-3-combined, fig.height=8.2, fig.width=13}
+figure_3_left <- wrap_plots(
+  list(
+    p_celltypes + labs(tag = "A") +
+      theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()),
+    p_annotation_clean_labels + labs(tag = "B") +
+      scale_y_continuous(breaks = c(0, 0.5, 1), labels = scales::label_number(accuracy = 0.1)) +
+      coord_cartesian(ylim = c(min(0, p_annotation_clean_labels$data$value), 1.15))
+  ),
+  ncol = 1, heights = c(0.85, 1), guides = "collect"
+) & theme(
+  legend.position = "right", legend.title = element_blank(),
+  legend.text = element_text(size = 9), legend.key.width = unit(14, "pt"),
+  axis.text = element_text(size = 9), axis.title.y = element_text(size = 11),
+  plot.tag = element_text(face = "bold", size = 14)
+) & guides(
+  colour = guide_legend(ncol = 1),
+  shape = guide_legend(ncol = 1),
+  linetype = guide_legend(ncol = 1)
+)
+
+# Keep the PCA group legend separate from the left column's dataset legend.
+figure_3_right <- wrap_elements(full = (
+  p_annotation_pca & theme(legend.position = "bottom")
+)) + labs(tag = "C") + theme(plot.tag = element_text(face = "bold", size = 14))
+
+figure_3 <- wrap_plots(
+  # Include the dataset legend in the left column's 40% allocation.
+  list(wrap_elements(full = figure_3_left), figure_3_right),
+  nrow = 1, widths = c(0.4, 0.6)
+)
+print(figure_3)
+ggsave(file.path(path_plots, "Figure_3.pdf"), plot = figure_3,
+       width = 13, height = 8.2)
 ```
 
 #### Presentation: Adams annotation correspondence matrix
@@ -1615,7 +1714,9 @@ plot_list <- list()
 
 for (ds in datas) {
   pl <- list()
-  for (m in names(methods)) {
+  dataset_methods <- methods
+  if (ds == "Lee") dataset_methods <- dataset_methods[names(dataset_methods) != "ECODA_authors_HR"]
+  for (m in names(dataset_methods)) {
     
     dist_mat <- result_list[["bmark"]][[ds]][[m]]$dist_mat
     labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
@@ -1624,14 +1725,15 @@ for (ds in datas) {
       labels <- benchmark_pca_display_labels(labels, "Bassez")
     }
     
+    mean_score <- benchmark_normalized_mean(df_benchmark, ds, m, benchmark_extended_normalization_methods)
     pl[[m]] <- plot_mds(
       dist_mat = dist_mat,
       labels = labels,
-      cluster_score = FALSE, mod_score = FALSE, anosim_score = TRUE,
+      cluster_score = FALSE, mod_score = FALSE, anosim_score = FALSE,
       coord_equal = TRUE,
-      title = methods[[m]],
-      separation_score = benchmark_normalized_mean(df_benchmark, ds, m, benchmark_extended_normalization_methods)
-    )
+      title = dataset_methods[[m]],
+      separation_score = mean_score
+    ) + labs(subtitle = sprintf("Separation score (mean): %.2f", mean_score))
     if (ds == "Bassez") pl[[m]] <- pl[[m]] + labs(color = "Clonal expansion", shape = "Clonal expansion")
   }
   
@@ -1728,7 +1830,8 @@ supp_fig_2_plot <- df_benchmark %>%
            stringr::str_replace("(\\d+)_PCA_dims", "pcadims\\1") %>%
            stringr::str_replace("^PILOT_hvg(\\d+)$", "PILOT_hvg\\1_HR") %>%
            stringr::str_replace("^QOT_hvg(\\d+)$", "QOT_hvg\\1_HR") %>%
-           stringr::str_replace("^PILOT-GM-VAE_hvg(\\d+)$", "PILOT-GM-VAE_hvg\\1_HR")
+           stringr::str_replace("^PILOT-GM-VAE_hvg(\\d+)$", "PILOT-GM-VAE_hvg\\1_HR") %>%
+           stringr::str_replace("^Pseudobulk_hvg2000_bl$", "Pseudobulk_hvg2000_blocklist")
   ) %>%
   
   group_by(method) %>%
@@ -1756,7 +1859,7 @@ supp_fig_2_plot <- df_benchmark %>%
   ) +
   # ylim(c(-0.4, 1)) +
   facet_grid(scales = "free",
-             space='free',
+             space='free_x',
              rows = vars(score),
              cols = vars(method_plot), # Use the new grouping column for column faceting
              labeller = labeller(
@@ -2058,6 +2161,8 @@ p2 <- df_benchmark_anosim %>%
 print(p2)
 
 
+# Preserve the individual panels for the complete six-panel Figure 4.
+figure_4_ab <- list(p1, p2)
 # Combine the plots vertically
 combined_plot <- (p1 / p2) + 
   plot_layout(guides = "collect") +
@@ -2075,7 +2180,7 @@ ggsave(file.path(path_plots, "Figure_4_AB_featureselectionHVC_barplot_anosim.pdf
        height = 6)
 ```
 
-#### Supp fig 20: HVC metric companions
+#### Supp fig 21: HVC metric companions
 
 The four raw metric panels complement Figure 4AB's explicit ANOSIM diagnostic.
 
@@ -2089,7 +2194,7 @@ p3 <- df_benchmark_sub %>%
   scale_shape_manual(values=1:length(unique((df_benchmark_sub$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
   # ylim(c(-0.1, 1)) +
-  labs(x = "Variance explained (%)", y = "Separation score (Modularity)") +
+  labs(x = "Variance explained (%)", y = "Separation score (Modularity (knn3))") +
   theme_classic2() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1),
         legend.position = "none")
@@ -2116,23 +2221,27 @@ p_hvc_sil <- plot_benchmark_raw_metric(df_benchmark_sub, "sil_score",
   method_order = levels(df_benchmark_sub$method), x_label = "Variance explained (%)")
 p_hvc_lisi <- plot_benchmark_raw_metric(df_benchmark_sub, "lisi_score",
   method_order = levels(df_benchmark_sub$method), x_label = "Variance explained (%)")
-ggsave(file.path(path_plots, "Supp_fig_20_featureselectionHVC_barplot_sil_lisi.pdf"),
+p_hvc_sil <- p_hvc_sil + labs(y = "Separation score (Silhouette)")
+p_hvc_lisi <- p_hvc_lisi + labs(y = "Separation score (LISI)")
+ggsave(file.path(path_plots, "Supp_fig_21_featureselectionHVC_barplot_sil_lisi.pdf"),
   plot = wrap_plots(list(p_hvc_sil, p_hvc_lisi), nrow = 1, guides = "collect"),
   width = 8, height = 3.5)
-combined_plot <- wrap_plots(list(p3, p4, p_hvc_sil, p_hvc_lisi), ncol = 2) +
+combined_plot <- wrap_plots(list(p3,
+  p4 + guides(colour = "none", shape = "none", linetype = "none"),
+  p_hvc_sil + guides(colour = "none", shape = "none", linetype = "none"),
+  p_hvc_lisi + guides(colour = "none", shape = "none", linetype = "none")), nrow = 1) +
   plot_layout(guides = "collect") +
   plot_annotation(tag_levels = 'A') & 
   theme(
     plot.tag = element_text(size = 16, face = "bold"),
-    legend.position = "right"
+    legend.position = "bottom", axis.title.y = element_text(size = 9)
   ) &
   labs(color = "Dataset", 
        shape = "Dataset", 
        linetype = "Dataset")
 print(combined_plot)
-ggsave(file.path(path_plots, "Supp_fig_20_featureselectionHVC_barplot_mod_ari.pdf"),
-       width = 8,
-       height = 7)
+ggsave(file.path(path_plots, "Supp_fig_21_featureselectionHVC_barplot_mod_ari_sil_lisi.pdf"),
+       plot = combined_plot, width = 18, height = 5)
 ```
 
 ### Show example PCAs
@@ -2175,6 +2284,8 @@ p2 <- ggplot(df_logr, aes(x = Groups, y = !!sym(colnames(df_logr)[1]), fill = Gr
   NoLegend()
 
 
+figure_4_c <- p1
+figure_4_e <- p2
 wrap_plots(list(p1, p2)) +
   plot_layout(nrow = 1, widths = c(2.5, 1))
 ggsave(file.path(path_plots, "Figure_4_CE_featureselectionHVC_PCA_adams.pdf"),
@@ -2218,6 +2329,8 @@ p2 <- ggplot(df_logr, aes(x = Groups, y = !!sym(colnames(df_logr)[1]), fill = Gr
   ) &
   NoLegend()
 
+figure_4_d <- p1
+figure_4_f <- p2
 wrap_plots(list(p1, p2)) +
   plot_layout(nrow = 1, widths = c(2.5, 1))
 ggsave(file.path(path_plots, "Figure_4_DF_featureselectionHVC_PCA_kfoury.pdf"),
@@ -2225,7 +2338,31 @@ ggsave(file.path(path_plots, "Figure_4_DF_featureselectionHVC_PCA_kfoury.pdf"),
        height = 3)
 ```
 
-## Supp fig 21
+### Figure 4: Cell-type selection and example projections
+
+```{r figure-4-combined, fig.height=7, fig.width=15}
+# Keep dataset and disease legends with their own columns; boxplots repeat
+# the PCA groups and do not need an additional fill legend.
+figure_4_left <- wrap_plots(list(figure_4_ab[[1]] + labs(tag = "A"),
+  figure_4_ab[[2]] + labs(tag = "B")), ncol = 1, guides = "collect") &
+  theme(legend.position = "bottom", legend.text = element_text(size = 8)) &
+  labs(colour = NULL, shape = NULL, linetype = NULL) &
+  guides(colour = guide_legend(ncol = 3), shape = guide_legend(ncol = 3),
+    linetype = guide_legend(ncol = 3))
+figure_4_middle <- wrap_plots(list(figure_4_c + labs(tag = "C"),
+  figure_4_d + labs(tag = "D")), ncol = 1, guides = "keep") &
+  theme(legend.position = "bottom", legend.text = element_text(size = 8)) &
+  guides(colour = guide_legend(nrow = 1), shape = guide_legend(nrow = 1))
+figure_4_right <- wrap_plots(list(figure_4_e + labs(tag = "E"),
+  figure_4_f + labs(tag = "F")), ncol = 1) & theme(legend.position = "none")
+figure_4 <- wrap_plots(list(figure_4_left, figure_4_middle, figure_4_right),
+  nrow = 1, widths = c(1.1, 1.5, 1)) &
+  theme(plot.tag = element_text(size = 16, face = "bold"))
+print(figure_4)
+ggsave(file.path(path_plots, "Figure_4.pdf"), plot = figure_4, width = 15, height = 7)
+```
+
+## Supp fig 20
 
 ## Most highly variable cell types per dataset
 
@@ -2261,7 +2398,7 @@ for (ds in dss) {
 wrap_plots(plot_list) +
   plot_layout(nrow = 4, guides = "collect")
 
-ggsave(file.path(path_plots, "Supp_fig_21_HVCs_per_dataset.pdf"),
+ggsave(file.path(path_plots, "Supp_fig_20_HVCs_per_dataset.pdf"),
        width = 20,
        height = 20)
 ```
@@ -2326,6 +2463,8 @@ if (ncol(bundle_exec_times) == 0L) {
 
 feather_exec_times <- normalize_exec_keys(feather_exec_times)
 bundle_exec_times <- normalize_exec_keys(bundle_exec_times)
+feather_exec_times$timing_source <- "reviewed Feather"
+bundle_exec_times$timing_source <- "selected result bundle"
 
 feather_exec_times[[".execution_union_key"]] <-
   execution_union_key(feather_exec_times)
@@ -2344,6 +2483,9 @@ exec_times <- bind_rows(
   bundle_only %>% dplyr::select(-.execution_union_key)
 ) %>%
   deduplicate_exec_times()
+# Recover missing RAM from the exact selected bundle without replacing the
+# reviewed Feather runtime or mixing up shared-preparation timing identities.
+exec_times <- benchmark_complete_execution_memory(exec_times, bundle_exec_times)
 
 # n_cells per dataset (from the metadata bundles via the dataset loop;
 # display keys).
@@ -2355,9 +2497,12 @@ exec_times$n_cells <- n_cells_lookup[exec_times$dataset]
 exec_times <- exec_times[exec_times$dataset %in% names(n_cells_by_ds), ]
 
 # A report-level total has one shared preparation charge per timing identity.
-# Keep this explicit object available to downstream summaries; method-level
-# plots below continue to use variant-local time_secs.
+# Keep this native accounting object available to downstream summaries;
+# standalone method plots use the separately derived cost copy below.
 exec_time_summary <- summarize_exec_times(exec_times)
+# Plot each pseudobulk method as a standalone run, including its required
+# count aggregation and DESeq2 fit once. Keep global accounting unchanged.
+exec_times_method_cost <- benchmark_method_execution_costs(exec_times, bundle_exec_times)
 
 ```
 
@@ -2384,6 +2529,14 @@ knitr::kable(
 
 ## Supp fig 14: Plot
 
+Pseudobulk display costs include count aggregation, DESeq2 processing and
+variant-local work. Schema-2 rows add the required shared preparation once
+per displayed method; older rows retain their historical inclusive cost.
+Global accounting separately counts shared work only once per timing identity. Peak RAM
+is process high-water RSS and can include allocations from earlier work in
+the same process. Missing log memory is recovered from the exact selected
+validated result bundle, with memory and timing origins retained separately.
+
 ```{r}
 filter_methods <- methods_in_scope(c(
   "ECODA_authors_HR",
@@ -2404,7 +2557,7 @@ filter_methods <- methods_in_scope(c(
 
 
 # --- 1. Clean Data ---
-plot_data <- exec_times %>%
+plot_data <- exec_times_method_cost %>%
   # prepare_pseudobulk_shared is retained in exec_times for global accounting,
   # never as a plotted method variant.
   filter(
@@ -2450,7 +2603,7 @@ line_ends_raw <- line_ends_log %>%
 plot_x_breaks <- c(1e5, 3e5, 1e6)
 plot_y_breaks <- c(1, 10, 100, 1000, 10000)
 
-ggplot(
+supp_fig_14a <- ggplot(
   plot_data,
   aes(x = n_cells, y = time_secs, color = method)
 ) +
@@ -2502,7 +2655,9 @@ ggplot(
   ) +
   theme(legend.position = "none")
 
-ggsave(file.path(path_plots, "Supp_fig_14_benchmark_exec_times.pdf"),
+print(supp_fig_14a)
+ggsave(file.path(path_plots, "Supp_fig_14A_benchmark_exec_times.pdf"),
+       plot = supp_fig_14a,
        width = 6.0,
        height = 3.5, limitsize = FALSE)
 ```
@@ -2541,7 +2696,7 @@ ram_line_ends_raw <- ram_line_ends_log %>%
 ram_x_breaks <- c(1e5, 3e5, 1e6)
 ram_y_breaks <- c(1, 10, 100)
 
-ggplot(
+supp_fig_14b <- ggplot(
   ram_data,
   aes(x = n_cells, y = mem_GB, color = method)
 ) +
@@ -2589,13 +2744,20 @@ ggplot(
   ) +
   scale_y_log10(
     breaks = ram_y_breaks,
-    labels = scales::label_number(accuracy = 1)
+    labels = trans_format("log10", math_format(10^.x))
   ) +
   theme(legend.position = "none")
 
 ggsave(file.path(path_plots, "Supp_fig_14B_benchmark_mem_GB.pdf"),
+       plot = supp_fig_14b,
        width = 6.0,
        height = 3.5, limitsize = FALSE)
+print(supp_fig_14b)
+supp_fig_14 <- wrap_plots(list(supp_fig_14a, supp_fig_14b), nrow = 1) +
+  plot_annotation(tag_levels = "A") &
+  theme(plot.tag = element_text(face = "bold"))
+ggsave(file.path(path_plots, "Supp_fig_14.pdf"), plot = supp_fig_14,
+       width = 12, height = 3.5, limitsize = FALSE)
 ```
 
 # ---------------------------------------------------------------
@@ -2629,9 +2791,9 @@ filter_methods <- methods_in_scope(c(
   "PILOT-GM-VAE_hvg2000"
 ))
 
-build_funky_heatmap(
+figure_2_a <- build_funky_heatmap(
   df_results = df_benchmark,
-  exec_times = exec_times,
+  exec_times = exec_times_method_cost,
   filter_methods = filter_methods,
   method_recode = c(
     "ECODA_authors_HR" = "ECODA",
@@ -2659,8 +2821,7 @@ build_funky_heatmap(
 
 ## Figure 2 B: MDS Bassez
 
-Subtitles use Supp fig 15's complete extended normalization pool, including
-NULL, because this display also includes cell-type frequency.
+The existing method order and layout are retained; score subtitles are omitted.
 
 ```{r}
 ds <- "Bassez"
@@ -2689,20 +2850,30 @@ for (m in names(methods)) {
     labels,
     cluster_score = FALSE,mod_score = FALSE, anosim_score = FALSE,
     coord_equal = TRUE, pointsize = 2,
-    title = if (m == "Freq_highres") "Cell-type\nfrequency (%)" else methods[[m]],
-    separation_score = benchmark_normalized_mean(df_benchmark, ds, m, benchmark_extended_normalization_methods)
+    title = if (m == "Freq_highres") "Cell-type\nfrequency (%)" else methods[[m]]
   ) + labs(color = "Clonal expansion", shape = "Clonal expansion")
-  plot_list[[m]] <- plot_list[[m]] + labs(
-    subtitle = sub(" mean:", "\nmean:", plot_list[[m]]$labels$subtitle, fixed = TRUE)
-  )
 }
 
-wrap_plots(plot_list) +
+figure_2_b <- wrap_plots(plot_list) +
   plot_layout(nrow = 2, guides = "collect")
+print(figure_2_b)
 
 ggsave(file.path(path_plots, "Figure_2_B_MDS_Bassez.pdf"),
+       plot = figure_2_b,
        width = 10,
        height = 5)
+```
+
+### Figure 2: Benchmark summary and Bassez MDS
+
+```{r figure-2-combined, fig.height=12, fig.width=13}
+figure_2 <- wrap_plots(list(
+  wrap_elements(full = figure_2_a) + labs(tag = "A"),
+  wrap_elements(full = figure_2_b) + labs(tag = "B")
+), ncol = 1, heights = c(6.5, 5)) &
+  theme(plot.tag = element_text(size = 16, face = "bold"))
+print(figure_2)
+ggsave(file.path(path_plots, "Figure_2.pdf"), plot = figure_2, width = 13, height = 12)
 ```
 
 ## Main plot (rank-based)
@@ -2736,7 +2907,7 @@ filter_methods <- methods_in_scope(c(
 ))
 
 build_funky_heatmap(
-  df_results = df_benchmark, exec_times = exec_times,
+  df_results = df_benchmark, exec_times = exec_times_method_cost,
   filter_methods = filter_methods, method_recode = method_label_map_main,
   dataset_recode = dataset_display_map, score_set = benchmark_metrics,
   expected_grid = benchmark_expected_grid, include_rank = TRUE,
@@ -2759,10 +2930,7 @@ filter_methods <- methods_in_scope(c(
   "ECODA_seuratres_2",
   "Freq_highres",
   "Pseudobulk_hvg2000",
-  "Pseudobulk_hvg2000_bl",
   "Pseudobulk_CT_HR_hvg2000",
-  "Pseudobulk_CT_HR_hvg500",
-  "Pseudobulk_CT_LR_hvg500",
   "Pseudobulk_CT_LR_hvg2000",
   "MOFA_hvg2000_factors15",
   "scITD_hvg2000_factors5",
@@ -2777,21 +2945,19 @@ filter_methods <- methods_in_scope(c(
 
 build_funky_heatmap(
   df_results = df_benchmark,
-  exec_times = exec_times,
+  exec_times = exec_times_method_cost,
   filter_methods = filter_methods,
   method_recode = c(
     "ECODA_authors_HR" = "ECODA_authors",
     "ECODA_authors_HR_NULL" = "Shuffled_baseline",
-    "ECODA_HiTME_HR_layer2" = "ECODA_automated_HiTME",
+    "ECODA_HiTME_HR_layer2" = "ECODA_HiTME",
     "ECODA_HiTME_HR_layer3" = "ECODA_automated_(HiTME_layer3)",
-    "ECODA_scATOMIC_HR" = "ECODA_automated_scATOMIC",
+    "ECODA_scATOMIC_HR" = "ECODA_scATOMIC",
     "ECODA_seuratres_2" = "ECODA_Leiden_res_2",
     "Pseudobulk_10_PCA_dims" = "Pseudobulk_PCA",
     "Pseudobulk_hvg2000" = "Pseudobulk",
-    "Pseudobulk_hvg2000_bl" = "Pseudobulk_BL",
     "Pseudobulk_CT_HR_hvg2000" = "Pseudobulk_CT_HR",
-    "Pseudobulk_CT_LR_hvg500" = "Pseudobulk_CT_LR_hvg500",
-    "Pseudobulk_CT_LR_hvg2000" = "Pseudobulk_CT_LR_hvg2000",
+    "Pseudobulk_CT_LR_hvg2000" = "Pseudobulk_CT_LR",
     "Freq_highres" = "CellType_Frequency%",
     "MOFA_hvg2000_factors15" = "MOFA",
     "scITD_hvg2000_factors5" = "scITD",
@@ -2868,7 +3034,7 @@ filter_methods <- methods_in_scope(c(
 
 build_funky_heatmap(
   df_results = df_benchmark,
-  exec_times = exec_times,
+  exec_times = exec_times_method_cost,
   filter_methods = filter_methods,
   method_recode = c(
     "ECODA_authors_HR" = "ECODA_authors",
@@ -2943,7 +3109,7 @@ benchmark_method_recode <- c(
 )
 clean_data <- prepare_benchmark_data(
   df_results = df_benchmark,
-  exec_times = exec_times,
+  exec_times = exec_times_method_cost,
   filter_methods = filter_methods,
   method_recode = benchmark_method_recode,
   dataset_recode = dataset_display_map,
@@ -3392,6 +3558,14 @@ ggsave(
   width = 2.5,
   height = 3.5
 )
+# Explicit diagnostic exception to aggregate min–max scaling: original metric
+# values are averaged per dataset. Keep p1 and its ANOSIM export unchanged.
+transformation_unscaled_means <- benchmark_unscaled_transformation_means(df_normalization)
+p_transformation_unscaled_mean <- (p1 %+% transformation_unscaled_means) +
+  labs(y = "Separation score\n(mean, unscaled)") +
+  theme(axis.title.y = element_text(size = 10))
+ggsave(file.path(path_plots, "Supp_fig_16A_transformations_mean_unscaled.pdf"),
+  plot = p_transformation_unscaled_mean, width = 3.5, height = 3.5)
 transformation_companion_scores <- df_normalization %>% mutate(method = as.character(trans_method))
 transformation_companions <- lapply(setdiff(evaluation_metrics(), "anosim_score"), function(metric) {
   panel <- plot_benchmark_raw_metric(transformation_companion_scores, metric,
@@ -3599,56 +3773,55 @@ df_zeroimp <- benchmark_zeroimp_scores(benchmark_release, names(datasets))
 
 df_results_list[["Zero_imputation"]] <- df_zeroimp
 
-df_zeroimp_anosim <- df_zeroimp %>%
-  filter(score == "anosim_score") %>%
-  group_by(method) %>%
-  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value)))
+zeroimp_counts_order <- c("0.5", "2/3", "1", "5", "10", "20", "50", "100", "200")
+zeroimp_order <- c(paste0("counts_all_", zeroimp_counts_order),
+  paste0("counts_zeros_", zeroimp_counts_order),
+  paste0("multLN_", c("0.001", "0.01", "0.1", "1", "2", "5"), "%"))
+zeroimp_companion_scores <- df_zeroimp %>% filter(method %in% zeroimp_order) %>%
+  mutate(method = factor(method, levels = zeroimp_order),
+    family = factor(sub("_(?:[^_]+)$", "", as.character(method), perl = TRUE),
+      levels = c("counts_all", "counts_zeros", "multLN")))
+stopifnot(setequal(unique(as.character(zeroimp_companion_scores$method)), zeroimp_order),
+  !anyNA(zeroimp_companion_scores$family))
+benchmark_validate_screen_scores(zeroimp_companion_scores)
 
-df_zeroimp_anosim <- df_zeroimp_anosim %>%
-  arrange(desc(mean))
-
-df_zeroimp_anosim$method <- factor(df_zeroimp_anosim$method, levels = df_zeroimp_anosim$method)
-df_zeroimp$method <- factor(df_zeroimp$method, levels = df_zeroimp_anosim$method)
-
-
-
-p2 <- df_zeroimp %>%
-  filter(score == "anosim_score") %>%
-  filter(method != "asinsqrt") %>%
-  filter(!grepl("perc", method)) %>%
-  
-  ggplot(aes(x = method, y = value)) +
-  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
-  stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
-  geom_point(position = "identity", alpha = 0.6, size = 0.8) +
-  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
-  stat_compare_means(
-    ref.group = "counts_all_0.5",
-    method = "wilcox.test",
-    paired = TRUE,
-    # angle = 25,
-    size = 3,
-    aes(label = after_stat(p.signif))
-    # aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
-  ) +
-  labs(x = "", y = "Separation score (ANOSIM)") +
-  theme_classic2() +
-  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+zeroimp_metric_panel <- function(metric) {
+  rows <- zeroimp_companion_scores %>% filter(score == metric)
+  reference <- rows[rows$method == "counts_all_0.5", c("dataset", "value")]
+  # Pair explicitly by dataset before splitting the display into recipe facets.
+  tests <- bind_rows(lapply(setdiff(zeroimp_order, "counts_all_0.5"), function(method_key) {
+    values <- rows[as.character(rows$method) == method_key, ]
+    baseline <- reference$value[match(values$dataset, reference$dataset)]
+    stopifnot(length(baseline) == nrow(reference), !anyNA(baseline),
+      !anyDuplicated(values$dataset), setequal(values$dataset, reference$dataset))
+    p_value <- if (all(values$value == baseline)) 1 else
+      suppressWarnings(stats::wilcox.test(values$value, baseline, paired = TRUE)$p.value)
+    stopifnot(is.finite(p_value))
+    data.frame(method = method_key, family = as.character(values$family[[1]]),
+      label = as.character(cut(p_value, c(-Inf, 0.0001, 0.001, 0.01, 0.05, Inf),
+        labels = c("****", "***", "**", "*", "ns"))))
+  }))
+  tests$y <- max(rows$value) + 0.08 * max(diff(range(rows$value)), 0.1)
+  plot_benchmark_raw_metric(zeroimp_companion_scores, metric, method_order = zeroimp_order) +
+    facet_grid(cols = vars(family), scales = "free_x", space = "free_x") +
+    scale_x_discrete(labels = function(x) sub("^(counts_all_|counts_zeros_|multLN_)", "", x)) +
+    geom_text(data = tests, aes(x = method, y = y, label = label), inherit.aes = FALSE, size = 3) +
+    labs(y = paste0("Separation score (", score_label_map[[metric]], ")")) +
+    theme(legend.position = "bottom")
+}
+p2 <- zeroimp_metric_panel("anosim_score")
 print(p2)
 ggsave(file.path(path_plots, "Supp_fig_16B_zero_replacement_anosim.pdf"),
-       width = 7.5,
-       height = 4)
+       plot = p2, width = 12, height = 5)
 
-zeroimp_companion_scores <- df_zeroimp %>% filter(method != "asinsqrt", !grepl("perc", method))
 zeroimp_companions <- lapply(setdiff(evaluation_metrics(), "anosim_score"), function(metric) {
-  panel <- plot_benchmark_raw_metric(zeroimp_companion_scores, metric,
-    method_order = levels(droplevels(zeroimp_companion_scores$method)), reference = "counts_all_0.5")
+  panel <- zeroimp_metric_panel(metric)
   ggsave(file.path(path_plots, paste0("Supp_fig_16B_zero_replacement_", metric, ".pdf")),
-    plot = panel, width = 7.5, height = 4)
+    plot = panel, width = 12, height = 5)
   panel
 })
 ggsave(file.path(path_plots, "Supp_fig_16B_zero_replacement_metric_companions.pdf"),
-  plot = wrap_plots(zeroimp_companions, ncol = 2, guides = "collect"), width = 15, height = 8)
+  plot = wrap_plots(zeroimp_companions, ncol = 2, guides = "collect"), width = 24, height = 10)
 
 
 

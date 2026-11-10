@@ -2414,7 +2414,8 @@ score_batch_release <- function(control, score_fn = calc_sep_score) {
   ranked
 }
 
-plot_batch_release_mds <- function(result, batch_cols, method_labels, score_fn = calc_sep_score) {
+plot_batch_release_mds <- function(result, batch_cols, method_labels, score_fn = calc_sep_score,
+                                   individual_metrics = FALSE) {
   methods <- setdiff(names(method_labels), "ECODA_authors_HR_NULL")
   grouping <- result$evaluations
   names(grouping) <- ifelse(names(grouping) == result$primary_evaluation, "biological", paste0("evaluation_", names(grouping)))
@@ -2434,19 +2435,22 @@ plot_batch_release_mds <- function(result, batch_cols, method_labels, score_fn =
       axis <- if (name == "biological") result$primary_evaluation else sub("^evaluation_", "", name)
       if (axis %in% names(result$evaluations)) {
         table <- result$evaluated[[methods[i]]]$scores
-        values <- table$value[table$evaluation_id == axis]
+        selected <- table[table$evaluation_id == axis, , drop = FALSE]
+        values <- selected$value[match(evaluation_metrics(), selected$metric)]
         entry <- result$entry_means[result$entry_means$evaluation_id == axis &
                                      result$entry_means$method_key == methods[i], , drop = FALSE]
         if (nrow(entry) != 1L || !is.finite(entry$mean_score)) stop("Missing scaled MDS evaluation mean")
-        subtitle <- sprintf("ANOSIM (raw): %.2f\nScaled mean (five metrics): %.2f", values[1], entry$mean_score)
+        subtitle <- if (individual_metrics) .batch_metric_subtitle(values) else
+          sprintf("ANOSIM (raw): %.2f\nScaled mean (five metrics): %.2f", values[1], entry$mean_score)
       } else {
         labels <- .batch_values(grouping[[name]]); keep <- !is.na(labels)
         groups <- length(unique(labels[keep]))
         if (sum(keep) > groups && groups >= 2L) {
           values <- unlist(score_fn(as.dist(as.matrix(result$methods[[methods[i]]]$dist_mat)[keep, keep]),
                                     labels[keep])[evaluation_metrics()])
-          subtitle <- sprintf("Raw ANOSIM: %.2f; Modularity: %.2f\nRaw ARI: %.2f; Silhouette: %.2f\nRaw LISI separation: %.2f",
-                              values[1], values[2], values[3], values[4], values[5])
+          subtitle <- if (individual_metrics) .batch_metric_subtitle(values) else
+            sprintf("Raw ANOSIM: %.2f; Modularity: %.2f\nRaw ARI: %.2f; Silhouette: %.2f\nRaw LISI separation: %.2f",
+                    values[1], values[2], values[3], values[4], values[5])
         } else {
           reason <- if (groups == 1L) "one level" else if (groups == 0L) "no recorded levels" else "no within-level replication"
           subtitle <- paste0("Technical labels: unscorable (", reason, ")")
@@ -2459,14 +2463,31 @@ plot_batch_release_mds <- function(result, batch_cols, method_labels, score_fn =
   setNames(panels, names(grouping))
 }
 
-plot_batch_release_comparison <- function(uncorrected, corrected, batch_cols, method_labels, score_fn = calc_sep_score) {
+.batch_metric_subtitle <- function(values) {
+  if (length(values) != 5L || any(!is.finite(values))) stop("MDS requires five finite individual metrics")
+  sprintf("ANOSIM: %.2f; Modularity (knn3): %.2f\nARI: %.2f; Silhouette: %.2f\nLISI separation: %.2f",
+          values[1], values[2], values[3], values[4], values[5])
+}
+
+.batch_release_pairing <- function(uncorrected, corrected, method_labels) {
   if (!identical(uncorrected$dataset, corrected$dataset) || !identical(uncorrected$sample_ids, corrected$sample_ids) ||
       !identical(uncorrected$evaluations, corrected$evaluations)) stop("Paired batch release cohorts/evaluations must match exactly")
-  mapping <- setNames(names(method_labels), names(method_labels))
-  mapping[c("ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma")] <- "ECODA_seuratres_2"
+  methods <- setdiff(names(method_labels), "ECODA_authors_HR_NULL")
+  if (anyNA(method_labels) || anyDuplicated(names(method_labels)) || !length(methods))
+    stop("Paired batch methods require unique named display labels")
+  mapping <- setNames(methods, methods)
+  mapping[intersect(names(mapping), c("ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma"))] <- "ECODA_seuratres_2"
+  if (!all(names(mapping) %in% names(corrected$methods)) || !all(mapping %in% names(uncorrected$methods)))
+    stop("Missing method endpoint in paired batch release")
+  mapping
+}
+
+plot_batch_release_comparison <- function(uncorrected, corrected, batch_cols, method_labels, score_fn = calc_sep_score) {
+  mapping <- .batch_release_pairing(uncorrected, corrected, method_labels)
+  method_labels <- method_labels[names(mapping)]
   left_labels <- method_labels[!duplicated(mapping)]; names(left_labels) <- unname(mapping[!duplicated(mapping)])
-  left <- plot_batch_release_mds(uncorrected, batch_cols, left_labels, score_fn)
-  right <- plot_batch_release_mds(corrected, batch_cols, method_labels, score_fn)
+  left <- plot_batch_release_mds(uncorrected, batch_cols, left_labels, score_fn, individual_metrics = TRUE)
+  right <- plot_batch_release_mds(corrected, batch_cols, method_labels, score_fn, individual_metrics = TRUE)
   left_methods <- setdiff(names(left_labels), "ECODA_authors_HR_NULL")
   right_methods <- setdiff(names(method_labels), "ECODA_authors_HR_NULL")
   wrap_method_title <- function(label) {
@@ -2484,6 +2505,102 @@ plot_batch_release_comparison <- function(uncorrected, corrected, batch_cols, me
     patchwork::wrap_plots(plots, ncol = 2, widths = c(1, 1), guides = "collect") + patchwork::plot_annotation(title = corrected$dataset, subtitle = group)
   })
   setNames(panels, names(right))
+}
+
+# Compact paired scores only: release metadata/distances stay cohort-local.
+batch_release_arrow_scores <- function(uncorrected, corrected, batch_cols, method_labels,
+                                       score_fn = calc_sep_score) {
+  mapping <- .batch_release_pairing(uncorrected, corrected, method_labels)
+  columns <- unlist(batch_cols, use.names = FALSE)
+  if (!length(columns) || !all(columns %in% names(uncorrected$metadata)) ||
+      !all(columns %in% names(corrected$metadata))) stop("Arrow plots require configured batch metadata")
+  for (column in columns) {
+    left <- .batch_values(uncorrected$metadata[[column]])
+    right <- .batch_values(corrected$metadata[[column]])
+    if (anyNA(left) || !identical(left, right)) stop("Paired batch labels must be complete and identical")
+  }
+  varying <- columns[vapply(columns, function(column)
+    length(unique(.batch_values(corrected$metadata[[column]]))) > 1L, logical(1))]
+  if (length(varying) != 1L) stop("Arrow plots require exactly one nonconstant configured batch column")
+  batch_column <- varying[[1L]]
+  # Descriptive rescoring must not alter the resident plotting session's RNG.
+  had_rng <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  if (had_rng) saved_rng <- get(".Random.seed", envir = .GlobalEnv)
+  on.exit({
+    if (had_rng) assign(".Random.seed", saved_rng, envir = .GlobalEnv)
+    else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) rm(".Random.seed", envir = .GlobalEnv)
+  }, add = TRUE)
+  metrics <- evaluation_metrics()
+  batch_values <- function(result, methods) {
+    setNames(lapply(methods, function(method) {
+      distance <- evaluation_distance(result$methods[[method]]$dist_mat)
+      if (!identical(attr(distance, "Labels"), result$sample_ids)) stop("Arrow distance/sample order mismatch")
+      values <- unlist(score_fn(distance, result$metadata[[batch_column]])[metrics])
+      if (length(values) != length(metrics) || any(!is.finite(values)))
+        stop("Arrow plots require five finite batch separation scores")
+      unname(values)
+    }), methods)
+  }
+  left_batch <- batch_values(uncorrected, unique(unname(mapping)))
+  right_batch <- batch_values(corrected, names(mapping))
+  biological_values <- function(result, method, axis) {
+    table <- result$evaluated[[method]]$scores
+    table <- table[table$evaluation_id == axis, , drop = FALSE]
+    if (nrow(table) != length(metrics) || anyDuplicated(table$metric) || !setequal(table$metric, metrics))
+      stop("Arrow biological endpoint requires an exact five-metric grid")
+    values <- table$value[match(metrics, table$metric)]
+    if (any(!is.finite(values))) stop("Nonfinite biological arrow endpoint")
+    values
+  }
+  rows <- lapply(names(corrected$evaluations), function(axis) {
+    do.call(rbind, lapply(names(mapping), function(method) {
+      left_method <- unname(mapping[[method]])
+      data.frame(dataset = corrected$dataset, evaluation_id = axis,
+        batch_column = batch_column, method_key = method, uncorrected_method_key = left_method,
+        method_label = unname(method_labels[[method]]), metric = metrics,
+        biological_uncorrected = biological_values(uncorrected, left_method, axis),
+        biological_corrected = biological_values(corrected, method, axis),
+        batch_uncorrected = left_batch[[left_method]], batch_corrected = right_batch[[method]],
+        uncorrected_path = uncorrected$methods[[left_method]]$path,
+        corrected_path = corrected$methods[[method]]$path, stringsAsFactors = FALSE)
+    }))
+  })
+  result <- do.call(rbind, rows)
+  rownames(result) <- NULL
+  result
+}
+
+plot_batch_release_arrows <- function(scores, metric, method_labels) {
+  if (!metric %in% evaluation_metrics()) stop("Unknown arrow separation metric")
+  data <- scores[scores$metric == metric, , drop = FALSE]
+  keys <- data[c("dataset", "evaluation_id", "method_key")]
+  endpoints <- c("biological_uncorrected", "biological_corrected", "batch_uncorrected", "batch_corrected")
+  if (!nrow(data) || anyDuplicated(keys) || any(!is.finite(as.matrix(data[endpoints]))) ||
+      any(data$method_key == "ECODA_authors_HR_NULL")) stop("Invalid paired arrow score table")
+  methods <- setdiff(names(method_labels), "ECODA_authors_HR_NULL")
+  if (!setequal(unique(data$method_key), methods)) stop("Arrow method labels do not match selected methods")
+  data$method <- factor(data$method_key, levels = methods, labels = unname(method_labels[methods]))
+  entry <- paste(data$dataset, data$evaluation_id, sep = " / ")
+  data$entry <- factor(entry, levels = unique(entry))
+  points <- rbind(
+    transform(data, biological = biological_uncorrected, batch = batch_uncorrected, state = "Uncorrected"),
+    transform(data, biological = biological_corrected, batch = batch_corrected, state = "Corrected"))
+  label <- c(anosim_score = "ANOSIM", mod_knn3_score = "Modularity (knn3)",
+    cluster_score = "ARI", sil_score = "Silhouette", lisi_score = "LISI")[[metric]]
+  ggplot2::ggplot(data, ggplot2::aes(colour = method)) +
+    ggplot2::geom_segment(ggplot2::aes(x = biological_uncorrected, y = batch_uncorrected,
+      xend = biological_corrected, yend = batch_corrected), linewidth = .5,
+      arrow = grid::arrow(length = grid::unit(2, "mm")), show.legend = FALSE) +
+    ggplot2::geom_point(data = points, ggplot2::aes(x = biological, y = batch, shape = state), size = 2) +
+    ggplot2::facet_wrap(~entry, ncol = 3) +
+    ggplot2::scale_shape_manual(values = c(Uncorrected = 1, Corrected = 16)) +
+    ggplot2::scale_x_continuous(breaks = scales::breaks_pretty(n = 4), labels = scales::label_number(accuracy = .01)) +
+    ggplot2::scale_y_continuous(breaks = scales::breaks_pretty(n = 4), labels = scales::label_number(accuracy = .01)) +
+    ggplot2::labs(x = paste0("Biological separation score (", label, ")"),
+      y = paste0("Batch separation score (", label, ")"), colour = "Method", shape = NULL) +
+    ggplot2::theme_bw(base_size = 10) +
+    ggplot2::theme(legend.position = "bottom", strip.text = ggplot2::element_text(size = 9)) +
+    ggplot2::guides(colour = ggplot2::guide_legend(nrow = 2, byrow = TRUE))
 }
 
 write_batch_release_artifact <- function(value, path, csv = FALSE) {

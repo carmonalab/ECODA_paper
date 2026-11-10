@@ -575,6 +575,28 @@ benchmark_transformation_scores <- function(release, datasets) {
   benchmark_validate_screen_scores(do.call(rbind, frames))
 }
 
+# Diagnostic only: average the five original metric values within each
+# dataset/transformation, without changing the canonical scaled aggregates.
+benchmark_unscaled_transformation_means <- function(scores) {
+  metrics <- evaluation_metrics()
+  required <- c("dataset", "trans_method", "score", "value")
+  if (!all(required %in% names(scores))) stop("Missing transformation mean columns")
+  scores <- scores[scores$score %in% metrics, required, drop = FALSE]
+  if (!nrow(scores) || anyNA(scores) || any(!is.finite(scores$value)) ||
+      anyDuplicated(scores[c("dataset", "trans_method", "score")]))
+    stop("Transformation mean requires unique finite five-metric rows")
+  datasets <- sort(unique(scores$dataset))
+  methods <- unique(as.character(scores$trans_method))
+  for (method in methods) for (dataset in datasets) {
+    rows <- scores$dataset == dataset & scores$trans_method == method
+    if (!setequal(scores$score[rows], metrics))
+      stop("Incomplete transformation five-metric grid: ", dataset, "/", method)
+  }
+  result <- stats::aggregate(value ~ dataset + trans_method, scores, mean)
+  # Paired tests must see the same dataset order within every method.
+  result[order(match(result$trans_method, methods), result$dataset), , drop = FALSE]
+}
+
 # Derived-run loading
 # Strict loader for local, run-owned derived analyses.  A derived RDS is never
 # trusted from its filename alone: the completed run record, source manifest,
@@ -2329,6 +2351,47 @@ execution_union_key <- function(df) {
     }
   }
   key
+}
+
+# A reviewed timing log may predate memory logging. Preserve its runtime but
+# recover absent memory from the exact selected dataset/method bundle.
+benchmark_complete_execution_memory <- function(data, bundle_rows) {
+  bundle_rows <- deduplicate_exec_times(bundle_rows)
+  index <- match(execution_union_key(data), execution_union_key(bundle_rows))
+  memory <- bundle_rows$mem_GB[index]
+  fill <- is.na(data$mem_GB) & is.finite(memory) & memory > 0
+  data$memory_source <- data$timing_source
+  data$mem_GB[fill] <- memory[fill]
+  data$memory_source[fill] <- "selected result bundle"
+  data
+}
+
+# Per-method display costs include the one shared preparation needed to run
+# that method alone. This copy must never replace global shared-once totals.
+benchmark_method_execution_costs <- function(data, bundle_rows) {
+  data <- data[!.execution_is_shared_timing_method(data$method), , drop = FALSE]
+  bundle_rows <- deduplicate_exec_times(bundle_rows)
+  index <- match(execution_union_key(data), execution_union_key(bundle_rows))
+  schema2 <- .execution_schema2_mask(bundle_rows)[index]
+  take <- grepl("^Pseudobulk", data$method) & !is.na(schema2) & schema2
+  data$cost_accounting <- "recorded method cost"
+  if (any(take)) {
+    selected <- bundle_rows[index[take], , drop = FALSE]
+    data$time_secs[take] <- selected$shared_time_secs + selected$variant_time_secs
+    data$cost_accounting[take] <- "standalone shared + variant"
+    # Peak RSS for a standalone method includes its required preparation.
+    shared_peak <- selected$shared_mem_GB
+    previous_peak <- data$mem_GB[take]
+    use_shared <- is.finite(shared_peak) & (is.na(previous_peak) | shared_peak > previous_peak)
+    positions <- which(take)[use_shared]
+    data$mem_GB[positions] <- shared_peak[use_shared]
+    data$memory_source[positions] <- "selected shared preparation bundle"
+    data$timing_source[take] <- "selected shared + variant bundle"
+  }
+  # Schema 2 explicitly means variant-local time_secs to generic timing
+  # helpers. The display copy has a different, explicitly labeled meaning.
+  data$timing_schema <- NULL
+  data
 }
 
 # Execution-time and memory plots

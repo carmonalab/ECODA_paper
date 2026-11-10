@@ -133,6 +133,46 @@ for (i in seq_len(16L)) {
 }
 stopifnot(gsub("\n", "", sub("\nCorrected$", "", pairs$biological[[4]]$labels$title)) ==
             corrected_labels[["ecoda_unsupervised_harmony"]])
+for (group in c("biological", "evaluation_tissue", "batch_suspension_type")) {
+  for (i in seq_len(16L)) {
+    subtitle <- pairs[[group]][[i]]$labels$subtitle
+    stopifnot(!grepl("[Rr]aw|Scaled mean", subtitle),
+      all(vapply(c("ANOSIM:", "Modularity (knn3):", "ARI:", "Silhouette:", "LISI separation:"),
+        function(label) grepl(label, subtitle, fixed = TRUE), logical(1))))
+  }
+}
+# Score exactly one varying configured batch axis; constants remain metadata.
+unc$metadata$constant <- corr$metadata$constant <- "one assay"
+set.seed(71); rng <- .Random.seed
+arrow_rows <- batch_release_arrow_scores(unc, corr, c("constant", "suspension_type"), corrected_labels, scorer)
+stopifnot(identical(rng, .Random.seed), nrow(arrow_rows) == 80L,
+  identical(unique(arrow_rows$evaluation_id), c("condition", "tissue")),
+  identical(unique(arrow_rows$batch_column), "suspension_type"),
+  !any(arrow_rows$method_key == "ECODA_authors_HR_NULL"),
+  all(arrow_rows$biological_uncorrected == rep(c(.2, .3, .4, .5, .6), 16)))
+harmony_rows <- arrow_rows[arrow_rows$method_key %in%
+  c("ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma"), ]
+stopifnot(all(harmony_rows$uncorrected_method_key == "ECODA_seuratres_2"))
+plot_rows <- transform(arrow_rows, biological_corrected = biological_corrected + .01,
+  batch_corrected = batch_corrected + .02)
+arrow_plot <- plot_batch_release_arrows(plot_rows, "anosim_score", corrected_labels)
+arrow_build <- ggplot_build(arrow_plot)
+stopifnot(nrow(arrow_build$data[[1]]) == 16L, nrow(arrow_build$data[[2]]) == 32L,
+  length(unique(arrow_build$data[[1]]$PANEL)) == 2L,
+  all(arrow_build$data[[1]]$x == .2), all(abs(arrow_build$data[[1]]$xend - .21) < 1e-12),
+  all(arrow_build$data[[1]]$y == .2), all(abs(arrow_build$data[[1]]$yend - .22) < 1e-12))
+bad <- corr; bad$metadata$suspension_type[1] <- NA
+fail(batch_release_arrow_scores(unc, bad, "suspension_type", corrected_labels, scorer))
+bad <- corr; bad$metadata$suspension_type[1] <- "unexpected"
+fail(batch_release_arrow_scores(unc, bad, "suspension_type", corrected_labels, scorer))
+fail(batch_release_arrow_scores(unc, corr, "constant", corrected_labels, scorer))
+unc$metadata$second <- corr$metadata$second <- rep(c("x", "y"), 6)
+fail(batch_release_arrow_scores(unc, corr, c("second", "suspension_type"), corrected_labels, scorer))
+bad <- corr; bad$evaluated$ECODA_authors_HR$scores <- bad$evaluated$ECODA_authors_HR$scores[-1, ]
+fail(batch_release_arrow_scores(unc, bad, "suspension_type", corrected_labels, scorer))
+bad <- corr; bad$sample_ids <- rev(bad$sample_ids)
+fail(batch_release_arrow_scores(unc, bad, "suspension_type", corrected_labels, scorer))
+fail(plot_batch_release_arrows(rbind(arrow_rows, arrow_rows[1, ]), "anosim_score", corrected_labels))
 # New method and metadata absence never invokes a historical manifest fallback.
 bad <- control; bad$ledger <- bad$ledger[-1, ]; saveRDS(bad, control_path)
 fail(read_batch_release_control(control_path, md5(control_path), "batch_effect_uncorrected"))

@@ -58,9 +58,9 @@ analysis_output_root <- file.path(getwd(), "data", "batch_effect", view, control
 
 # Five-metric funkyheatmap and metric panels
 
-Biological MDS subtitles show the same scaled five-metric entry means, including
-NULL in the comparison ranges. Technical colourings show individual raw metrics
-or an explicit unscorable status for constant axes.
+Paired MDS subtitles show all five individual unscaled separation metrics for
+biological and technical colourings. Constant technical axes have an explicit
+unscorable status. Heatmap normalization remains unchanged.
 
 ANOSIM, adjusted modularity (`k=3`), the mean Ward/PAM ARI, Silhouette and LISI
 separation all enter the arithmetic mean equally. LISI is already higher-is-better
@@ -91,6 +91,29 @@ for (metric in evaluation_metrics()) {
 }
 ```
 
+# Six-cohort heatmap excluding Kidney KPMP and Lung
+
+This additional export retains the original corrected method pool, including
+NULL and both corrected ECODA arms. Dataset cells, metric means, overall means
+and row ranking are recomputed from the six retained cohorts only. The original
+eight-cohort heatmap is preserved.
+
+```{r six-cohort-heatmap, message=FALSE, warning=FALSE}
+subset_datasets <- setdiff(batch_datasets, c("Kidney_KPMP_full", "Lung"))
+subset_methods <- batch_release_method_keys(view)
+subset_plot_data <- plot_data[plot_data$dataset %in% subset_datasets &
+  plot_data$method_key %in% subset_methods, , drop = FALSE]
+subset_expected_grid <- control$expected_grid[control$expected_grid$dataset %in% subset_datasets &
+  control$expected_grid$method_key %in% subset_methods, , drop = FALSE]
+stopifnot(length(subset_datasets) == 6L, nrow(subset_plot_data) == 270L)
+build_funky_heatmap(subset_plot_data, exec_times = NULL,
+  filter_methods = subset_methods, method_recode = method_label_map_main,
+  dataset_recode = setNames(subset_datasets, subset_datasets), score_set = evaluation_metrics(),
+  output_file = "batch_effect_corrected_funkyheatmap_without_Kidney_KPMP_full_and_Lung.pdf",
+  output_dir = plot_root, plot_width = 14, plot_height = 8, method_width = 9,
+  expected_grid = subset_expected_grid)
+```
+
 # Paired MDS and current-cohort confounding tables
 
 Uncorrected panels are left and corrected panels right. Both corrected Harmony
@@ -111,6 +134,18 @@ for (dataset in batch_datasets) {
     ggsave(file.path(plot_root, paste0(dataset, "_mds", suffix, ".pdf")), panels[[name]], width = 13, height = 24)
     if (name == "evaluation_tissue") ggsave(file.path(plot_root, paste0(dataset, "_mds_region.pdf")), panels[[name]], width = 13, height = 24)
   }
+  # Sex is a descriptive colouring only, never a correction covariate.
+  if (dataset == "Alzheimer") local({
+    sex_rng <- .Random.seed
+    on.exit(assign(".Random.seed", sex_rng, envir = .GlobalEnv))
+    stopifnot("sex" %in% names(left$metadata), "sex" %in% names(right$metadata),
+      !anyNA(left$metadata$sex), !anyNA(right$metadata$sex),
+      identical(as.character(left$metadata$sex), as.character(right$metadata$sex)))
+    sex_panels <- plot_batch_release_comparison(left, right, "sex",
+      method_label_map_main[selected_methods])
+    sex_plot <- (sex_panels[["batch_sex"]] + plot_annotation(subtitle = "Sex")) & labs(colour = "Sex")
+    ggsave(file.path(plot_root, "Alzheimer_mds_sex.pdf"), sex_plot, width = 13, height = 24)
+  })
   for (axis in names(right$evaluations)) {
     stem <- if (axis == right$primary_evaluation) dataset else paste0(dataset, "_", axis)
     write_batch_biology_tables(right$metadata, stem, datasets[[dataset]]$evaluation_labels[[axis]],
@@ -118,6 +153,43 @@ for (dataset in batch_datasets) {
       file.path(analysis_output_root, "bio_vs_batch"), lane = control$release_id)
   }
   rm(left, right, panels)
+}
+```
+
+# Biological-versus-batch correction arrows
+
+Each metric has one nine-panel figure: one panel per cohort/evaluation, with
+Kidney condition and tissue shown separately against `suspension_type`. Only
+the nonconstant configured batch column is scored (Breast uses dissociation
+time, while its constant assay remains metadata). Points show uncorrected and
+corrected states; arrows point toward corrected results. NULL is excluded and
+the two corrected ECODA arms share the same uncorrected baseline.
+
+```{r batch-correction-arrows, message=FALSE, warning=FALSE}
+arrow_tables <- lapply(batch_datasets, function(dataset) {
+  left <- load_batch_release_dataset(uncorrected_control, dataset)
+  right <- load_batch_release_dataset(control, dataset)
+  scores <- batch_release_arrow_scores(left, right, datasets[[dataset]]$batch_col,
+    method_label_map_main[selected_methods])
+  rm(left, right)
+  scores
+})
+arrow_scores <- do.call(rbind, arrow_tables)
+rm(arrow_tables)
+stopifnot(nrow(arrow_scores) == 360L,
+  length(unique(paste(arrow_scores$dataset, arrow_scores$evaluation_id))) == 9L)
+arrow_output_root <- file.path(getwd(), "data", "derived", "publication_figures_20261110",
+  control$release_id, "batch_effect_corrected")
+write_batch_release_artifact(arrow_scores, file.path(arrow_output_root, "correction_arrow_scores.csv"), csv = TRUE)
+write_batch_release_artifact(list(control_md5 = control$control_md5,
+  uncorrected_control_md5 = uncorrected_control$control_md5,
+  scoring_policy = evaluation_scoring_policy(), metrics = evaluation_metrics(),
+  definition = "Individual unscaled biological/batch separation; arrows uncorrected to corrected"),
+  file.path(arrow_output_root, "correction_arrow_provenance.rds"))
+for (metric in evaluation_metrics()) {
+  plot <- plot_batch_release_arrows(arrow_scores, metric, method_label_map_main[selected_methods])
+  ggsave(file.path(plot_root, paste0("batch_effect_corrected_", metric, "_correction_arrows.pdf")),
+    plot, width = 14, height = 11)
 }
 ```
 

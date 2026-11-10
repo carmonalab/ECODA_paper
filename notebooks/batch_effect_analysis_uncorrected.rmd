@@ -85,6 +85,28 @@ for (metric in evaluation_metrics()) {
 }
 ```
 
+# Six-cohort heatmap excluding Kidney KPMP and Lung
+
+This additional export retains the original uncorrected method pool, including
+NULL. Dataset cells, metric means, overall means and row ranking are recomputed
+from the six retained cohorts only. The original eight-cohort heatmap is preserved.
+
+```{r six-cohort-heatmap, message=FALSE, warning=FALSE}
+subset_datasets <- setdiff(batch_datasets, c("Kidney_KPMP_full", "Lung"))
+subset_methods <- batch_release_method_keys(view)
+subset_plot_data <- plot_data[plot_data$dataset %in% subset_datasets &
+  plot_data$method_key %in% subset_methods, , drop = FALSE]
+subset_expected_grid <- control$expected_grid[control$expected_grid$dataset %in% subset_datasets &
+  control$expected_grid$method_key %in% subset_methods, , drop = FALSE]
+stopifnot(length(subset_datasets) == 6L, nrow(subset_plot_data) == 240L)
+build_funky_heatmap(subset_plot_data, exec_times = NULL,
+  filter_methods = subset_methods, method_recode = method_label_map_main,
+  dataset_recode = setNames(subset_datasets, subset_datasets), score_set = evaluation_metrics(),
+  output_file = "batch_effect_uncorrected_final_funkyheatmap_without_Kidney_KPMP_full_and_Lung.pdf",
+  output_dir = plot_root, plot_width = 14, plot_height = 8,
+  expected_grid = subset_expected_grid)
+```
+
 # MDS and current-cohort confounding tables
 
 Each cohort is loaded and released separately. Biological and technical
