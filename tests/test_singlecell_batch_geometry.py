@@ -319,5 +319,24 @@ printf '900001;fixture\\n';exit "${rc}"
             self.assertIn(f"Display: {displayed:,}/{total:,} cells per row ({policy})", text)
             self.assertIn("scores: full-population 50D cellwise means", text)
 
+    def test_small_category_palette_artist_only(self):
+        import ast
+        import inspect
+        import matplotlib
+        import matplotlib.pyplot as plt
+        from matplotlib.figure import Figure
+        tree = ast.parse(inspect.getsource(p.render_main))
+        statements = [n for n in ast.walk(tree) if isinstance(n, ast.Assign) and any(isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name) and t.value.id == "palettes" for t in n.targets)]
+        self.assertEqual(len(statements), 1)
+        code = compile(ast.fix_missing_locations(ast.Module(body=statements, type_ignores=[])), "palette", "exec")
+        context = dict(palettes={}, column="biological_label", levels=["breast cancer", "normal"], plt=plt, matplotlib=matplotlib, hashlib=hashlib)
+        exec(code, context); palette = context["palettes"]["biological_label"]
+        colors = np.asarray([palette[label] for label in context["levels"]])
+        np.testing.assert_array_equal(colors, np.asarray(plt.get_cmap("tab10").colors[:2]))
+        self.assertGreater(np.linalg.norm(colors[0] - colors[1]), .5)
+        fig = Figure(); axes = fig.subplots(2, 1)
+        artists = [ax.scatter([0, 1], [0, 1], c=colors) for ax in axes]
+        np.testing.assert_array_equal(artists[0].get_facecolors(), artists[1].get_facecolors())
+
 
 if __name__ == "__main__": unittest.main()

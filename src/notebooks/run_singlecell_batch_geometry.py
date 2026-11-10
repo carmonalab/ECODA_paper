@@ -523,7 +523,7 @@ def render_main(c, output):
         palettes = {}
         for column in ["Sample", "author_cell_type", "leiden2", "biological_label", "batch_label"]:
             levels = sorted({str(x) for f in frames for x in f[column] if pd.notna(x) and str(x).strip()})
-            palettes[column] = {label: matplotlib.colors.hsv_to_rgb([int(hashlib.sha256((column + "\0" + label).encode()).hexdigest()[:8], 16) / 2**32, .65, .8]).tolist() for label in levels}
+            palettes[column] = {label: list(plt.get_cmap("tab10").colors[k]) if len(levels) <= 10 else matplotlib.colors.hsv_to_rgb([int(hashlib.sha256((column + "\0" + label).encode()).hexdigest()[:8], 16) / 2**32, .65, .8]).tolist() for k, label in enumerate(levels)}
         for kind, coords, columns in [("PCA", ["PC1", "PC2"], ["Sample", "author_cell_type", "biological_label", "batch_label"]),
                                       ("UMAP", ["UMAP1", "UMAP2"], ["Sample", "author_cell_type", "leiden2", "biological_label", "batch_label"])]:
             fig, axes = plt.subplots(2, len(columns), figsize=(5 * len(columns), 16))

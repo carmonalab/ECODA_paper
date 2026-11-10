@@ -131,6 +131,34 @@ The remaining text records the availability audit, scientific contracts and earl
   Scores remain full-population50D means. One focused artist-only test passes;
   no numerical fitting or HPC work was repeated.
 
+### Breast preview delivered and NAS pilot closed —21:10UTC
+
+- At the user's request, the completed BreastCOR row3 was independently
+  inspected through a bounded read-only metadata capture98e5997c. All five
+  outputs have native proofs, PUBLISHED records and OK ownership; source4d2,
+  controlffadd9 and runtime128853 identities match. This completed-row preview
+  does not approve the still-active global bulk gate or trigger terminal
+  accounting. Its original sole waiter23462 remains active.
+- Exactly four small COR display/metric/proof files3958369bytes were mirrored;
+  the approved BreastUNC pilot is reused in place. Local rendering performed
+  zero model fits or scoring calls, displaying all114579cells/33samples.
+- Visual QA caught near-identical biology colors in previewv1. Preserve that
+  failed rendering and its review. A one-line local renderer fix uses tab10
+  for≤10categories, with one focused paired-artist contrast test passing.
+  No scientific worker or active immutable snapshot changed. Fresh previewv2
+  has two visually accepted one-page PDFs, full legends and distinct biology
+  colors under `plots/singlecell_batch_geometry_breast_preview_20261110_v2/`.
+  Root visual review69c5679e records the exact bytes. User received both images
+  and PDF links. Normalized50D mean iMix0.098490→0.189730; cPres0.999650→0.999621.
+- Pilot NASv2 is now closed: native copy and separate verify both exit0,
+ 22files/60241333bytes, receiptMD55f5340ebb6b74d61b741856546463b8d,
+  SHA b30d27e10bd78abbaf76da5feb17154ff3b2e04dd1f5afde4f94e1ff102df357.
+  Root completion reviewf744118e approves the selected allowed-prefix backup;
+  failedNASv1 remains historical evidence. No recopy or new analysis occurred.
+- Completed application source was owner-coordinated, verified against five
+  frozen hashes, committed separatelyeea2862 and pushed. Only unrelated
+  untracked workstation files remain outside this task's checkpoint scope.
+
 The availability audit and earlier expanded options below support the approved pilot. They do not enlarge the current12-figure scope.
 
 ## Responsibility and current boundary
