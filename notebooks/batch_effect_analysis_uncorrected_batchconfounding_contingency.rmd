@@ -380,6 +380,12 @@ extended_candidates <- function(dataset, label_col = datasets[[dataset]]$label_c
 }
 
 .save_plot <- function(plot, path, width = 14, height = 8) {
+  if (basename(path) %in% c("Joanito_extended.pdf", "Alzheimer_extended.pdf", "Lupus_PBMC_extended.pdf"))
+    height <- max(height, 12)
+  if (basename(path) %in% c("Kidney_KPMP_full_extended.pdf", "Kidney_KPMP_full_tissue_extended.pdf")) {
+    height <- max(height, 16)
+    plot <- plot + guides(fill = guide_legend(ncol = 6))
+  }
   ggplot2::ggsave(path, plot = plot, width = width, height = height, units = "in", device = "pdf")
   if (!file.exists(path) || is.na(file.info(path)$size) || file.info(path)$size <= 0) {
     stop("empty plot output: ", path)
@@ -553,7 +559,7 @@ extended_candidates <- function(dataset, label_col = datasets[[dataset]]$label_c
 }
 
 .blank_temporal_plot <- function(title, subtitle) {
-  ggplot() + theme_void() + labs(title = title, subtitle = subtitle)
+  ggplot() + theme_void() + labs(title = title, subtitle = stringr::str_wrap(subtitle, width = 64))
 }
 
 .build_covid_temporal_plots <- function(metadata_info) {
@@ -609,7 +615,7 @@ extended_candidates <- function(dataset, label_col = datasets[[dataset]]$label_c
         sil_score = FALSE,
         anosim_score = TRUE,
         anosim_value = anosim$statistic,
-        digits = 3,
+        digits = 2,
         parallel = parallel_cores
       )
     })
@@ -638,7 +644,7 @@ extended_candidates <- function(dataset, label_col = datasets[[dataset]]$label_c
     geom_line(linewidth = 0.7, na.rm = TRUE) +
     geom_point(size = 2.4, na.rm = TRUE) +
     geom_text(
-      aes(label = ifelse(is.finite(anosim_statistic), sprintf("%.3f", anosim_statistic), "NA")),
+      aes(label = ifelse(is.finite(anosim_statistic), sprintf("%.2f", anosim_statistic), "NA")),
       vjust = -0.8,
       size = 3,
       na.rm = TRUE,
@@ -658,6 +664,13 @@ extended_candidates <- function(dataset, label_col = datasets[[dataset]]$label_c
     ) +
     theme_classic(base_size = 10) +
     theme(legend.position = "bottom")
+  unavailable <- unique(anosim_summary[!is.finite(anosim_summary$anosim_statistic),
+    c("time_bin", "n_samples", "status"), drop = FALSE])
+  if (nrow(unavailable)) anosim_plot <- anosim_plot + geom_text(
+    data = unavailable,
+    aes(x = time_bin, y = 0, label = paste0("Unavailable (n=", n_samples, ")")),
+    inherit.aes = FALSE, colour = "grey40", size = 3, vjust = -0.8
+  )
   if (!any(is.finite(anosim_summary$anosim_statistic)))
     anosim_plot <- .blank_temporal_plot("Covid19_PBMC - ANOSIM by symptom-onset time bin",
       "ANOSIM unavailable for every bin; recorded sample counts/statuses are in the companion CSV")

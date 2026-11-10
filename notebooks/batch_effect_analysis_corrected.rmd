@@ -108,8 +108,8 @@ for (dataset in batch_datasets) {
     method_label_map_main[selected_methods])
   for (name in names(panels)) {
     suffix <- if (name == "biological") "" else paste0("_", name)
-    ggsave(file.path(plot_root, paste0(dataset, "_mds", suffix, ".pdf")), panels[[name]], width = 13, height = 16)
-    if (name == "evaluation_tissue") ggsave(file.path(plot_root, paste0(dataset, "_mds_region.pdf")), panels[[name]], width = 13, height = 16)
+    ggsave(file.path(plot_root, paste0(dataset, "_mds", suffix, ".pdf")), panels[[name]], width = 13, height = 24)
+    if (name == "evaluation_tissue") ggsave(file.path(plot_root, paste0(dataset, "_mds_region.pdf")), panels[[name]], width = 13, height = 24)
   }
   for (axis in names(right$evaluations)) {
     stem <- if (axis == right$primary_evaluation) dataset else paste0(dataset, "_", axis)

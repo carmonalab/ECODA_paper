@@ -107,9 +107,15 @@ for (axis in c("condition", "tissue")) {
   panel <- if (axis == "condition") "biological" else "evaluation_tissue"
   entry <- scaled_unc$entry_means[scaled_unc$entry_means$evaluation_id == axis &
                                  scaled_unc$entry_means$method_key == "ECODA_authors_HR", ]
-  stopifnot(grepl(sprintf("Scaled mean (five metrics): %.3f", entry$mean_score),
+  stopifnot(grepl(sprintf("Scaled mean (five metrics): %.2f", entry$mean_score),
                  scaled_panels[[panel]][[1]]$labels$subtitle, fixed = TRUE))
 }
+stopifnot(!grepl("[0-9]\\.[0-9]{3}", scaled_panels$biological[[1]]$labels$subtitle),
+          !grepl("[0-9]\\.[0-9]{3}", scaled_panels$batch_suspension_type[[1]]$labels$subtitle),
+          identical(scaled_panels$biological[[1]]$data[c("Dim1", "Dim2")],
+                    scaled_panels$batch_suspension_type[[1]]$data[c("Dim1", "Dim2")]))
+technical_lines <- strsplit(scaled_panels$batch_suspension_type[[1]]$labels$subtitle, "\n", fixed = TRUE)[[1]]
+stopifnot(length(technical_lines) == 3L, max(nchar(technical_lines)) <= 42L)
 stopifnot(scaled_unc$entry_means$mean_score[scaled_unc$entry_means$evaluation_id == "condition" &
           scaled_unc$entry_means$method_key == "ECODA_authors_HR"] == 1)
 scaled_unc$metadata$constant <- "one level"
@@ -119,7 +125,14 @@ stopifnot(identical(constant_panels$batch_constant[[1]]$labels$subtitle,
 corrected_labels <- setNames(batch_release_method_keys("batch_effect_corrected"), batch_release_method_keys("batch_effect_corrected"))
 pairs <- plot_batch_release_comparison(unc, corr, right_control$datasets$Kidney_KPMP_full$batch_col, corrected_labels, scorer)
 stopifnot(length(pairs$biological) == 16L,
+          identical(pairs$biological$patches$layout$widths, c(1, 1)),
           identical(pairs$biological[[3]]$data[c("Dim1", "Dim2")], pairs$biological[[5]]$data[c("Dim1", "Dim2")]))
+for (i in seq_len(16L)) {
+  title <- pairs$biological[[i]]$labels$title
+  stopifnot(max(nchar(strsplit(title, "\n", fixed = TRUE)[[1]])) <= 26L)
+}
+stopifnot(gsub("\n", "", sub("\nCorrected$", "", pairs$biological[[4]]$labels$title)) ==
+            corrected_labels[["ecoda_unsupervised_harmony"]])
 # New method and metadata absence never invokes a historical manifest fallback.
 bad <- control; bad$ledger <- bad$ledger[-1, ]; saveRDS(bad, control_path)
 fail(read_batch_release_control(control_path, md5(control_path), "batch_effect_uncorrected"))

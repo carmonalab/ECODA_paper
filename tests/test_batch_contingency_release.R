@@ -12,6 +12,9 @@ run <- function() {
   stopifnot(length(chunks)==6L,!any(grepl('readRDS|feat_mat|legacy_Kidney|input_root',unlist(chunks))))
   e <- new.env(parent=globalenv());sys.source('src/utils/batch_effect_analysis.R',e)
   eval(parse(text=chunks[['metadata-helpers']]),e);eval(parse(text=chunks[['plotting-helpers']]),e)
+  wrapped <- e$.blank_temporal_plot('Unavailable', paste(rep('unavailable',30),collapse=' '))$labels$subtitle
+  stopifnot(length(strsplit(wrapped,'\n',fixed=TRUE)[[1]])>1L,
+    max(nchar(strsplit(wrapped,'\n',fixed=TRUE)[[1]]))<=64L)
   fail <- function(expr)stopifnot(inherits(tryCatch(force(expr),error=identity),'error'))
   ids <- paste0('s',1:12);labels <- c('control','control','mild','severe','mild','severe','mild','severe','mild','severe','mild','severe')
   metadata <- data.frame(Sample=ids,raw_sample=paste0('raw-',ids),severity=labels,batch=rep(c('a','b'),6),check.names=FALSE)
@@ -34,12 +37,17 @@ run <- function() {
   for(mask in bins$masks[1:2])stopifnot(isTRUE(all.equal(as.matrix(dist(features[mask,,drop=FALSE])),as.matrix(loaded$ECODA)[ids[mask],ids[mask]],check.attributes=FALSE)))
   seen <- list();written <- character();e$plot_root<-tempdir();e$n_permutations<-1L;e$parallel_cores<-1L
   e$compute_batch_anosim <- function(dist_mat,grouping,...) {seen[[length(seen)+1L]]<<-dist_mat;list(statistic=.2,p_value=.5,status='ESTIMABLE',warning='')}
-  e$plot_mds <- function(...)ggplot()+theme_void()
-  e$.save_plot <- function(plot,path,...) {written<<-c(written,basename(path));invisible(path)}
+  e$plot_mds <- function(...) {stopifnot(list(...)$digits == 2);ggplot()+theme_void()}
+  saved_plots <- list()
+  e$.save_plot <- function(plot,path,...) {written<<-c(written,basename(path));saved_plots[[basename(path)]]<<-plot;invisible(path)}
   e$write_batch_analysis_table <- function(...)invisible(NULL)
   result <- e$.build_covid_temporal_plots(info)
   stopifnot(length(seen)==4L,length(written)==4L,nrow(result$anosim)==6L,all(result$anosim$status[5:6]=='EMPTY_BIN'),all(is.na(result$anosim$anosim_statistic[5:6])))
   stopifnot(isTRUE(all.equal(as.matrix(seen[[1]]),as.matrix(loaded$ECODA)[ids[1:6],ids[1:6]],check.attributes=FALSE)))
+  summary_plot <- saved_plots[['Covid19_PBMC_time_bins_anosim.pdf']]
+  text <- unlist(lapply(ggplot_build(summary_plot)$data,function(x)if('label'%in%names(x))as.character(x$label)else character()))
+  stopifnot('Unavailable (n=0)'%in%text,all(c('0.20','NA')%in%text),
+    !any(grepl('[0-9]\\.[0-9]{3}',text)),all(result$anosim$anosim_statistic[1:4]==.2))
   missing <- info;missing$metadata[['Sampling day (Days after symptom onset)']]<-NULL;seen<-list();written<-character();result <- e$.build_covid_temporal_plots(missing)
   stopifnot(length(seen)==0L,length(written)==4L,all(result$anosim$status=='MISSING_SAMPLING_DAY'),all(is.na(result$anosim$anosim_statistic)),all(result$bins$n_samples==0L))
   under <- info;under$metadata[['Sampling day (Days after symptom onset)']]<-c(1,2,rep(NA,10));under$metadata$severity<-rep('control',12)

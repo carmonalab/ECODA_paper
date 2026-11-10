@@ -2438,14 +2438,14 @@ plot_batch_release_mds <- function(result, batch_cols, method_labels, score_fn =
         entry <- result$entry_means[result$entry_means$evaluation_id == axis &
                                      result$entry_means$method_key == methods[i], , drop = FALSE]
         if (nrow(entry) != 1L || !is.finite(entry$mean_score)) stop("Missing scaled MDS evaluation mean")
-        subtitle <- sprintf("ANOSIM (raw): %.3f\nScaled mean (five metrics): %.3f", values[1], entry$mean_score)
+        subtitle <- sprintf("ANOSIM (raw): %.2f\nScaled mean (five metrics): %.2f", values[1], entry$mean_score)
       } else {
         labels <- .batch_values(grouping[[name]]); keep <- !is.na(labels)
         groups <- length(unique(labels[keep]))
         if (sum(keep) > groups && groups >= 2L) {
           values <- unlist(score_fn(as.dist(as.matrix(result$methods[[methods[i]]]$dist_mat)[keep, keep]),
                                     labels[keep])[evaluation_metrics()])
-          subtitle <- sprintf("Raw ANOSIM: %.3f; Modularity: %.3f\nRaw ARI: %.3f; Silhouette: %.3f; LISI separation: %.3f",
+          subtitle <- sprintf("Raw ANOSIM: %.2f; Modularity: %.2f\nRaw ARI: %.2f; Silhouette: %.2f\nRaw LISI separation: %.2f",
                               values[1], values[2], values[3], values[4], values[5])
         } else {
           reason <- if (groups == 1L) "one level" else if (groups == 0L) "no recorded levels" else "no within-level replication"
@@ -2469,15 +2469,19 @@ plot_batch_release_comparison <- function(uncorrected, corrected, batch_cols, me
   right <- plot_batch_release_mds(corrected, batch_cols, method_labels, score_fn)
   left_methods <- setdiff(names(left_labels), "ECODA_authors_HR_NULL")
   right_methods <- setdiff(names(method_labels), "ECODA_authors_HR_NULL")
+  wrap_method_title <- function(label) {
+    gsub("_ ", "_", paste(strwrap(gsub("_", "_ ", unname(label), fixed = TRUE), width = 26),
+                         collapse = "\n"), fixed = TRUE)
+  }
   panels <- lapply(names(right), function(group) {
     plots <- unlist(lapply(seq_along(right_methods), function(i) {
       lp <- left[[group]][[match(mapping[right_methods[i]], left_methods)]]
       rp <- right[[group]][[i]]
       limits <- unique(c(levels(lp$data$Cluster), levels(rp$data$Cluster)))
-      list(lp + ggplot2::labs(title = paste(method_labels[right_methods[i]], "Uncorrected", sep = "\n")) + ggplot2::scale_color_discrete(limits = limits, drop = FALSE),
-           rp + ggplot2::labs(title = paste(method_labels[right_methods[i]], "Corrected", sep = "\n")) + ggplot2::scale_color_discrete(limits = limits, drop = FALSE))
+      list(lp + ggplot2::labs(title = paste(wrap_method_title(method_labels[right_methods[i]]), "Uncorrected", sep = "\n")) + ggplot2::scale_color_discrete(limits = limits, drop = FALSE),
+           rp + ggplot2::labs(title = paste(wrap_method_title(method_labels[right_methods[i]]), "Corrected", sep = "\n")) + ggplot2::scale_color_discrete(limits = limits, drop = FALSE))
     }), recursive = FALSE)
-    patchwork::wrap_plots(plots, ncol = 2, guides = "collect") + patchwork::plot_annotation(title = corrected$dataset, subtitle = group)
+    patchwork::wrap_plots(plots, ncol = 2, widths = c(1, 1), guides = "collect") + patchwork::plot_annotation(title = corrected$dataset, subtitle = group)
   })
   setNames(panels, names(right))
 }
