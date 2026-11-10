@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from unittest.mock import patch
 
 import anndata as ad
 import h5py
@@ -27,6 +28,7 @@ if str(ROOT) not in sys.path:
 from src.utils.py.export_h5ad_sample_metadata import (  # noqa: E402
     export,
     read_obs_metadata,
+    write_metadata,
 )
 from src.utils.py.batch_contract import (  # noqa: E402
     BatchContractError,
@@ -719,6 +721,106 @@ def _check_configured_policies() -> None:
             )
 
 
+def _check_both_final_views_and_reuse(root: Path) -> None:
+    """Current-policy checks read only obs; stale valid bytes are never rebuilt."""
+    source = (root / "lupus-majority.h5ad").resolve()
+    columns = {
+        "Sample": ["canonical-a"] * 3 + ["canonical-b"] * 3,
+        "sampleID": ["raw-a"] * 3 + ["raw-b"] * 3,
+        # Scalar biology and carry-through fields retain their first row;
+        # only the approved technical key participates in winner counting.
+        "Status": ["case", "other", "other", "control", "other", "other"],
+        "batch_cov": ["first", "winner", "winner", "b", "b", "other"],
+        "louvain": ["T", "B", "B", "T", "B", "B"],
+    }
+    _write_obs_only_h5ad(source, columns, [f"cell-{i}" for i in range(6)])
+    with h5py.File(source, "a") as handle:
+        handle.create_dataset("X", data=np.ones((6, 2)))
+        handle.create_group("raw").create_dataset("X", data=np.ones((6, 2)))
+        handle.create_group("layers").create_dataset("counts", data=np.ones((6, 2)))
+    config = {"Lupus_PBMC": {
+        "columns": {"sample": "sampleID", "label": "Status", "batch": "batch_cov",
+                    "cell_type_high_res": "louvain"},
+        "batch_metadata_policy": {"sample_aggregation": "majority_v1",
+                                  "majority_keys": ["batch_cov"]},
+        "views": {view: {"output_file_name": source.name} for view in
+                  ("batch_effect_uncorrected", "batch_effect_corrected")},
+    }}
+    config_path = root / "lupus-majority.json"
+    config_path.write_text(json.dumps(config))
+    before_source = source.read_bytes()
+    original_get = h5py.Group.__getitem__
+    accessed = []
+
+    def obs_only(group, key):
+        target = str(key)
+        assert not (group.name == "/" and target.split("/")[0] in {"X", "raw", "layers"}), target
+        accessed.append((group.name, target))
+        return original_get(group, key)
+
+    def reject(call, text):
+        try:
+            call()
+        except ValueError as error:
+            assert text in str(error), str(error)
+        else:
+            raise AssertionError(f"expected {text}")
+
+    with patch.dict(os.environ, {}, clear=True), patch.object(h5py.Group, "__getitem__", obs_only):
+        for batch_pass, variant in (("uncorrected", "final"), ("corrected", "corrected_final")):
+            analysis_root = (root / batch_pass / "batch_effect" / f"{batch_pass}_final").resolve()
+            with patch.dict(os.environ, {"ANALYSIS_PASS": batch_pass, "ANALYSIS_ROOT": str(analysis_root)}):
+                args = argparse.Namespace(config=config_path, dataset="Lupus_PBMC",
+                    view=f"batch_effect_{batch_pass}", analysis_variant=variant,
+                    input_file=source, output=analysis_root / "metadata/Lupus_PBMC_sample_metadata.feather",
+                    chunk_size=2, check=False)
+                export(args)
+                frame = pd.read_feather(args.output)
+                assert frame.Sample.tolist() == ["canonical-a", "canonical-b"]
+                assert frame.batch_cov.tolist() == ["winner", "b"]
+                assert frame.Status.tolist() == ["case", "control"]
+                assert frame.louvain.tolist() == ["T", "T"]
+                healthy = (args.output.read_bytes(), Path(str(args.output) + ".md5").read_bytes())
+                for check in (True, False):
+                    accessed.clear(); args.check = check; export(args)
+                    assert any(group == "/" and key == "obs" for group, key in accessed)
+                    assert (args.output.read_bytes(), Path(str(args.output) + ".md5").read_bytes()) == healthy
+                for stale, field in ((frame.assign(batch_cov=["first", "b"]), "batch_cov"),
+                                     (frame.iloc[::-1].reset_index(drop=True), "Sample")):
+                    write_metadata(stale, args.output)
+                    frozen = (args.output.read_bytes(), Path(str(args.output) + ".md5").read_bytes())
+                    for check in (True, False):
+                        args.check = check
+                        reject(lambda: export(args), f"majority policy differs for '{field}'")
+                        assert (args.output.read_bytes(), Path(str(args.output) + ".md5").read_bytes()) == frozen
+
+        # Non-policy datasets retain the metadata-only/no-H5 reuse fast path.
+        config["Lupus_PBMC"].pop("batch_metadata_policy")
+        config_path.write_text(json.dumps(config))
+        args.analysis_variant = None; args.output = root / "no-policy.feather"; args.check = False
+        export(args)
+        with patch.object(h5py, "File", side_effect=AssertionError("unexpected H5 open")):
+            for check in (True, False):
+                args.check = check; export(args)
+
+        config["Lupus_PBMC"]["batch_metadata_policy"] = {
+            "sample_aggregation": "majority_v1", "majority_keys": ["batch_cov"]}
+        config_path.write_text(json.dumps(config))
+        for suffix, batch_values, message in (
+            ("tie", ["a", "b", "c", "b", "b", "other"], "no unique majority"),
+            ("missing", ["", "winner", "winner", "b", "b", "other"], "missing/blank"),
+        ):
+            bad = root / f"{suffix}.h5ad"
+            _write_obs_only_h5ad(bad, {**columns, "batch_cov": batch_values}, [f"cell-{i}" for i in range(6)])
+            args.input_file = bad; args.output = root / f"{suffix}.feather"; args.check = False
+            reject(lambda: export(args), message)
+            assert not args.output.exists() and not Path(str(args.output) + ".md5").exists()
+        config["Lupus_PBMC"]["batch_metadata_policy"]["majority_keys"] = ["Status"]
+        config_path.write_text(json.dumps(config))
+        reject(lambda: export(args), "majority_keys are not approved")
+    assert source.read_bytes() == before_source
+
+
 
 def main() -> None:
     _check_configured_policies()
@@ -731,6 +833,7 @@ def main() -> None:
         _check_breast_three_key_composite()
         _check_export_boundary(root)
         _check_corrected_lupus_highres_contract(root)
+        _check_both_final_views_and_reuse(root)
     print("H5AD metadata majority contracts: OK")
 
 

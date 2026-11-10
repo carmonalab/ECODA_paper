@@ -10,6 +10,9 @@ when a cell-type column is needed; low-resolution annotations are not inputs to
 batch-effect calculations and are carried only when present.
 It writes the output and its strict MD5 sidecar atomically, and never publishes
 an H5AD artifact record.
+For configured majority policies, reuse and ``--check`` also read staged
+``obs`` sample IDs and technical keys to verify current winners. Other checks
+retain their Feather-only path; expression storage is never inspected.
 """
 
 from __future__ import annotations
@@ -757,7 +760,7 @@ def _read_sidecar(path: Path) -> dict[str, str]:
     return fields
 
 
-def validate_output(path: Path, required_columns: Iterable[str], *, evaluation_columns: Iterable[str] = ()) -> None:
+def validate_output(path: Path, required_columns: Iterable[str], *, evaluation_columns: Iterable[str] = ()) -> pd.DataFrame:
     if not path.is_file() or path.stat().st_size <= 0:
         raise ValueError(f"metadata Feather is missing or empty: {path}")
     _read_sidecar(path)
@@ -779,6 +782,36 @@ def validate_output(path: Path, required_columns: Iterable[str], *, evaluation_c
             raise ValueError(f"metadata Feather lacks evaluation label column {column!r}")
         for value in frame[column]:
             _evaluation_value(value, column)
+    return frame
+
+
+def _validate_current_majority(
+    frame: pd.DataFrame,
+    input_path: Path,
+    sample_column: str,
+    policy: Mapping[str, Any] | None,
+    biological_column: str,
+    chunk_size: int,
+) -> None:
+    if policy is None:
+        return
+    keys = list(policy["majority_keys"])
+    expected = read_obs_metadata(
+        input_path, sample_column, [], [], chunk_size,
+        batch_keys=keys, batch_metadata_policy=policy,
+        biological_column=biological_column,
+    )
+    for column in ["Sample", *keys]:
+        try:
+            pd.testing.assert_series_equal(
+                frame[column].reset_index(drop=True), expected[column],
+                check_dtype=False, check_categorical=False, check_exact=True,
+            )
+        except AssertionError as exc:
+            raise ValueError(
+                f"metadata current majority policy differs for {column!r}; "
+                "preserve this output and use a fresh output namespace"
+            ) from exc
 
 
 def write_metadata(frame: pd.DataFrame, output: Path) -> None:
@@ -835,10 +868,6 @@ def write_metadata(frame: pd.DataFrame, output: Path) -> None:
 def export(args: argparse.Namespace) -> None:
     config_path = args.config.resolve()
     entry, view = _config_entry(config_path, args.dataset, args.view)
-    selected_variant = (
-        getattr(args, "analysis_variant", None)
-        or os.environ.get("ANALYSIS_VARIANT", "")
-    )
     sample_column, required, candidates = requested_columns(
         config_path,
         args.dataset,
@@ -866,22 +895,24 @@ def export(args: argparse.Namespace) -> None:
         args.view,
         getattr(args, "analysis_variant", None),
     )
-    if args.view == "batch_effect_uncorrected" and selected_variant == "final":
-        # The explicit uncorrected-final lane retains the first source row for
-        # every field; corrected-final is the only final lane using the
-        # approved majority_v1 policy.
-        policy = None
     if args.check:
-        validate_output(output, required, evaluation_columns=evaluation_columns)
+        frame = validate_output(output, required, evaluation_columns=evaluation_columns)
+        _validate_current_majority(frame, args.input_file.resolve(), sample_column,
+                                   policy, label_column, args.chunk_size)
         return
     if output.exists() or Path(f"{output}.md5").exists():
         try:
-            validate_output(output, required, evaluation_columns=evaluation_columns)
-            print(f"METADATA_EXPORT=NOOP_VALIDATED PATH={output}")
-            return
+            frame = validate_output(output, required, evaluation_columns=evaluation_columns)
         except (OSError, ValueError):
             # Rebuild only an invalid output; the source H5AD remains read-only.
             pass
+        else:
+            # A structurally valid historical output with different winners is
+            # evidence, not a corrupt file to overwrite during routine reuse.
+            _validate_current_majority(frame, args.input_file.resolve(), sample_column,
+                                       policy, label_column, args.chunk_size)
+            print(f"METADATA_EXPORT=NOOP_VALIDATED PATH={output}")
+            return
     frame = read_obs_metadata(
         args.input_file.resolve(),
         sample_column,
