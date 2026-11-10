@@ -78,6 +78,7 @@ stopifnot(report$compatible, identical(rng_before, .Random.seed), report$scienti
   identical(unlist(report$rows$`D/scITD_hvg2000_factors5`$dropped_sample_ids), "s6"),
   report$rows$`D/scITD_hvg2000_factors5`$dropped_ids_require_explicit_review,
   report$author_hr_pairs$D$valid_annotated_cells == 23L, report$author_hr_pairs$D$n_recorded_categories == 3L,
+  identical(report$author_hr_pairs$D$sample_ids, unname(names(meta$cells_per_sample))),
   identical(report$rows$`D/scPoli_hvg2000_dims15_highres`$sample_id_col, "__index_level_0__"),
   report$timing$selected_costs_valid, length(report$timing$invalid_unrelated_rows) == 1L,
   report$rows$`D/ECODA_authors_HR`$original_timing$timing_id == "original:fit")
@@ -109,6 +110,63 @@ unknown$scores$lisi_score <- NaN; stopifnot(.legacy_bundle(unknown, rows[4, ], l
 bad_author <- author; bad_author$counts[1,1] <- bad_author$counts[1,1] + 1; reject(.legacy_pair(bad_author, meta, obs, entry, labels))
 bad_author <- author; bad_author$feat_mat[1,1] <- bad_author$feat_mat[1,1] + 1; reject(.legacy_pair(bad_author, meta, obs, entry, labels))
 bad_meta <- meta; bad_meta$n_cells <- 25L; reject(.legacy_pair(author, bad_meta, obs, entry, labels))
+# Actual Adams metadata IDs are already the configured Sample authority.
+# Reapplying the raw-alias standardizer would corrupt58 validated hyphen IDs.
+adams_ids <- strsplit("g001C g002C g003C g010I g021I g022C-a g022C-b g222C g022I g025I g034C g034I-a g040I-b g040I g041I-b g051I-a g051I g052CO-a g053I-d g053I-n g053I g056CO g063I-b g065C g081C g092C g098C-a g098C-b g123I g133C-a g135I-a g135I-b g137C-a g137C-b g137C g138I-a g145I-a g152CO-a g153CO-a g153CO-b g157I-a g157I-b g157I g158I-b g160C g166I-a g174I-a g177I g178CO g179I g184CO-a g184CO-b g186CO-b g192C-a g192CO-a g192CO-b g192CO g193CO-a g193CO-b g194CO-a g207CO g208C g209I-a g210CO g212I-a g214I-a g217CO-a g218C-a g218C-b g219C-a g219C-b g221I-a g222I-a g222I-b g225I-a g225I-b g226C-a g226C-b g228I-a g228I-b g235CO g237CO g238CO g23CO g253C g296C g29I g388C g396C g439C-b g439C g454C g465C g47I-a g47I-b g483C g484C g49I-a g49I-b g59I", " ", fixed = TRUE)[[1]]
+adams_obs <- data.frame(Sample = adams_ids, condition = rep(c("a", "b"), 50), stringsAsFactors = FALSE)
+adams_entry <- list(sample_col = "Sample", label_col = "condition")
+adams_view <- .legacy_canonical_obs(adams_obs, adams_entry)
+stopifnot(length(adams_ids) == 100L, sum(grepl("-", adams_ids, fixed = TRUE)) == 58L,
+  identical(adams_view$obs, adams_obs), identical(adams_view$aliases$raw, adams_ids),
+  identical(adams_view$aliases$canonical, adams_ids),
+  identical(names(.legacy_labels(adams_view$obs, adams_entry)), adams_ids))
+# Gong-style raw IDs differ from the producer's existing canonical Sample.
+# Read both obs columns, prove the exact one-to-one production mapping, and
+# change only this in-memory validation view. No result/source IDs are renamed.
+canonical_path <- file.path(root, "canonical.h5ad")
+raw_samples <- paste0("p-", rep(1:6, each = 4))
+canonical_samples <- gsub("-", "_", raw_samples, fixed = TRUE)
+reticulate::py$make_audit_obs(canonical_path, raw_samples, obs$condition, obs$annotation)
+reticulate::py_run_string("def add_audit_canonical(path, values):\n    with h5py.File(path, 'a') as h:\n        h['obs'].create_dataset('Sample',data=np.array(values,dtype=h5py.string_dtype()))\n")
+reticulate::py$add_audit_canonical(canonical_path, canonical_samples)
+canonical_md5 <- md5(canonical_path)
+raw_obs <- .legacy_read_obs(canonical_path, names(obs), module)
+stopifnot(identical(raw_obs$donor, raw_samples), identical(raw_obs$Sample, canonical_samples))
+mapped <- .legacy_canonical_obs(raw_obs, entry)
+stopifnot(identical(mapped$obs$donor, canonical_samples), identical(raw_obs$donor, raw_samples),
+  identical(mapped$aliases$raw, unique(raw_samples)), identical(mapped$aliases$canonical, unique(canonical_samples)))
+canonical_ids <- unique(canonical_samples); canonical_labels <- .legacy_labels(mapped$obs, entry)
+canonical_author <- author
+rownames(canonical_author$counts) <- rownames(canonical_author$feat_mat) <- canonical_ids
+attr(canonical_author$dist_mat, "Labels") <- canonical_ids; names(canonical_author$labels) <- canonical_ids
+canonical_meta <- meta; names(canonical_meta$labels) <- names(canonical_meta$cells_per_sample) <- canonical_ids
+stopifnot(.legacy_pair(canonical_author, canonical_meta, mapped$obs, entry, canonical_labels)$status == "COMPATIBLE_PENDING_REVIEW",
+  identical(.legacy_bundle(canonical_author, rows[1, ], canonical_labels)$sample_ids, canonical_ids),
+  identical(md5(canonical_path), canonical_md5))
+bad_mapping <- raw_obs; bad_mapping$Sample[1] <- "foreign"; reject(.legacy_canonical_obs(bad_mapping, entry))
+bad_mapping <- raw_obs; bad_mapping$Sample <- NULL; reject(.legacy_canonical_obs(bad_mapping, entry))
+collision <- data.frame(donor = c("p-1", "p_1"), Sample = c("p_1", "p_1"))
+reject(.legacy_canonical_obs(collision, entry))
+# GloScope carries incidental names on its distance-ID vector. Value/order
+# equality remains strict, including actual label and permutation negatives.
+glo <- pb; glo$dist_mat <- as.matrix(glo$dist_mat)
+names(dimnames(glo$dist_mat)[[1]]) <- ids; names(dimnames(glo$dist_mat)[[2]]) <- ids
+glo_before <- serialize(glo, NULL)
+stopifnot(identical(.legacy_bundle(glo, rows[4, ], labels)$sample_ids, ids), identical(serialize(glo, NULL), glo_before))
+bad_glo <- glo; bad_glo$labels <- bad_glo$labels[6:1]; reject(.legacy_bundle(bad_glo, rows[4, ], labels))
+# Kim-style stored count axes may differ from the features' valid axes.
+aligned_author <- author
+aligned_author$counts <- aligned_author$counts[6:1, ncol(imputed):1, drop = FALSE]
+aligned_before <- serialize(aligned_author, NULL)
+stopifnot(.legacy_pair(aligned_author, meta, obs, entry, labels)$status == "COMPATIBLE_PENDING_REVIEW",
+  identical(serialize(aligned_author, NULL), aligned_before))
+bad_axes <- aligned_author; colnames(bad_axes$feat_mat)[1] <- "foreign"
+reject(.legacy_pair(bad_axes, meta, obs, entry, labels))
+bad_axes <- aligned_author; bad_axes$feat_mat <- as.matrix(bad_axes$feat_mat)
+rownames(bad_axes$feat_mat)[1] <- rownames(bad_axes$feat_mat)[2]
+reject(.legacy_pair(bad_axes, meta, obs, entry, labels))
+bad_axes <- aligned_author; bad_axes$dist_mat <- as.matrix(author$dist_mat)[6:1, 6:1]
+reject(.legacy_pair(bad_axes, meta, obs, entry, labels))
 alias <- file.path(root, "alias.rds"); stopifnot(file.symlink(composition, alias)); reject(.legacy_checked_read(alias, md5(composition), file.info(composition)$size, readRDS))
 backup <- readBin(composition, "raw", n = file.info(composition)$size)
 reject(.legacy_checked_read(composition, md5(composition), file.info(composition)$size, function(p) { x <- readRDS(p); saveRDS(list(changed = TRUE), p); x }))

@@ -42,10 +42,35 @@
   handle <- h5py$File(path, "r"); on.exit(handle$close())
   group <- handle$get("obs")
   .legacy_need(!reticulate::py_is_null_xptr(group), "Missing H5AD obs")
+  # Stage5 uses the existing canonical Sample derived from the configured
+  # source column. This additional witness is metadata, never expression.
+  if (!"Sample" %in% columns && isTRUE(reticulate::py_to_r(group$`__contains__`("Sample"))))
+    columns <- c(columns, "Sample")
   values <- setNames(lapply(columns, function(column)
     as.character(reticulate::py_to_r(decoder$read_obs_column(group, column)))), columns)
   .legacy_need(length(unique(lengths(values))) == 1L && lengths(values)[1] > 0L, "Invalid obs column lengths")
   as.data.frame(values, stringsAsFactors = FALSE, check.names = FALSE)
+}
+.legacy_canonical_obs <- function(obs, entry) {
+  raw <- as.character(obs[[entry$sample_col]])
+  .legacy_need(length(raw) == nrow(obs) && !anyNA(raw) && all(nzchar(trimws(raw))), "Invalid configured sample IDs")
+  original <- unique(raw)
+  # Configured Sample is already authoritative, including legitimate hyphens.
+  # Only a distinct configured raw alias needs the producer's mapping witness.
+  if (identical(entry$sample_col, "Sample"))
+    return(list(obs = obs, aliases = data.frame(raw = original, canonical = original, stringsAsFactors = FALSE)))
+  expected <- unname(standardize_sample_names(original))
+  .legacy_need(.legacy_ids(expected), "Configured sample IDs collide after production canonicalization")
+  if ("Sample" %in% names(obs)) {
+    aliases <- unique(data.frame(raw = raw, canonical = as.character(obs$Sample), stringsAsFactors = FALSE))
+    .legacy_need(.legacy_ids(aliases$raw) && .legacy_ids(aliases$canonical) &&
+      identical(unname(aliases$canonical), expected), "Configured-to-canonical Sample witness is not the production bijection")
+    obs[[entry$sample_col]] <- as.character(obs$Sample)
+  } else {
+    .legacy_need(identical(original, expected), "Changed sample IDs require an existing canonical Sample witness")
+    aliases <- data.frame(raw = original, canonical = original, stringsAsFactors = FALSE)
+  }
+  list(obs = obs, aliases = aliases)
 }
 .legacy_labels <- function(obs, entry) {
   .legacy_need(all(c(entry$sample_col, entry$label_col) %in% names(obs)), "Missing configured sample/label column")
@@ -61,12 +86,12 @@
 }
 .legacy_bundle <- function(value, row, labels) {
   .legacy_need(is.list(value), "Selected result is not a bundle")
-  distance <- evaluation_distance(value$dist_mat); ids <- attr(distance, "Labels")
+  distance <- evaluation_distance(value$dist_mat); ids <- unname(attr(distance, "Labels"))
   .legacy_need(all(ids %in% names(labels)), "Distance has extra sample IDs")
   dropped <- setdiff(names(labels), ids); scitd <- grepl("^scITD(_|$)", row$method_key)
   .legacy_need(scitd || !length(dropped), "Only scITD may drop samples")
   .legacy_need(length(unique(labels[ids])) >= 2L, "Retained samples have fewer than two biological groups")
-  .legacy_need(.legacy_ids(names(value$labels)) && identical(names(value$labels), ids) &&
+  .legacy_need(.legacy_ids(names(value$labels)) && identical(unname(names(value$labels)), ids) &&
     !anyNA(value$labels) && all(nzchar(trimws(as.character(value$labels)))), "Stored named labels must match distance order")
   null <- grepl("(^|_)NULL($|_)", row$method_key)
   if (null) .legacy_need(identical(sort(as.character(value$labels)), sort(unname(labels[ids]))),
@@ -81,7 +106,7 @@
     "shared_time_secs", "shared_mem_GB", "variant_time_secs", "variant_mem_GB", "aggregate_time_secs", "shared_fit_time_secs"), names(value))
   timing_valid <- timing_names[vapply(value[timing_names], function(x) length(x) == 1L &&
     ((is.numeric(x) && is.finite(x) && x >= 0) || (is.character(x) && !is.na(x) && nzchar(x))), logical(1))]
-  list(sample_ids = ids, sample_order_matches_current = identical(ids, names(labels)),
+  list(sample_ids = ids, sample_order_matches_current = identical(ids, unname(names(labels))),
     stored_labels = setNames(as.character(value$labels), ids), labels_md5 = .analysis_fingerprint(value$labels),
     distance_md5 = .analysis_fingerprint(value$dist_mat), n_samples = length(ids),
     n_features = if (is.null(value$feat_mat)) NULL else ncol(value$feat_mat),
@@ -102,11 +127,14 @@
   counts <- counts[rownames(stored), colnames(stored), drop = FALSE]
   .legacy_need(is.numeric(stored) && all(is.finite(stored)) &&
     isTRUE(all.equal(unname(stored), unname(counts + .5), tolerance = 1e-12)), "Author counts are not current raw counts +0.5")
+  .legacy_need(.legacy_ids(rownames(features)) && .legacy_ids(colnames(features)) &&
+    setequal(rownames(features), rownames(stored)) && setequal(colnames(features), colnames(stored)), "Author CLR feature axes differ")
   clr <- log(stored) - rowMeans(log(stored))
-  .legacy_need(identical(dimnames(features), dimnames(stored)) &&
-    isTRUE(all.equal(unname(features), unname(clr), tolerance = 1e-10)), "Author CLR features differ")
+  # Align the expected view only; original axes, values and fingerprints remain.
+  clr <- clr[rownames(features), colnames(features), drop = FALSE]
+  .legacy_need(isTRUE(all.equal(unname(features), unname(clr), tolerance = 1e-10)), "Author CLR features differ")
   distance <- as.matrix(evaluation_distance(author$dist_mat))
-  .legacy_need(identical(rownames(distance), rownames(features)) &&
+  .legacy_need(identical(unname(rownames(distance)), unname(rownames(features))) &&
     isTRUE(all.equal(unname(distance), unname(as.matrix(stats::dist(clr))), tolerance = 1e-10)), "Author distances differ from current CLR")
   sample <- as.character(obs[[entry$sample_col]])
   cells <- setNames(as.numeric(table(factor(sample, levels = names(labels)))), names(labels))
@@ -119,6 +147,7 @@
   categories <- length(unique(obs[[entry$cell_type_high_res]]))
   .legacy_need(identical(as.integer(metadata$n_cell_types_high_res), as.integer(categories)), "Author category metadata differs")
   list(status = "COMPATIBLE_PENDING_REVIEW", n_cells = nrow(obs), n_samples = length(labels),
+    sample_ids = unname(names(metadata$cells_per_sample)),
     valid_annotated_cells = sum(counts), n_valid_categories = ncol(counts), n_recorded_categories = categories,
     counts_policy = "observed current get_ct_comp_df +0.5; CLR and Euclidean distance checked; no scores calculated",
     raw_counts_md5 = .analysis_fingerprint(counts), cell_subsetting_source_eligible_pending_review = TRUE)
@@ -178,9 +207,14 @@ audit_legacy_analysis_inputs <- function(rows, files, pairs, datasets, obs_reade
     before <- .legacy_input_witness(selected[1, ])
     has_pair <- dataset %in% pairs$dataset
     columns <- unique(c(entry$sample_col, entry$label_col, if (has_pair) entry$cell_type_high_res))
-    obs <- obs_reader(before$path, columns); labels <- .legacy_labels(obs, entry)
+    obs <- obs_reader(before$path, columns)
+    canonical <- .legacy_canonical_obs(obs, entry); obs <- canonical$obs
+    labels <- .legacy_labels(obs, entry)
     report$cohorts[[dataset]] <- c(before, list(sample_col = entry$sample_col, label_col = entry$label_col,
-      author_hr_col = if (has_pair) entry$cell_type_high_res else NULL, sample_ids = names(labels), n_cells = nrow(obs)))
+      author_hr_col = if (has_pair) entry$cell_type_high_res else NULL,
+      configured_sample_ids = canonical$aliases$raw, canonical_sample_mapping = canonical$aliases,
+      canonical_sample_column = if ("Sample" %in% names(obs)) "Sample" else entry$sample_col,
+      sample_ids = names(labels), n_cells = nrow(obs)))
     objects <- list(); author <- metadata <- NULL
     for (path in unique(selected$artifact_path)) {
       f <- files[match(path, files$artifact_path), ]; subset <- selected[selected$artifact_path == path, , drop = FALSE]
