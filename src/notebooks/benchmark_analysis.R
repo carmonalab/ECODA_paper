@@ -145,6 +145,39 @@ read_benchmark_analysis_control <- function(path, md5) {
   if (file.info(path)$size > 16 * 1024^2) stop("Analysis control must be small metadata")
   control <- readRDS(path)
   .analysis_checked_file(path, md5)
+  # PCA and metric release receipts describe different purposes. Join their
+  # original bytes through checked projection metadata, never RNA features.
+  ledger <- control$ledger
+  selected <- which(ledger$view == "benchmark_analysis" &
+    (ledger$method_key %in% c("ECODA_authors_HR", "__dataset_metadata__", "Pseudobulk_hvg2000") |
+      (ledger$dataset == "Bassez" & ledger$method_key == "Pseudobulk_hvg3000")))
+  parents <- rep(NA_character_, nrow(control$expected_scope))
+  origins <- rep(NA_character_, nrow(control$expected_scope))
+  for (i in selected) {
+    row <- ledger[i, , drop = FALSE]
+    receipt_path <- .analysis_checked_file(row$receipt_path, row$receipt_md5)
+    if (file.info(receipt_path)$size > 16 * 1024^2) stop("PCA parent receipt must be small metadata")
+    receipt <- readRDS(receipt_path)
+    .analysis_checked_file(receipt_path, row$receipt_md5)
+    if (is.null(receipt$projection_schema)) next
+    index <- which(.analysis_key(control$expected_scope) == .analysis_key(row))
+    fields <- c("dataset", "view", "method_key", "kind", "artifact_path", "bundle_key", "run_root", "md5")
+    if (length(index) != 1L || control$expected_scope$status[index] != "approved" ||
+        !identical(receipt$schema, "ecoda_analysis_release_receipt_v1") || !identical(receipt$status, "reviewed") ||
+        !identical(receipt$input_md5, control$expected_scope$current_input_md5[index]) ||
+        !identical(receipt$source_policy, control$expected_scope$source_policy[index]) ||
+        any(!vapply(fields, function(field) identical(receipt[[field]], as.character(row[[field]])), logical(1))))
+      stop("PCA parent projection differs from the reviewed analysis scope")
+    proof <- .analysis_projection_proof(row, receipt)
+    if (!is.character(proof$parent$md5) || length(proof$parent$md5) != 1L ||
+        is.na(proof$parent$md5) || !grepl("^[a-f0-9]{32}$", proof$parent$md5)) stop("Invalid original PCA artifact MD5")
+    parents[index] <- proof$parent$md5
+    origins[index] <- proof$origin
+  }
+  if (any(!is.na(parents))) {
+    control$expected_scope$source_artifact_md5 <- parents
+    control$expected_scope$source_artifact_origin <- origins
+  }
   control
 }
 
@@ -383,7 +416,15 @@ read_benchmark_pca_render <- function(path,md5,datasets,expected_scope=NULL) {
   if(!is.null(expected_scope)) {
     for(i in seq_len(nrow(report$sources))) {
       source<-report$sources[i,];row<-expected_scope[expected_scope$dataset==source$dataset&expected_scope$view=="benchmark_analysis"&expected_scope$method_key==source$method_key,,drop=FALSE]
-      if(nrow(row)!=1L||row$status!="approved"||row$current_input_md5!=source$input_md5||row$source_policy!=source$source_policy||
+      parent<-if("source_artifact_md5"%in%names(row))row$source_artifact_md5 else NA_character_
+      known_policy<-if(source$method_key%in%c("ECODA_authors_HR","__dataset_metadata__"))
+        "CURRENT_REVIEWED_AUTHOR_HR_INTEGER_COUNTS_PLUS_0.5_AND_DATASET_METADATA_V1" else
+        "CURRENT_REVIEWED_SAVED_PSEUDOBULK_FEATURES_AND_NAMED_GEOMETRY_V1"
+      parent_matches<-length(parent)==1L&&!is.na(parent)&&grepl("^[a-f0-9]{32}$",parent)&&identical(parent,source$artifact_md5)
+      if(nrow(row)!=1L||row$status!="approved"||row$current_input_md5!=source$input_md5||
+         (!identical(row$source_policy,source$source_policy)&&!(identical(source$source_policy,known_policy)&&parent_matches))||
+         (any(!is.na(parent))&&!parent_matches)||
+         (any(!is.na(parent))&&!identical(row$source_artifact_origin,source$origin))||
          (row$require_new&&source$origin!="new"))stop("Saved PCA source differs from the current scientific scope")
     }
   }
