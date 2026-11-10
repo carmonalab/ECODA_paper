@@ -13,13 +13,20 @@ output:
 
 # Scope
 
-This diagnostic uses the persisted sample-level metadata for the twelve active
-`batch_effect_uncorrected` cohorts. It shows how each biological-label group is
+This diagnostic uses the approved projected sample metadata for the eight enabled
+`batch_effect_uncorrected` cohorts. Kidney condition and tissue are separate
+evaluation axes (nine entries), using the same physical cohort. The explicit
+`ECODA_BATCH_RELEASE_CONTROL` and `ECODA_BATCH_RELEASE_CONTROL_MD5` are shared
+with the current core batch reports; there is no historical-path fallback. It shows how each biological-label group is
 represented across configured and extended batch covariates. Bars are normalized
 within each biological-label group to 100%, while stack labels retain the number
 of unique samples. A potential-confounding flag is descriptive only: a batch
 level is flagged when it occurs in exactly one biological-label group. This
-notebook does not remove batches, rerun preprocessing, or run statistical tests.
+notebook does not remove batches or rerun preprocessing. The separately named
+COVID temporal panels retain their diagnostic ANOSIM tests and MDS definition.
+They subset the approved HR/PB distance matrices, without reading RNA features.
+Kidney tissue is partly confounded with suspension type: 45 generic kidney
+samples are cells; 23 cortex and 12 medulla samples are nuclei.
 
 ```{r setup, message=FALSE, warning=FALSE}
 if (basename(getwd()) == "notebooks") {
@@ -33,47 +40,20 @@ suppressPackageStartupMessages({
   library(patchwork)
   library(viridis)
 })
-source("src/utils/datasets_io.R")
+source("src/utils/load_all_functions.R")
+source("src/utils/analysis_release.R")
+source("src/utils/evaluation_scores.R")
 source("src/utils/batch_effect_analysis.R")
-source("src/utils/plotting.R")
 
-detected_cores <- parallel::detectCores(logical = FALSE)
-if (is.na(detected_cores)) detected_cores <- 1L
-parallel_cores <- min(8L, max(1L, detected_cores))
+parallel_cores <- 1L
 options(mc.cores = parallel_cores)
 n_permutations <- 999L
-
-
-
-batch_datasets <- c(
-  "Alzheimer",
-  "Breast_cancer",
-  "Covid19_PBMC",
-  "Kidney_KPMP_full",
-  "Myocardial_infarction",
-  "Diabetes",
-  "Lupus_PBMC",
-  "Lung",
-  "Parkinson",
-  "Joanito",
-  "Stephenson",
-  "CombinedPBMC"
-)
-
-input_root <- file.path(getwd(), "data", "batch_effect", "uncorrected")
-metadata_root <- file.path(input_root, "metadata")
-results_root <- file.path(input_root, "results")
+control <- read_batch_release_control(Sys.getenv("ECODA_BATCH_RELEASE_CONTROL"),
+  Sys.getenv("ECODA_BATCH_RELEASE_CONTROL_MD5"), "batch_effect_uncorrected")
+datasets <- control$datasets
+batch_datasets <- names(datasets)
 plot_root <- file.path(getwd(), "plots", "batch_effect_uncorrected_batchconfounding")
 dir.create(plot_root, recursive = TRUE, showWarnings = FALSE)
-
-datasets <- read_datasets_json(view = "batch_effect_uncorrected")
-if (!all(batch_datasets %in% names(datasets))) {
-  stop("datasets.json does not contain every active batch-effect dataset")
-}
-datasets <- datasets[batch_datasets]
-if (!identical(names(datasets), batch_datasets)) {
-  stop("active batch-effect dataset order is not authoritative")
-}
 
 registry <- batch_candidate_registry(datasets, batch_datasets)
 ```
@@ -95,74 +75,24 @@ registry <- batch_candidate_registry(datasets, batch_datasets)
   values
 }
 
-.metadata_artifact_paths <- function(dataset_key) {
-  list(
-    summary = file.path(results_root, paste0(dataset_key, "_batch_effect_uncorrected_metadata.rds")),
-    metadata = file.path(metadata_root, paste0(dataset_key, "_sample_metadata.feather"))
-  )
-}
-
-.resolve_metadata_source <- function(dataset) {
-  canonical <- .metadata_artifact_paths(dataset)
-  if (all(file.exists(unlist(canonical)))) {
-    return(list(
-      source_dataset_key = dataset,
-      source_status = "canonical",
-      paths = canonical
-    ))
-  }
-
-  if (identical(dataset, "Kidney_KPMP_full")) {
-    legacy <- .metadata_artifact_paths("Kidney_KPMP")
-    if (all(file.exists(unlist(legacy)))) {
-      warning(
-        "Kidney_KPMP_full metadata artifacts are unavailable; using the existing ",
-        "Kidney_KPMP artifacts explicitly as a legacy source for this diagnostic."
-      )
-      return(list(
-        source_dataset_key = "Kidney_KPMP",
-        source_status = "legacy_Kidney_KPMP_fallback",
-        paths = legacy
-      ))
-    }
-  }
-
-  stop("missing validated metadata artifacts for active dataset ", dataset)
-}
-
 .read_sample_metadata <- function(dataset) {
-  source <- .resolve_metadata_source(dataset)
-  validate_batch_artifact(source$paths$summary, "metadata summary")
-  summary <- tryCatch(
-    readRDS(source$paths$summary),
-    error = function(error) {
-      stop("malformed metadata summary ", source$paths$summary, ": ", conditionMessage(error))
-    }
-  )
-  labels <- summary$labels
-  if (is.null(labels) || is.null(names(labels)) || anyNA(names(labels)) ||
-      any(!nzchar(names(labels))) || anyDuplicated(names(labels)) || anyNA(labels)) {
-    stop(dataset, ": metadata summary labels are malformed")
-  }
-  sample_ids <- as.character(names(labels))
-  if (!identical(as.integer(summary$n_samples), length(sample_ids))) {
-    stop(dataset, ": metadata summary sample count mismatch")
-  }
-  label_col <- as.character(datasets[[dataset]]$label_col)
-  metadata <- read_batch_metadata_sidecar(
-    source$paths$metadata,
-    expected_sample_ids = sample_ids,
-    required_label = label_col
-  )
-  list(
-    dataset = dataset,
-    metadata = metadata,
-    label_col = label_col,
-    sample_ids = sample_ids,
-    source_dataset_key = source$source_dataset_key,
-    source_status = source$source_status,
-    source_paths = source$paths
-  )
+  rows <- control$ledger[control$ledger$dataset == dataset &
+    control$ledger$method_key == "__sample_metadata__", , drop = FALSE]
+  scope <- control$expected_scope[control$expected_scope$dataset == dataset &
+    control$expected_scope$method_key == "__sample_metadata__", , drop = FALSE]
+  loaded <- load_analysis_release(rows, scope, require_projection = TRUE)
+  if (length(loaded) != 1L) stop("Exactly one reviewed metadata row is required: ", dataset)
+  entry <- loaded[[1L]]
+  metadata <- entry$result$metadata
+  sample_ids <- as.character(metadata[[entry$source$sample_id_col]])
+  if (!length(sample_ids) || anyNA(sample_ids) || any(!nzchar(sample_ids)) || anyDuplicated(sample_ids))
+    stop(dataset, ": projected metadata sample identity is malformed")
+  metadata$Sample <- sample_ids; rownames(metadata) <- sample_ids
+  required <- c(unlist(datasets[[dataset]]$evaluation_labels), unlist(datasets[[dataset]]$batch_col))
+  if (!all(required %in% names(metadata))) stop(dataset, ": configured evaluation/batch metadata missing")
+  list(dataset = dataset, metadata = metadata, label_col = datasets[[dataset]]$label_col,
+    sample_ids = sample_ids, source_dataset_key = dataset,
+    source_status = "approved_projected_release", source_paths = entry$source$artifact_path)
 }
 
 configured_candidates <- function(dataset) {
@@ -174,7 +104,7 @@ configured_candidates <- function(dataset) {
   )
 }
 
-extended_candidates <- function(dataset) {
+extended_candidates <- function(dataset, label_col = datasets[[dataset]]$label_col) {
   rows <- registry[registry$dataset == dataset & !registry$is_primary, , drop = FALSE]
   excluded <- switch(
     dataset,
@@ -182,7 +112,7 @@ extended_candidates <- function(dataset) {
     Lupus_PBMC = "ind_cov_batch_cov",
     character()
   )
-  rows <- rows[!rows$candidate %in% excluded, , drop = FALSE]
+  rows <- rows[!rows$candidate %in% c(excluded, label_col), , drop = FALSE]
   if (nrow(rows) == 0L) {
     return(data.frame(
       covariate = character(),
@@ -569,94 +499,34 @@ extended_candidates <- function(dataset) {
   )
 }
 
-.read_temporal_rds <- function(path, kind) {
-  if (!file.exists(path) || isTRUE(file.info(path)$isdir) || file.info(path)$size <= 0) {
-    stop(kind, " is missing or empty: ", path)
-  }
-  fields <- .batch_sidecar_fields(path)
-  actual_md5 <- unname(tools::md5sum(path))
-  actual_size <- as.character(file.info(path)$size)
-  if (!identical(tolower(as.character(fields$MD5)), tolower(actual_md5))) {
-    stop(kind, " MD5 mismatch: ", path)
-  }
-  if (!identical(as.character(fields$SIZE), actual_size)) {
-    stop(kind, " SIZE mismatch: ", path)
-  }
-  expected_path <- normalizePath(path, mustWork = FALSE)
-  if (!identical(as.character(fields$PATH), expected_path)) {
-    warning(
-      kind, " is a validated local mirror with recorded source path '",
-      fields$PATH, "': ", path,
-      call. = FALSE
-    )
-  }
-  tryCatch(
-    readRDS(path),
-    error = function(error) stop("malformed ", kind, " ", path, ": ", conditionMessage(error))
-  )
-}
-
-.validate_temporal_features <- function(features, method, expected_sample_ids) {
-  if (!is.matrix(features) && !is.data.frame(features)) {
-    stop(method, " feature matrix is not tabular")
-  }
-  features <- as.matrix(features)
-  if (is.null(rownames(features)) || anyNA(rownames(features)) ||
-      any(!nzchar(rownames(features))) || anyDuplicated(rownames(features))) {
-    stop(method, " feature matrix has invalid sample IDs")
-  }
-  if (!setequal(rownames(features), expected_sample_ids)) {
-    stop(method, " feature matrix sample IDs do not match metadata")
-  }
-  storage.mode(features) <- "double"
-  if (any(!is.finite(features))) stop(method, " feature matrix contains non-finite values")
-  features[expected_sample_ids, , drop = FALSE]
-}
-
-.load_covid_temporal_features <- function(metadata_info) {
-  composition_path <- file.path(
-    input_root,
-    "results",
-    "Covid19_PBMC_batch_effect_uncorrected_composition.rds"
-  )
-  pseudobulk_path <- file.path(
-    input_root,
-    "results",
-    "Covid19_PBMC_batch_effect_uncorrected_pseudobulk.rds"
-  )
-  composition <- .read_temporal_rds(composition_path, "Covid19 ECODA composition RDS")
-  pseudobulk <- .read_temporal_rds(pseudobulk_path, "Covid19 pseudobulk RDS")
-  if (is.null(composition$ECODA_authors_HR$feat_mat)) {
-    stop("Covid19 ECODA composition RDS lacks ECODA_authors_HR$feat_mat")
-  }
-  if (is.null(pseudobulk$Pseudobulk_hvg2000$feat_mat)) {
-    stop("Covid19 pseudobulk RDS lacks Pseudobulk_hvg2000$feat_mat")
-  }
-  expected_sample_ids <- as.character(metadata_info$sample_ids)
-  list(
-    ECODA = .validate_temporal_features(
-      composition$ECODA_authors_HR$feat_mat,
-      "ECODA",
-      expected_sample_ids
-    ),
-    Pseudobulk = .validate_temporal_features(
-      pseudobulk$Pseudobulk_hvg2000$feat_mat,
-      "Pseudobulk",
-      expected_sample_ids
-    )
-  )
+.load_covid_temporal_distances <- function(metadata_info) {
+  result <- load_batch_release_dataset(control, "Covid19_PBMC")
+  if (!identical(result$sample_ids, metadata_info$sample_ids))
+    stop("COVID temporal distances and projected metadata order differ")
+  # Native result validation already establishes the Euclidean feature-distance
+  # contract. Subsetting these matrices preserves the historical MDS semantics.
+  distances <- lapply(c(ECODA = "ECODA_authors_HR", Pseudobulk = "Pseudobulk_hvg2000"),
+    function(method) result$methods[[method]]$dist_mat)
+  rm(result)
+  distances
 }
 
 .covid_time_bins <- function(metadata_info) {
   metadata <- metadata_info$metadata
-  day <- suppressWarnings(as.numeric(as.character(metadata[[.covid_sampling_day_col]])))
+  day_available <- .covid_sampling_day_col %in% names(metadata)
+  day <- if (day_available) suppressWarnings(as.numeric(as.character(metadata[[.covid_sampling_day_col]]))) else rep(NA_real_, nrow(metadata))
   severity <- tolower(trimws(as.character(metadata[[metadata_info$label_col]])))
-  is_control <- severity == "control"
+  is_control <- !is.na(severity) & severity == "control"
   masks <- list(
     control_and_le15 = is_control | (!is_control & is.finite(day) & day <= 15),
     day15_30 = !is_control & is.finite(day) & day > 15 & day <= 30,
     day30_max = !is_control & is.finite(day) & day > 30
   )
+  if (!day_available) masks <- lapply(masks, function(x) rep(FALSE, nrow(metadata)))
+  counts <- vapply(masks, sum, integer(1))
+  groups <- vapply(masks, function(mask) length(unique(severity[mask])), integer(1))
+  status <- if (!day_available) rep("MISSING_SAMPLING_DAY", length(masks)) else
+    ifelse(counts == 0L, "EMPTY_BIN", ifelse(counts < 3L | groups < 2L | counts <= groups, "UNDERPOWERED", "ESTIMABLE"))
   assigned <- Reduce("+", lapply(masks, as.integer))
   union_mask <- assigned > 0L
   if (any(assigned > 1L)) {
@@ -673,6 +543,10 @@ extended_candidates <- function(dataset) {
         character(1)
       ),
       omitted_samples = sum(!union_mask),
+      status = status,
+      warning = ifelse(status == "ESTIMABLE", "", ifelse(status == "MISSING_SAMPLING_DAY",
+        "Current projected metadata lacks the optional sampling-day field; no historical fallback",
+        "Temporal bin has no samples or insufficient replicated biological groups")),
       stringsAsFactors = FALSE
     )
   )
@@ -683,7 +557,7 @@ extended_candidates <- function(dataset) {
 }
 
 .build_covid_temporal_plots <- function(metadata_info) {
-  temporal_features <- .load_covid_temporal_features(metadata_info)
+  temporal_distances <- .load_covid_temporal_distances(metadata_info)
   bins <- .covid_time_bins(metadata_info)
   temporal_plot_root <- file.path(plot_root, "covid19_time_bins")
   dir.create(temporal_plot_root, recursive = TRUE, showWarnings = FALSE)
@@ -695,15 +569,18 @@ extended_candidates <- function(dataset) {
     mask <- bins$masks[[bin_name]]
     selected_ids <- rownames(metadata_info$metadata)[mask]
     labels <- factor(as.character(metadata_info$metadata[selected_ids, metadata_info$label_col]))
-    mds_plots <- lapply(names(temporal_features), function(method) {
-      features <- temporal_features[[method]][selected_ids, , drop = FALSE]
-      dist_mat <- stats::dist(features)
-      anosim <- compute_batch_anosim(
-        dist_mat,
-        labels,
-        permutations = n_permutations,
-        parallel = parallel_cores
-      )
+    mds_plots <- lapply(names(temporal_distances), function(method) {
+      bin <- bins$summary[bins$summary$time_bin == bin_name, , drop = FALSE]
+      if (bin$status != "ESTIMABLE") {
+        anosim <- list(statistic = NA_real_, p_value = NA_real_, status = bin$status, warning = bin$warning)
+      } else {
+        dist_mat <- as.dist(as.matrix(temporal_distances[[method]])[selected_ids, selected_ids, drop = FALSE])
+        anosim <- compute_batch_anosim(dist_mat, labels, permutations = n_permutations, parallel = parallel_cores)
+        if (!is.finite(anosim$statistic)) {
+          anosim$status <- "NON_ESTIMABLE"
+          anosim$warning <- paste("Nonfinite ANOSIM;", anosim$warning)
+        }
+      }
       row_index <<- row_index + 1L
       anosim_rows[[row_index]] <<- data.frame(
         dataset = "Covid19_PBMC",
@@ -720,7 +597,7 @@ extended_candidates <- function(dataset) {
       if (!identical(anosim$status, "ESTIMABLE")) {
         return(.blank_temporal_plot(
           paste0("Covid19_PBMC - ", method_titles[[method]], " - ", bin_name),
-          paste0("ANOSIM unavailable: ", anosim$warning)
+          paste0("ANOSIM unavailable (n = ", length(selected_ids), "; ", anosim$status, "): ", anosim$warning)
         ))
       }
       plot_mds(
@@ -736,7 +613,7 @@ extended_candidates <- function(dataset) {
         parallel = parallel_cores
       )
     })
-    names(mds_plots) <- names(temporal_features)
+    names(mds_plots) <- names(temporal_distances)
     panel <- patchwork::wrap_plots(mds_plots, ncol = 2, guides = "collect") &
       theme(legend.position = "bottom")
     .save_plot(
@@ -781,6 +658,9 @@ extended_candidates <- function(dataset) {
     ) +
     theme_classic(base_size = 10) +
     theme(legend.position = "bottom")
+  if (!any(is.finite(anosim_summary$anosim_statistic)))
+    anosim_plot <- .blank_temporal_plot("Covid19_PBMC - ANOSIM by symptom-onset time bin",
+      "ANOSIM unavailable for every bin; recorded sample counts/statuses are in the companion CSV")
   .save_plot(
     anosim_plot,
     file.path(temporal_plot_root, "Covid19_PBMC_time_bins_anosim.pdf"),
@@ -802,35 +682,31 @@ extended_candidates <- function(dataset) {
 # Generate both plot families
 
 ```{r generate-plots, message=FALSE, warning=TRUE}
-metadata_results <- lapply(batch_datasets, .read_sample_metadata)
-names(metadata_results) <- batch_datasets
-
+metadata_results <- list() # Retain only the small COVID table for its later diagnostic.
 summary_rows <- list()
 summary_index <- 0L
 for (dataset in batch_datasets) {
-  metadata_info <- metadata_results[[dataset]]
-  candidate_sets <- list(
-    configured = configured_candidates(dataset),
-    extended = extended_candidates(dataset)
-  )
-  for (plot_type in names(candidate_sets)) {
-    built <- if (identical(dataset, "Covid19_PBMC") && identical(plot_type, "extended")) {
-      .build_covid_extended_plot(metadata_info, candidate_sets[[plot_type]])
-    } else {
-      .build_plot(metadata_info, candidate_sets[[plot_type]], plot_type)
+  metadata_info <- .read_sample_metadata(dataset)
+  if (dataset == "Covid19_PBMC") metadata_results[[dataset]] <- metadata_info
+  for (axis in names(datasets[[dataset]]$evaluation_labels)) {
+    axis_info <- metadata_info
+    axis_info$label_col <- datasets[[dataset]]$evaluation_labels[[axis]]
+    stem <- if (axis_info$label_col == datasets[[dataset]]$label_col) dataset else paste0(dataset, "_", axis)
+    candidate_sets <- list(configured = configured_candidates(dataset),
+      extended = extended_candidates(dataset, axis_info$label_col))
+    for (plot_type in names(candidate_sets)) {
+      built <- if (identical(dataset, "Covid19_PBMC") && identical(plot_type, "extended")) {
+        .build_covid_extended_plot(axis_info, candidate_sets[[plot_type]])
+      } else .build_plot(axis_info, candidate_sets[[plot_type]], plot_type)
+      output_name <- paste0(stem, if (plot_type == "configured") "" else "_extended", ".pdf")
+      .save_plot(built$plot, file.path(plot_root, output_name))
+      built$summary$evaluation_id <- axis
+      summary_index <- summary_index + 1L
+      summary_rows[[summary_index]] <- built$summary
     }
-
-    output_name <- if (identical(plot_type, "configured")) {
-      paste0(dataset, ".pdf")
-    } else {
-      paste0(dataset, "_extended.pdf")
-    }
-
-    .save_plot(built$plot, file.path(plot_root, output_name))
-    summary_index <- summary_index + 1L
-    summary_rows[[summary_index]] <- built$summary
   }
-  }
+  rm(metadata_info, axis_info, built)
+}
 
 
 batch_confounding_summary <- do.call(rbind, summary_rows)
@@ -846,7 +722,7 @@ stopifnot(file.exists(summary_path), file.info(summary_path)$size > 0)
 
 ```{r summary, message=FALSE, warning=FALSE}
 summary_overview <- aggregate(
-  cbind(sample_count, potential_confounding) ~ dataset + plot_type,
+  cbind(sample_count, potential_confounding) ~ dataset + evaluation_id + plot_type,
   data = batch_confounding_summary,
   FUN = function(value) sum(as.numeric(value), na.rm = TRUE)
 )
@@ -865,4 +741,7 @@ Outputs are written under `plots/batch_effect_uncorrected_batchconfounding/`:
 
 - `<dataset>.pdf`: configured `datasets.json` batch covariates.
 - `<dataset>_extended.pdf`: deduplicated secondary biological and technical onboarding candidates.
+- `Kidney_KPMP_full_tissue.pdf` and `_tissue_extended.pdf`: the separate tissue evaluation, without changing condition plots.
+- `covid19_time_bins/Covid19_PBMC_<bin>_mds.pdf`: unchanged MDS diagnostics from projected HR/PB distances; no PCA substitution.
+- `covid19_time_bins/Covid19_PBMC_time_bins_anosim.pdf` and `.csv`: explicitly single-metric temporal diagnostics.
 - `batch_confounding_summary.csv` and its checksum sidecar: per-level counts, availability, and conservative potential-confounding flags.
