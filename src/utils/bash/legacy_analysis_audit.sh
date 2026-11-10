@@ -42,7 +42,7 @@ export ECODA_RUN_ROOT="${RUN}" ECODA_RUNTIME_PROFILE=stage5 RETICULATE_PYTHON="$
 M="${RUN}/manifests"
 REPORT="${RUN}/artifacts/evidence/legacy_analysis_compatibility.json"
 STATUS="${RUN}/status/legacy_analysis_audit.status"
-SCOPE_FILES=(request.json control.json author_hr_metadata_pairs.9.tsv
+SCOPE_FILES=(request.json control.json
   avg_legacy.10.tsv zeroimp_nas_counterparts.9.tsv observation.json zeroimp_schema.json zeroimp_policy.json
   feather_headers.json input_review.json input_witness.json parent_gate.json input_basis.json
   source.manifest runtime.identity operation selection.tsv inputs.tsv scope.json)
@@ -116,31 +116,44 @@ def scope_contract(q):
     contracts={
         'ecoda_legacy_analysis_audit_gate_v1':('ecoda_p6_legacy_science_audit_proposal_v4','rows.209.tsv','files.106.tsv',209,106,'ecoda_legacy_analysis_compatibility_v1'),
         'ecoda_legacy777_audit_gate_v1':('ecoda_p6_legacy777_science_audit_v1','rows.777.tsv','files.246.tsv',777,246,'ecoda_legacy777_analysis_compatibility_v1'),
+        'ecoda_legacy_pilotgm27_audit_gate_v1':('ecoda_p6_legacy_pilotgm27_science_audit_v1','rows.27.tsv','files.28.tsv',27,28,'ecoda_legacy_pilotgm27_analysis_compatibility_v1'),
     }
     need(q['schema'] in contracts,'unknown gate request schema')
-    return dict(zip(('schema','rows','files','logical_count','physical_count','report_schema'),contracts[q['schema']]))
+    result=dict(zip(('schema','rows','files','logical_count','physical_count','report_schema'),contracts[q['schema']]))
+    result['pair_count']=0 if result['logical_count']==27 else 9
+    result['pairs']='author_hr_metadata_pairs.'+str(result['pair_count'])+'.tsv'
+    return result
 if mode=='scope-files':
     contract=scope_contract(js(small(m/'request.json')))
-    print('\n'.join([contract['rows'],contract['files']]+[name for _,name in review_refs(js(small(m/'input_review.json'))) if name not in ('input_witness.json','parent_gate.json')]));sys.exit(0)
+    print('\n'.join([contract['rows'],contract['files'],contract['pairs']]+[name for _,name in review_refs(js(small(m/'input_review.json'))) if name not in ('input_witness.json','parent_gate.json')]));sys.exit(0)
 if mode=='bind':
     raw=small(request);need(re.fullmatch('[a-f0-9]{64}',request_sha) and sha(raw)==request_sha,'request SHA mismatch');q=js(raw)
     contract=scope_contract(q)
     put('request.json',raw)
     for key in entries: put('control.json' if key=='science_control' else key+'.json',ref(q[key]))
     control=js(small(m/'control.json'))
-    expected={contract['rows'],contract['files'],'author_hr_metadata_pairs.9.tsv','avg_legacy.10.tsv','zeroimp_nas_counterparts.9.tsv'}
+    expected={contract['rows'],contract['files'],contract['pairs'],'avg_legacy.10.tsv','zeroimp_nas_counterparts.9.tsv'}
     need(set(control['controls'])==expected,'unexpected control file union')
     for name in expected: put(name,ref(dict(path=str(pathlib.Path(q['science_control']['path']).parent/name),sha256=control['controls'][name])))
     review=js(small(m/'input_review.json'))
     for key,name in review_refs(review): put(name,ref(review[key]))
 else: q=js(small(m/'request.json'))
 contract=scope_contract(q)
-control=js(small(m/'control.json'));rows=table(contract['rows']);files=table(contract['files']);pairs=table('author_hr_metadata_pairs.9.tsv')
-need(control['schema']==contract['schema'] and control['total_logical_rows']==contract['logical_count'] and control['physical_files']==contract['physical_count'] and control['author_hr_metadata_pairs']==9 and control['scientifically_approved_rows']==0,'wrong finite science control')
-need((len(rows),len(files),len(pairs))==(contract['logical_count'],contract['physical_count'],9),'finite manifest counts differ')
+control=js(small(m/'control.json'));rows=table(contract['rows']);files=table(contract['files']);pairs=table(contract['pairs'])
+need(control['schema']==contract['schema'] and control['total_logical_rows']==contract['logical_count'] and control['physical_files']==contract['physical_count'] and control['author_hr_metadata_pairs']==contract['pair_count'] and control['scientifically_approved_rows']==0,'wrong finite science control')
+need((len(rows),len(files),len(pairs))==(contract['logical_count'],contract['physical_count'],contract['pair_count']),'finite manifest counts differ')
 keys=[(r['dataset'],r['view'],r['method_key']) for r in rows]
 need(len(set(keys))==contract['logical_count'] and all(r['view']=='benchmark_analysis' and r['origin']=='legacy_reuse' and r['status']=='BLOCKED_UNTIL_SCIENTIFIC_REVIEW' for r in rows),'logical scope/origin differs')
 need(all(all(v and not any(c in v for c in '\t\r\n') for v in k) for k in keys),'invalid selection token')
+if contract['logical_count']==27:
+    cohorts=('Adams','Gongsharma_cmv_young_males','Kfoury','Kim','Lee','Pelka','Smillie','Wu','Zhang')
+    expected={(ds,'benchmark_analysis','PILOT-GM-VAE_hvg'+str(n)+suffix) for ds in cohorts for n,suffix in ((1000,''),(3000,''),(2000,'_lowres')) if (ds,n)!=('Gongsharma_cmv_young_males',3000)}
+    expected.add(('Bassez','benchmark_analysis','PILOT-GM-VAE_hvg2000_lowres'))
+    need(set(keys)==expected and all(r['kind']=='distance_feather' and r['bundle_key']=='' for r in rows),'fixed GM27 key/kind scope differs')
+    for r in rows:
+        n=r['method_key'].split('_hvg')[1].split('_')[0];tier='lowres' if r['method_key'].endswith('_lowres') else 'highres'
+        need(r['artifact_path']==str(root.parent.parent/'benchmark/embeddings'/(r['dataset']+'_hvg'+n+'_'+tier+'_pilotgm_dists.feather')),'fixed GM27 source path differs')
+    need(sum(r['dataset']=='__all__' for r in files)==1,'fixed GM27 requires one existing merged timing')
 config=js(small(project/'datasets.json'))
 need(all(config.get(r['dataset'],{}).get('use_for_benchmark') is True for r in rows),'disabled/unconfigured cohort')
 inputs={}
@@ -260,7 +273,7 @@ else:
     for p in paths:portable_stat(stat(p),identity['input_stats'][p],p)
 if mode=='report':
     x=js(small(root/'artifacts/evidence/legacy_analysis_compatibility.json'))
-    need(x['schema']==contract['report_schema'] and x['physical_files']==contract['physical_count'] and x['logical_rows']==contract['logical_count'] and len(x['rows'])==contract['logical_count'] and len(x['author_hr_pairs'])==9 and len(x['cohorts'])==10,'report scope differs')
+    need(x['schema']==contract['report_schema'] and x['physical_files']==contract['physical_count'] and x['logical_rows']==contract['logical_count'] and len(x['rows'])==contract['logical_count'] and len(x['author_hr_pairs'])==contract['pair_count'] and len(x['cohorts'])==10,'report scope differs')
     need(x['scientifically_approved_rows']==0 and x['model_fits']==0 and x['score_calculations']==0 and x['h5ad_expression_values_read'] is False and x['h5ad_content_rehashed_here'] is False and x['prior_validated_content_witness_required'] is True,'report exceeds evidence scope')
     need(set(x['rows'])=={r['dataset']+'/'+r['method_key'] for r in rows},'report omitted selected logical rows')
     v=x['validation_identities'];pairs=(('control','control.json'),('source-identity','source.manifest'),('runtime-identity','runtime.identity'),('config',str(project/'datasets.json')),('observation','observation.json'),('zeroimp-schema','zeroimp_schema.json'),('zeroimp-policy','zeroimp_policy.json'),('feather-headers','feather_headers.json'))

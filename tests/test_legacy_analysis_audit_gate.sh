@@ -223,6 +223,23 @@ for name,field,value in [('wrong_count','total_logical_rows',778),('wrong_physic
  wrong=dict(science777);wrong[field]=value;q=dict(q777);q['science_control']=save(p/('777_'+name+'_control.json'),wrong);save(p/('777_'+name+'_request.json'),q)
 wrong=dict(science777,controls=dict(science['controls']));q=dict(q777);q['science_control']=save(p/'777_wrong_names_control.json',wrong);save(p/'777_wrong_names_request.json',q)
 q=dict(q777,schema='ecoda_legacy888_audit_gate_v1');save(p/'777_arbitrary_request.json',q)
+# Exact fixed GM27 distance paths; no author RDS/pair re-read is selected.
+gmrows=[];gmfiles=[]
+for ds in cohorts:
+ base=next(row for row in rows if row['dataset']==ds)
+ tokens=['hvg2000_lowres'] if ds=='Bassez' else ['hvg1000_highres','hvg2000_lowres'] if ds=='Gongsharma_cmv_young_males' else ['hvg1000_highres','hvg3000_highres','hvg2000_lowres']
+ for token in tokens:
+  f=scratch/'benchmark/embeddings'/(ds+'_'+token+'_pilotgm_dists.feather');f.parent.mkdir(parents=True,exist_ok=True);f.write_text('opaque GM distance fixture; scientific body isolated')
+  key='PILOT-GM-VAE_'+token.replace('_highres','');identity=dict(dataset=ds,artifact_path=str(f),md5=hashlib.md5(f.read_bytes()).hexdigest(),size=str(f.stat().st_size))
+  gmrows.append(dict(base,**identity,method_key=key,kind='distance_feather',sample_id_col='__index_level_0__'))
+  gmfiles.append(dict(identity,needed_bundle_keys=''))
+f=scratch/'benchmark/embeddings/execution_times.feather';f.write_text('opaque existing timing fixture');gmfiles.append(dict(dataset='__all__',artifact_path=str(f),md5=hashlib.md5(f.read_bytes()).hexdigest(),size=str(f.stat().st_size),needed_bundle_keys=''))
+tsv('rows.27.tsv',gmrows);tsv('files.28.tsv',gmfiles)
+with(p/'author_hr_metadata_pairs.0.tsv').open('w')as stream:csv.DictWriter(stream,fieldnames=list(pairs[0]),delimiter='\t').writeheader()
+science27=dict(science,schema='ecoda_p6_legacy_pilotgm27_science_audit_v1',total_logical_rows=27,physical_files=28,author_hr_metadata_pairs=0,controls={name:sha(p/name)for name in ('rows.27.tsv','files.28.tsv','author_hr_metadata_pairs.0.tsv','avg_legacy.10.tsv','zeroimp_nas_counterparts.9.tsv')})
+q27=json.loads((p/'stopped_request.json').read_text());q27['schema']='ecoda_legacy_pilotgm27_audit_gate_v1';q27['science_control']=save(p/'27_control.json',science27);save(p/'27_request.json',q27)
+for name,field,value in [('wrong_count','total_logical_rows',28),('wrong_physical','physical_files',27),('wrong_pairs','author_hr_metadata_pairs',9)]:
+ wrong=dict(science27);wrong[field]=value;q=dict(q27);q['science_control']=save(p/('27_'+name+'_control.json'),wrong);save(p/('27_'+name+'_request.json'),q)
 PY
 cat > "${TMP}/emit_report.py" <<'PY'
 import csv,hashlib,json,os,pathlib,sys
@@ -230,10 +247,10 @@ assert os.environ.get('LEGACY_TEST_PINNED_WORKER')=='1'
 assert sys.argv[1]=='--vanilla' and sys.argv[2].endswith('/src/notebooks/audit_legacy_analysis_inputs.R')
 a=sys.argv[3:];v=dict(zip(a[::2],a[1::2]));assert len(v)==17 and len(a)==34
 m=pathlib.Path(v['--control']).parent
-control=json.loads((m/'control.json').read_text());new=control['schema']=='ecoda_p6_legacy777_science_audit_v1'
-rows=list(csv.DictReader((m/('rows.777.tsv'if new else'rows.209.tsv')).open(),delimiter='\t'))
+control=json.loads((m/'control.json').read_text());new=control['schema']=='ecoda_p6_legacy777_science_audit_v1';gm=control['schema']=='ecoda_p6_legacy_pilotgm27_science_audit_v1'
+rows=list(csv.DictReader((m/('rows.27.tsv'if gm else'rows.777.tsv'if new else'rows.209.tsv')).open(),delimiter='\t'))
 failed=os.environ.get('LEGACY_TEST_FAIL')=='1'
-x=dict(schema='ecoda_legacy777_analysis_compatibility_v1'if new else'ecoda_legacy_analysis_compatibility_v1',physical_files=246 if new else 106,logical_rows=777 if new else 209,rows={r['dataset']+'/'+r['method_key']:{} for r in rows},author_hr_pairs={str(i):{} for i in range(9)},cohorts={str(i):{} for i in range(10)},scientifically_approved_rows=0,model_fits=0,score_calculations=0,h5ad_expression_values_read=False,h5ad_content_rehashed_here=False,prior_validated_content_witness_required=True,validation_identities={k:w for k,w in v.items() if k!='--report'},compatible=not failed,status='COMPATIBILITY_MISMATCHES' if failed else 'COMPATIBILITY_EVIDENCE_COMPLETE_PENDING_REVIEW')
+x=dict(schema='ecoda_legacy_pilotgm27_analysis_compatibility_v1'if gm else'ecoda_legacy777_analysis_compatibility_v1'if new else'ecoda_legacy_analysis_compatibility_v1',physical_files=28 if gm else 246 if new else 106,logical_rows=27 if gm else 777 if new else 209,rows={r['dataset']+'/'+r['method_key']:{} for r in rows},author_hr_pairs={str(i):{} for i in range(0 if gm else 9)},cohorts={str(i):{} for i in range(10)},scientifically_approved_rows=0,model_fits=0,score_calculations=0,h5ad_expression_values_read=False,h5ad_content_rehashed_here=False,prior_validated_content_witness_required=True,validation_identities={k:w for k,w in v.items() if k!='--report'},compatible=not failed,status='COMPATIBILITY_MISMATCHES' if failed else 'COMPATIBILITY_EVIDENCE_COMPLETE_PENDING_REVIEW')
 with open(v['--report'],'x') as f:json.dump(x,f)
 print('startup noise is a log, never report content')
 sys.exit(1 if failed else 0)
@@ -287,6 +304,13 @@ r=json.load(open(sys.argv[1]));assert r['schema']=='ecoda_legacy777_analysis_com
 PY_777
 for name in wrong_count wrong_physical old_schema wrong_names arbitrary; do
   reject invoke "fixed777_${name}" "${INPUTS}/777_${name}_request.json"
+done
+invoke fixed27 "${INPUTS}/27_request.json" > "${TMP}/27.log"
+gmrun="${SCRATCH}/_ecoda_runs/fixed27"
+[[ "$(wc -l < "${gmrun}/manifests/selection.tsv" | tr -d ' ')" == 27 && -f "${gmrun}/manifests/author_hr_metadata_pairs.0.tsv" && ! -e "${gmrun}/manifests/author_hr_metadata_pairs.9.tsv" ]]
+ECODA_RUN_ID=fixed27 ECODA_RUN_ROOT="${gmrun}" bash "${TREE}/src/utils/bash/legacy_analysis_audit.sh" --validate > "${TMP}/27-validated.log"
+for name in wrong_count wrong_physical wrong_pairs; do
+  reject invoke "fixed27_${name}" "${INPUTS}/27_${name}_request.json"
 done
 for name in pending science exit_claim unknown accounting dependency exit success audited terminal source runtime record proof status producer task labels stat label_proof; do
   reject invoke "stopped_${name}" "${INPUTS}/stopped_${name}_request.json"

@@ -1,8 +1,8 @@
 # Evidence only: no fits, score calculation, publication receipts or source edits.
 # Source this file for the focused fixture; the CLI is invoked only on HPC.
 .legacy_need <- function(ok, message) if (!isTRUE(ok)) stop(message, call. = FALSE)
-.legacy_fields <- function(frame, fields) {
-  .legacy_need(is.data.frame(frame) && nrow(frame) > 0L && all(fields %in% names(frame)),
+.legacy_fields <- function(frame, fields, allow_empty = FALSE) {
+  .legacy_need(is.data.frame(frame) && (nrow(frame) > 0L || allow_empty) && all(fields %in% names(frame)),
     paste("Missing finite manifest fields:", paste(fields, collapse = ", ")))
 }
 .legacy_ids <- function(ids) {
@@ -175,7 +175,7 @@ audit_legacy_analysis_inputs <- function(rows, files, pairs, datasets, obs_reade
   .legacy_fields(rows, c("dataset", "view", "method_key", "kind", "artifact_path", "bundle_key", "sample_id_col", "md5", "size",
     "current_input_path", "current_input_md5", "current_input_size", "current_input_proof", "origin", "status"))
   .legacy_fields(files, c("dataset", "artifact_path", "md5", "size", "needed_bundle_keys"))
-  .legacy_fields(pairs, c("dataset", "author_path", "author_md5", "author_bundle_key", "metadata_path", "metadata_md5", "current_input_path", "current_input_md5"))
+  .legacy_fields(pairs, c("dataset", "author_path", "author_md5", "author_bundle_key", "metadata_path", "metadata_md5", "current_input_path", "current_input_md5"), allow_empty = TRUE)
   .legacy_need(!anyDuplicated(.analysis_key(rows)) && !anyDuplicated(files$artifact_path) &&
     !anyDuplicated(pairs$dataset) && all(rows$origin == "legacy_reuse") &&
     all(rows$status == "BLOCKED_UNTIL_SCIENTIFIC_REVIEW") && all(rows$view == "benchmark_analysis"), "Invalid/approved/duplicate legacy scope")
@@ -315,9 +315,15 @@ audit_legacy_analysis_inputs <- function(rows, files, pairs, datasets, obs_reade
     ecoda_p6_legacy_science_audit_proposal_v4 = list(rows = "rows.209.tsv", files = "files.106.tsv",
       logical = 209L, physical = 106L, report = "ecoda_legacy_analysis_compatibility_v1"),
     ecoda_p6_legacy777_science_audit_v1 = list(rows = "rows.777.tsv", files = "files.246.tsv",
-      logical = 777L, physical = 246L, report = "ecoda_legacy777_analysis_compatibility_v1"), NULL)
+      logical = 777L, physical = 246L, report = "ecoda_legacy777_analysis_compatibility_v1"),
+    ecoda_p6_legacy_pilotgm27_science_audit_v1 = list(rows = "rows.27.tsv", files = "files.28.tsv",
+      logical = 27L, physical = 28L, report = "ecoda_legacy_pilotgm27_analysis_compatibility_v1"), NULL)
+  if (!is.null(scope)) {
+    scope$pair_count <- if (scope$logical == 27L) 0L else 9L
+    scope$pairs <- paste0("author_hr_metadata_pairs.", scope$pair_count, ".tsv")
+  }
   .legacy_need(!is.null(scope) && control$total_logical_rows == scope$logical &&
-    control$physical_files == scope$physical && control$author_hr_metadata_pairs == 9L &&
+    control$physical_files == scope$physical && control$author_hr_metadata_pairs == scope$pair_count &&
     control$scientifically_approved_rows == 0L, "Unexpected finite audit control")
   scope
 }
@@ -336,18 +342,27 @@ legacy_analysis_audit_main <- function(args = commandArgs(TRUE)) {
   control <- .legacy_json_metadata(opts[["--control"]], opts[["--control-sha256"]])
   scope <- .legacy_fixed_scope(control)
   root <- dirname(opts[["--control"]]); frames <- list()
-  for (name in c(scope$rows, scope$files, "author_hr_metadata_pairs.9.tsv")) {
+  for (name in c(scope$rows, scope$files, scope$pairs)) {
     path <- file.path(root, name); sha <- control$controls[[name]]
     .legacy_sha_file(path, sha)
     frames[[name]] <- utils::read.delim(path, colClasses = "character", check.names = FALSE, quote = "", comment.char = "", na.strings = NULL)
     .legacy_sha_file(path, sha)
   }
-  .legacy_need(nrow(frames[[1]]) == scope$logical && nrow(frames[[2]]) == scope$physical && nrow(frames[[3]]) == 9L,
+  .legacy_need(nrow(frames[[1]]) == scope$logical && nrow(frames[[2]]) == scope$physical && nrow(frames[[3]]) == scope$pair_count,
     "Finite manifest row counts differ")
   if (scope$logical == 777L)
     .legacy_need(length(unique(frames[[1]]$dataset)) == 10L &&
       sum(frames[[2]]$dataset == "__all__") == 1L && sum(frames[[2]]$dataset != "__all__") == 245L,
       "Fixed777 requires ten cohorts and245core plus one timing file")
+  if (scope$logical == 27L) {
+    legacy <- c("Adams", "Gongsharma_cmv_young_males", "Kfoury", "Kim", "Lee", "Pelka", "Smillie", "Wu", "Zhang")
+    expected <- unlist(lapply(legacy, function(ds) paste0(ds, "/PILOT-GM-VAE_",
+      if (ds == "Gongsharma_cmv_young_males") c("hvg1000", "hvg2000_lowres") else c("hvg1000", "hvg3000", "hvg2000_lowres"))))
+    expected <- c(expected, "Bassez/PILOT-GM-VAE_hvg2000_lowres")
+    .legacy_need(setequal(paste(frames[[1]]$dataset, frames[[1]]$method_key, sep = "/"), expected) &&
+      all(frames[[1]]$kind == "distance_feather") && all(frames[[1]]$bundle_key == "") &&
+      sum(frames[[2]]$dataset == "__all__") == 1L, "Fixed GM27 requires exact legacy parameter keys and one timing file")
+  }
   .legacy_need(identical(opts[["--observation-sha256"]], control$source_observation$sha256), "Original observation identity differs")
   observation <- .legacy_json_metadata(opts[["--observation"]], opts[["--observation-sha256"]])
   .legacy_need(identical(opts[["--feather-headers-sha256"]], control$feather_header_observation$sha256), "Feather header witness identity differs")
@@ -358,8 +373,8 @@ legacy_analysis_audit_main <- function(args = commandArgs(TRUE)) {
   .legacy_need(identical(zero_policy$source_schema_sha256, opts[["--zeroimp-schema-sha256"]]) &&
     length(zero_schema$rows) == 9L && length(zero_policy$datasets) == 9L &&
     zero_policy$scientifically_approved_rows == 0L &&
-    setequal(vapply(zero_schema$rows, `[[`, character(1), "dataset"), frames[[3]]$dataset) &&
-    setequal(vapply(zero_policy$datasets, `[[`, character(1), "dataset"), frames[[3]]$dataset),
+    (scope$pair_count == 0L || (setequal(vapply(zero_schema$rows, `[[`, character(1), "dataset"), frames[[3]]$dataset) &&
+    setequal(vapply(zero_policy$datasets, `[[`, character(1), "dataset"), frames[[3]]$dataset))),
     "Zero-imputation evidence identities/scope differ")
   datasets <- read_datasets_json(opts[["--config"]], view = "benchmark_analysis")
   module_dir <- normalizePath(file.path(Sys.getenv("PROJECT_ROOT", unset = getwd()), "src/utils/py"), mustWork = TRUE)
