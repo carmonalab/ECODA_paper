@@ -1,0 +1,269 @@
+---
+title: "ECODA application: cancer immune composition and clustering"
+author: "Christian Halter"
+date: "2026-11-08"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    code_folding: show
+---
+
+# Purpose and methods decisions
+
+This application ports the requested analysis from `Analysis_unsup_strat.rmd`
+in the former Yan project. It compares HiTME high-resolution immune-cell
+compositions in Yan, Zhang and Bassez breast cancer, with Pelka colorectal
+cancer providing a fourth cohort for feature harmonization and loading
+correlations. The analysis uses precomputed annotations; it performs no gene
+expression processing, annotation, batch correction or benchmark reruns.
+
+**Application choices, distinct from the general benchmark:**
+
+| Step | Rule used here |
+|:--|:--|
+| Upstream cohorts | Current configured benchmark-analysis inputs for Bassez/Zhang/Pelka; imported historical Yan annotations |
+| Tissue selection | Zhang `Tissue == "tumor"`; Pelka `Tissue == "T"`; Bassez retains its configured Pre/treatment-naive/known-expansion selection |
+| Annotation | HiTME **layer 2**, required explicitly; no fallback to broad or author labels |
+| Eligible cells | Exact original exclusions listed below, including **neutrophils** |
+| Sample cutoff | **At least 10 eligible immune cells**, before sparsity filtering/intersection; the old comment saying 50 was inaccurate |
+| Sparse types | Remove a type when zero in **more than 90%** of retained samples within any cohort; exactly 90% is retained |
+| Shared features | Intersection of filtered types across **all four cohorts**, including Pelka; no second sample cutoff after intersection |
+| Zero handling | Add **0.5 to every count**, including positive counts and matrices without zeros; natural-log CLR |
+| PCA | Separate centered, unscaled PCA in each cohort; all shared types, without HVCT selection |
+| PCA orientation | Original lineage anchors for PC1/PC2; align other cohorts' PC2 loadings to Yan |
+| Breast consensus bars | Original signed loadings from Yan/Zhang/Bassez, ordered by their three-cohort mean; Pelka does not enter the mean |
+| Heatmaps | The same CLR as PCA, centered per cell type across samples, without variance scaling; Euclidean distances and Ward.D2 |
+
+This retains the source's filtering while intentionally changing its PCA
+pseudocount from **+1 to +0.5**, consistent with the ECODA benchmark's
+`counts_all` convention and with these heatmaps. Current inputs can also differ
+from the former packaged `example_data.rda`. Historical PDFs are visual
+references, rather than expected numerical matches.
+
+The exact excluded names are `Erythrocyte`, `Neutrophils`, `Platelet`,
+`Endothelial`, `Epithelial`, `Fibroblast`, `abnormal cell`, `fibroblast`,
+`perivascular cell`, and `endothelial cell`. Also exclude labels matching the
+case-sensitive pattern `__|endo-|fibro-|VSMC-|peri-|CAFs|Unresolved`.
+Consequently, “immune cells only” describes the original selected immune
+compartment, **not every immune lineage**.
+
+## Response annotations and separation from model fitting
+
+Response labels are attached **after** composition preprocessing and PCA.
+They never enter CLR, feature selection, PCA orientation or clustering.
+
+- Yan: `pCR` → High; `RD` → Medium; literal `"NA"` → Low. The user confirmed
+  that the last group represents early dropouts with the worst response.
+  The supplementary table itself defines NA only as “not available”; the
+  Low interpretation is therefore recorded as user-supplied clinical context.
+  Actual R missing values remain missing.
+- Zhang: PR/CR → High; SD → Medium; PD → Low.
+- Bassez: E → High; NE → Low, representing the study's expansion endpoint.
+
+These are study-specific endpoints, not identical clinical measures. Samples
+with missing response remain in unsupervised analyses and are omitted only
+from response comparisons. Boxplots retain the source's pairwise Wilcoxon
+comparisons: asymptotic screening at p <= 0.05, then ggpubr's default Wilcoxon
+labeling for those comparisons. Point jitter is horizontal and seeded for
+reproducible display. Correlation-heatmap stars
+are unadjusted two-sided Pearson tests across cell-type loadings, **not patient
+scores**; no multiple-testing correction or confirmatory claim is added.
+
+# Input provenance and preparation
+
+The notebook runs from frozen compact local inputs. Preparation is explicit
+and separate, and is not executed by knitting this document:
+
+```{bash prepare-current-inputs, eval=FALSE}
+pixi run -e default python src/notebooks/prepare_cancer_clustering_inputs.py
+```
+
+The preparation command resolves dataset participation and the
+`benchmark_analysis` view through `datasets.json` helpers. It reads only
+selected H5AD `obs` fields on **Bamboo**, using the configured Pixi Python,
+then freezes per-sample counts and metadata locally. It does not install
+cluster code, read expression matrices, submit jobs or modify canonical
+artifacts. Existing H5AD checksum identities, sizes and paths are reconciled
+between scratch/NAS; selected metadata receives its own digest. Full H5AD
+matrix bytes are **not rehashed** in this metadata-only audit.
+
+The legacy benchmark HiTME RDS bundles are imported with verified checksums
+for comparison only. Reconciliation found count differences from current obs,
+so **they are not used as the current composition input**. Exact differences
+are saved with the application evidence below.
+
+## Existing processing in ECODA
+
+Bassez, Zhang and Pelka already have cohort-specific preprocessing,
+canonical processing and automated annotation in this repository. Their
+existing QC notebooks under `notebooks/QC_filtering/` and configured
+benchmark-analysis views document upstream processing. In particular,
+canonical Stage 3's sample-cell cutoff is upstream of this application's
+additional 10-eligible-immune-cell cutoff; the latter does not replace it.
+
+The concurrent confounding/reprocessing plan owns pipeline repair and release
+work. These application snapshots record the existing processed source
+identities and do not claim to be regenerated campaign outputs. Changing
+author HR metadata alone does not make this application depend on author HR
+labels: the application uses automated HiTME layer 2 throughout.
+
+## Yan historical HiTME implementation
+
+Yan is an **application-only historical import**, outside production dataset
+registration. The existing aggregate bundle contains 99 samples, 27 metadata
+columns, HiTME layers 1–3, and author annotation counts. Only this compact
+bundle is needed locally.
+
+The legacy workflow:
+
+1. Read the author-distributed H5AD and use `donor_id` as sample identity;
+   prepare tasks containing five samples.
+2. Extract each sample from H5AD **X**, retain author `obs` metadata and create
+   its Seurat object. The worker added no explicit cell-QC filter or
+   `NormalizeData()` call.
+3. Standardize symbols with `STACAS::StandardizeGeneSymbols`; run HiTME with
+   tumor scGate models, default method parameters, seed 123 and one core.
+4. Save annotated sample objects and tabulate layer 1–3 compositions.
+5. Join patient and scRNA metrics supplements by `Patient_ID`/`sample`, retain
+   `has_scRNA == "yes"` and annotated samples, and save `ecoda_data.rds`.
+
+Reference filenames match ECODA's `sketched_CD8T_human_ref_v1.rds`,
+`sketched_CD4T_human_ref_v2.rds`, `sketched_DC_human_ref_v2.rds`, and
+`sketched_MoMac_human_v1.rds`. Historical content checksums are unavailable;
+the old worker force-refreshed a scGate **dev** database. The legacy lockfile
+records HiTME revision `87f8d4147aaa468438df33f50cabf2005ac518bf`, but does not
+prove the exact execution runtime. Current ECODA uses validated references,
+explicit normalization/counts handling and dual annotation. This import
+therefore **does not claim current Pipeline 4 or scATOMIC compliance**.
+
+Existing annotated Yan sample objects and summaries were copied directly
+within NAS to `applications/cancer_clustering/imports/Yan/20261108-v1` under
+the ECODA NAS project. The archive includes source scripts, the source
+analysis/helper, metadata supplements and historical environment evidence.
+Those lockfiles are archival evidence only and are not adopted here.
+Source checksums and dirty-checkout details are in `provenance.json`;
+the archive manifest MD5 is `6683d38b61426d850557afb44bc09319`.
+No full H5AD or Seurat object is retained on the workstation.
+
+# Load the frozen application inputs
+
+```{r setup, message=FALSE, warning=FALSE}
+project_root <- normalizePath(if (file.exists("datasets.json")) "." else "..", mustWork = TRUE)
+stopifnot(file.exists(file.path(project_root, "datasets.json")))
+knitr::opts_knit$set(root.dir = project_root)
+source(file.path(project_root, "src/notebooks/ecoda_application_cancer_clustering.R"))
+set.seed(42)
+
+run_id <- "20261108-v1"
+input_dir <- file.path(project_root, "data", "applications", "cancer_clustering", run_id)
+result_dir <- file.path(input_dir, "derived")
+plot_dir <- file.path(project_root, "plots", "ecoda_application_cancer_clustering", run_id)
+dir.create(result_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(plot_dir, recursive = TRUE, showWarnings = FALSE)
+knitr::opts_chunk$set(fig.path = paste0(plot_dir, "/notebook/"), dpi = 120)
+
+application_inputs <- cancer_read_inputs(input_dir)
+application <- cancer_prepare(application_inputs$inputs)
+```
+
+```{r cohort-summary}
+cohort_summary <- do.call(rbind, lapply(names(application$counts), function(cohort) {
+  fit <- application$pca[[cohort]]
+  variance <- fit$sdev^2 / sum(fit$sdev^2)
+  data.frame(cohort = cohort, samples = nrow(application$counts[[cohort]]),
+    shared_types = length(application$shared_cells),
+    PC1_percent = signif(100 * variance[1], 2),
+    PC2_percent = signif(100 * variance[2], 2))
+}))
+knitr::kable(cohort_summary, row.names = FALSE)
+application$shared_cells
+```
+
+```{r filtering-audit}
+knitr::kable(subset(application$audit$samples, !retained), row.names = FALSE)
+knitr::kable(subset(application$audit$cell_types, reason != "retained"), row.names = FALSE)
+```
+
+# Figures
+
+The plotting call writes seven standalone PDFs with checksum sidecars. For
+interactive figure iteration, rerun only the affected plotting function in
+the same R session. The notebook never reruns upstream processing.
+
+```{r make-application-figures, message=FALSE, warning=TRUE, results='hide'}
+application_figures <- cancer_plot_all(application, plot_dir)
+```
+
+## Breast cancer PCA, stratification and shared axes
+
+```{r breast-composite, fig.width=12, fig.height=14}
+application_figures$plots$breast_composite
+```
+
+## Bassez shared immune composition
+
+```{r bassez-heatmap, fig.width=11, fig.height=9}
+grid::grid.newpage()
+grid::grid.draw(application_figures$plots$heatmaps$Bassez$gtable)
+```
+
+## Pelka shared immune composition
+
+Pelka uses the same shared cell types as the breast cohorts; the annotation
+is MMR status. Row/column cuts are 2/2, compared with Bassez 3/3,
+Yan 4/3 and Zhang 3/3.
+
+```{r pelka-heatmap, fig.width=10, fig.height=8}
+grid::grid.newpage()
+grid::grid.draw(application_figures$plots$heatmaps$Pelka$gtable)
+```
+
+## Cross-cohort loading correlations
+
+Both axes are independently fitted within each cohort. The eight-axis
+heatmap clusters `1 - Pearson correlation` with Ward.D2, using full-precision
+correlations for clustering and rounding only the displayed fill values.
+
+```{r cross-cohort-correlation, fig.width=6, fig.height=5}
+application_figures$plots$correlation
+```
+
+## Appendix: Yan and Zhang shared immune heatmaps
+
+```{r appendix-heatmaps, fig.width=18, fig.height=9}
+application_figures$plots$appendix_heatmaps
+```
+
+# Persist traceability and numerical evidence
+
+Application evidence is separate from canonical benchmark results. Existing
+RDS evidence is checksum-verified and may be reused only when identical;
+choose a new run ID for a changed input/method snapshot.
+
+```{r persist-evidence}
+source_paths <- file.path(project_root, c(
+  notebook = "notebooks/ecoda_application_cancer_clustering.rmd",
+  helper = "src/notebooks/ecoda_application_cancer_clustering.R",
+  importer = "src/notebooks/prepare_cancer_clustering_inputs.py"
+))
+source_md5 <- tools::md5sum(source_paths)
+stopifnot(!anyNA(source_md5))
+identity <- list(run_id = run_id, source_md5 = source_md5,
+  settings = application$settings, inputs = application_inputs$provenance)
+cancer_save_rds(identity, file.path(result_dir, "input_and_source_identity.rds"))
+cancer_save_rds(application, file.path(result_dir, "analysis.rds"))
+cancer_save_rds(application_inputs$legacy_reconciliation,
+  file.path(result_dir, "legacy_bundle_reconciliation.rds"))
+cancer_save_rds(list(correlation = application_figures$correlation,
+  clusters = application_figures$clusters,
+  heatmap_matrices = application_figures$heatmap_matrices),
+  file.path(result_dir, "figure_numerical_evidence.rds"))
+cancer_save_rds(utils::sessionInfo(), file.path(result_dir, "session_info.rds"))
+knitr::kable(data.frame(figure = names(application_figures$files),
+  path = unname(application_figures$files)), row.names = FALSE)
+```
+
+The implementation/progress record is
+`.agents/plans/20261108-cancer-clustering-application-port-plan.md`.
+No commits or pushes are part of this application task.
