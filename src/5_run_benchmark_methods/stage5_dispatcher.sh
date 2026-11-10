@@ -4771,7 +4771,7 @@ stage5_validate_corrected_rds_rows() {
 
 stage5_validate_final_rds_rows() {
   local label ds view row_label path metadata
-  local list tmp
+  local list tmp stdout stderr rc
   local -a rds_args
   [[ "${ANALYSIS_VARIANT:-}" == final ]] || return 1
   [[ ${#RDS_LABELS[@]} -gt 0 ]] || return 0
@@ -4807,13 +4807,19 @@ stage5_validate_final_rds_rows() {
       --config "${DATASETS_JSON_FILE}"
       --input-root "${HPC_SCRATCH_DIR}"
       --batch-pass uncorrected
+      --analysis-variant final
       --source-identity "${SOURCE_IDENTITY}"
       --source-identity-verified
     )
-    if ! ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
-        "${rds_args[@]}" >/dev/null 2>&1; then
-      rm -f "${list}" "${list}.md5"
-      return 1
+    stdout="${list%.tsv}.stdout"
+    stderr="${list%.tsv}.stderr"
+    if ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
+        "${rds_args[@]}" >"${stdout}" 2>"${stderr}"; then
+      :
+    else
+      rc=$?
+      echo "ERROR: final RDS validation failed (exit ${rc}); preserved list=${list} stdout=${stdout} stderr=${stderr}" >&2
+      return "${rc}"
     fi
     rm -f "${list}" "${list}.md5"
   done
