@@ -99,13 +99,16 @@ is partly confounded with suspension; its NULL uses the recorded seed 124.
 
 Bassez's metadata-only HR repair is complete (74,948 cells, 26 samples, 50,809
 fills, 40 categories), with source inputs and protected data unchanged. Its
-approved HR-dependent method work is complete. As of **2026-11-10**, P0–P5
+approved HR-dependent method work is complete. As of **2026-11-10**, original P0–P5
 processing and selected method releases are complete, scientifically reviewed
 and NAS-validated; no method GPU work remains queued. Saved-label and
 zero-imputation screens, PCA rendering and cell-depth diagnostics are complete
-and reviewed. P6 thin projection, reporting, remaining figure QA and final
-backup are in progress; this does not claim every publication figure has been
-regenerated. Publication filenames and numbering are preserved. The
+and reviewed. The thin projection and both batch reports have passed review.
+The parameter screen is being completed with all four supported PILOT-GM-VAE
+settings (HR-1000/2000/3000 and LR-2000): existing valid outputs are reused,
+with only missing or current-input-invalid settings fitted again. Its final
+figure/workbook QA and the finite NAS backup remain pending. Publication
+filenames and numbering are preserved. The
 [active plan](.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md)
 owns the exact run and release ledger, including preserved failed incidents.
 The frozen auxiliary sources are unchanged; no sex-gene mask or chromosome

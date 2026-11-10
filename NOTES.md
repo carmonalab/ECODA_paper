@@ -850,11 +850,15 @@ figure-hierarchy decision is pending.
 
 ## 4. Benchmark regeneration and annotation invariants
 
-Operational checkpoint (**2026-11-10**): P0–P5 processing and selected method
+Operational checkpoint (**2026-11-10**): original P0–P5 processing and selected method
 releases are complete, scientifically reviewed and NAS-validated. No method
 GPU work remains queued. Saved-label and zero-imputation screens, PCA rendering
-and cell-depth diagnostics are complete and reviewed. P6 thin projection,
-reporting, remaining figure QA and final backup are in progress. The
+and cell-depth diagnostics are complete and reviewed. The thin projection and
+both batch reports have passed review. Supp2's PILOT-GM-VAE parameter intake
+had included only default HR-2000; its supported HR-1000/2000/3000 and LR-2000
+coverage is being restored, reusing valid outputs and fitting only missing or
+current-input-invalid settings. Final screen/workbook QA and the finite NAS
+backup remain pending. The
 [active plan](.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md)
 owns the exact run/release ledger and preserved failure history.
 

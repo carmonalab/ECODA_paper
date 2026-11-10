@@ -192,11 +192,13 @@ MDS means use the corresponding pool. Preserve stored primary NULL labels,
 while Kidney tissue NULL records seed 124. Batch grids contain 360 uncorrected
 or 405 corrected values (nine evaluation entries, five metrics).
 
-Operational checkpoint (**2026-11-10**): P0–P5 processing and selected method
+Operational checkpoint (**2026-11-10**): original P0–P5 processing and selected method
 releases are complete, scientifically reviewed and NAS-validated; no method
 GPU work remains queued. Saved-label and zero-imputation screens, PCA rendering
-and cell-depth diagnostics are complete and reviewed. P6 thin projection,
-reporting, remaining figure QA and final backup are in progress; not every
-publication figure is yet claimed regenerated. Filenames and numbering are
+and cell-depth diagnostics are complete and reviewed. The thin projection and
+both batch reports have passed review. The parameter screen is being completed
+with supported PILOT-GM-VAE HR-1000/2000/3000 and LR-2000 results, reusing valid
+outputs and fitting only missing or current-input-invalid settings. Final
+screen/workbook QA and the finite NAS backup remain pending. Filenames and numbering are
 preserved. The [active plan](../../.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md)
 owns exact execution/release status and preserved failed incidents.

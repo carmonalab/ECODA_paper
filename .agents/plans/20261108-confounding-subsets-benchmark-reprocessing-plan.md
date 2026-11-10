@@ -63,7 +63,7 @@ decisions have been applied to existing artifacts.
 
 ## Live checkpoint —2026-11-10 UTC, method processing complete; reporting in progress
 
-- **P0–P5 complete:** all11 benchmark BL results, targeted Bassez HR results,
+- **Original P0–P5 selections complete:** all11 benchmark BL results, targeted Bassez HR results,
   Stephenson53-sample benchmark results, and eight filtered cohorts in both
   batch contexts have reviewed scientific artifacts and validated NAS
   publications. All original97 recovery workers succeeded; no benchmark GPU
@@ -81,13 +81,19 @@ decisions have been applied to existing artifacts.
 - **Reporting underway:**915 benchmark method rows have their4575 finite core
   metric cells plus separate modularity diagnostics. All43 maintained base
   plotting chunks ran once; resident results are reused for affected-chunk QA
-  fixes. Batch UNC reporting is running in its separate resident session, with
-  both Kidney axes and the two corrected Harmony arms retained.
-- **Remaining P6:** finish figure QA, restore omitted valid PILOT-GM parameter
-  coverage identified by the user, complete both batch reports, then verify the
+  fixes. All125batch PDFs and53derived outputs plus53sidecars now pass numeric
+  and visual QA, with both Kidney axes and the two corrected Harmony arms retained.
+- **Remaining P6:** restore omitted valid PILOT-GM parameter
+  coverage identified by the user, refresh its screen/workbook, then verify the
   finite derived-output/final-figure NAS backup. Existing fits remain outside
   recomputation unless exact additional missing/current-input-invalid rows are
   established. This checkpoint does not claim all publication figures are final.
+- **Current supplemental compute:** Step3 GM parameter gate isRUNNING (launched
+  08:49:43UTC), one native three-task array4666814 with watchdog4666817 after
+  successful input preflight4666813. Exact3emitted rows and all3workers' current
+  input/startup are verified without scheduler polling. One official waiter15975
+  remains armed. Next same-group work is27legacy compatibility checks, then the
+  missing GongHR3000 fit; existing valid defaults stay excluded.
 - Detailed immutable evidence, recovery history and current launch identities
   are retained in the dated ledger below. The following Nov9 checkpoint is
   superseded history and does not describe the current queue.
@@ -4871,3 +4877,67 @@ and input-only review, not a success dependency on the failed97 gate.
   CPU jobs run. Present legacy parameter files are checked separately; absent
   checksum or omission from old intake never alone justifies a model refit.
   Exact NAS Gong3000 discovery and scoped27compatibility remain pending.
+
+### Reporting review and supplemental execution checkpoint —09:45UTC
+
+- Step3 is launched once; one waiter15975 is armed. Native exact3task manifest
+  and current53-sample input/startup for all3workers are observed; only ordinary
+  dependency-library SyntaxWarnings, no failure marker. Accounting remains
+  unqueried until terminal inspection. IDs currently4666813/4666814/4666817;
+  aggregate/retry IDs must still be observed at completion.
+- All125batch PDFs and53derived tables/bundles plus53sidecars pass finite and
+  independent765cell numeric QA. Final layout fixes preserve all categories,
+  coordinates and count labels. A late COVID percent-stack check found2segments
+  censored by floating-point totals above100; coordinate-only display correction
+  retains all27rectangles and67count labels. Only one PDF changes in the v2
+  release inventory; old v1 evidence remains explicitly superseded for that file.
+  Final QA v2SHAadeaf08e…, publication231.v2SHA46b6bf62…, metadata24SHA b2b8ecea…
+  plus11revision-evidence filesSHA7623b739…. No source H5 or model changed.
+- Source61f1dd2(batch layouts),102b10a(future producer majority/cache repair),
+  1d514f7(COVID stack),f5d8ba9(main scientific plotting/data-retention fixes) and
+  aa8b01a(final panel readability) are pushed. Main notebook foreign94add/22del
+  hunks stay unstaged. The future exporter applies configured technical majority
+  to both views and verifies Sample/order/winners during configured-policy
+  reuse/check through stagedobs only. Healthy caches remain byte-identical;
+  semantic mismatch fails outside the old corruption-rebuild catch and requires
+  a fresh namespace. Nonpolicy checks retain the no-H5 path. Focused, worker and
+  independent tests pass; current native exports/e75derivative remain immutable.
+- Main915scores/4575core cells remain resident and unchanged. Source-frozen
+  affected-chunk repairs fix11dataset shape loss, masked rawmetric filters,
+  censored values/paired tests, Bassez target wording, long subtitles and
+  standalone/combined canvas crowding. Heatmap export uses explicit owned-device
+  drawing after the native filename route produced an actual zero-page file;
+  actual final PDF is one nonblank page with unchanged40x26composition and
+  clustering. All80PDFs and9-sheet workbook are readable; final parameter-screen
+  data coverage remains held until the33additional GM rows are qualified.
+- Discovery proves one GongHR3000 file absent on both selectedBamboo scratch
+  and canonicalNAS; no automatic cross-host sync or unproved alias is used.
+  Exact one-setting Gong packet is prepared against352source/current180input.
+  Twenty-seven existing small legacy distance files have actual full hashes
+  (350f6079…), including GongHR1000's explicitsampleID field. New fixed27/28
+  compatibility seam is independently tested and committedf2f9363; immutable
+  f5source manifest1e969998…/archived6a279a… is verified. Its20metadata controls
+  are staged and read-only preflight passes (370e1948…); no audit job is yet
+  launched or passing rows scientifically admitted. Run this short audit after
+  Step3terminal review and before the Gong fit to identify any further exact
+  invalid/missing settings without rerunning healthy outputs.
+- Accepted GM33 append packet32bdeb8a… merges a fresh1133metadata control and
+  evaluates only33new distance results into948methods/4740core cells. It stages
+  all33 before touching resident state, protects old915/NULL/RNG/depth/timing/
+  main12/extended21 and rewrites onlySupp2/workbook afterward. Actual admission,
+  additional thin projection/mirror and append still await reviewed artifacts.
+  No invented source hashes, native owners, job IDs or scientific approvals.
+
+### Supplemental prerequisite check —10:04UTC
+
+- Gong1 metadata-only preflight actually passed onBamboo. Exactly two small
+  frozen selection/input controls were staged; current180-sample/896291-cell
+  input proof and full prior stat witness match. Cached
+  X_pca_benchmark_analysis_hvg3000 is a float32 dataset896291x50. This check read
+  H5 schema only: zero data values/expression objects/SIF body reads, no jobs or
+  scheduler queries. It does not claim PCA value finiteness or fit completion.
+  Evidence: .gate/p6_gong_pilotgm1_20261110_v1/preflight_v1/ROOT_preflight.observed.v1.json.
+- Step3 solewait15975 remains active. Gong launch still waits for the Step3 and
+  short legacy27 terminal reviews in the same ecoda-benchmark group. The finite
+  legacy27 audit identifies any genuinely invalid existing parameter outputs
+  before deciding the exact next compute scope. No default or healthy fit rerun.
