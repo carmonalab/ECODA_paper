@@ -52,7 +52,11 @@ def fixture(base):
         md5=hashlib.md5(oldexport.read_bytes()).hexdigest();size=oldexport.stat().st_size
         side=write(Path(str(oldexport)+'.md5'),f'PATH={oldexport}\nMD5={md5}\nSIZE={size}\n')
         status=write(x['scratch']/'_ecoda_runs/stage5_main_uncorrected_20261109_v1/status/metadata_export'/f'{ds}__batch_effect_uncorrected.status',f'STATE=OK\nSTATUS=EXPORTED\nTASK_ID={i}\nRUN_ID=stage5_main_uncorrected_20261109_v1\nOUTPUT_FILE={oldexport}\nINPUT_FILE={h5}\n')
-        exports.append(dict(dataset=ds,source=str(oldexport),md5=md5,size=size,sidecar_sha256=sha(side),status=proof(status)))
+        exports.append(dict(dataset=ds,kind='metadata',context=pub.UNC32_CONTEXT,source_role='uncorrected_metadata',source=str(oldexport),md5=md5,size=size,sidecar_sha256=sha(side),status=proof(status)))
+    # Actual strict32 source-role topology: metadata8 plus preparation16. The
+    # latter are preserved provenance, never fabricated EXPORTED witnesses.
+    exports += [dict(dataset=ds,kind=kind,context=pub.UNC32_CONTEXT,source_role='uncorrected_preparation')
+                for kind in ('pseudobulk','timing') for ds in pub.UNC32_DATASETS]
     native = write(control_root/'native.json',json.dumps(dict(source_commit=pub.UNC32_SOURCE,run_id=old.name,status='EXACT32_RDS_NATIVE_DIAGNOSTIC_PASSED_NO_REUSE_APPROVAL',original_owners_and_statuses_unchanged=True,metadata={str(p):dict(stat=stat(p),sha256=sha(p)) for p in (sm,runtime,terminal)},inputs=input_stats,artifacts=[{}]*32,commands=[{}]*6)))
     scope = write(control_root/'scope.json',json.dumps(dict(source_commit=pub.UNC32_SOURCE,source_manifest_sha256=sha(sm),source_root=str(x['source']),runtime_identity_sha256=sha(runtime),config_sha256=sha(x['config']),strict32_receipt=proof(prep),contexts=[dict(context=pub.UNC32_CONTEXT,run_root=str(old),run_id=old.name,input_references=refs,adopted_source_rows=exports)],artifacts=[dict(r,context=pub.UNC32_CONTEXT) for r in expected])))
     observed = write(control_root/'metadata.json',json.dumps(dict(source_commit=pub.UNC32_SOURCE,issues=[],changes=[],files=[],rows=observed_rows)))
@@ -79,6 +83,20 @@ def fixture(base):
 
 
 class CurrentUNC32(unittest.TestCase):
+    def test_exact_metadata8_with_preparation16(self):
+        context=dict(adopted_source_rows=[dict(dataset=ds,kind=kind,context=pub.UNC32_CONTEXT,
+            source_role='uncorrected_metadata' if kind=='metadata' else 'uncorrected_preparation')
+            for kind in ('metadata','pseudobulk','timing') for ds in pub.UNC32_DATASETS])
+        before=copy.deepcopy(context);rows=pub.unc32_metadata_exports(context)
+        self.assertEqual(len(rows),8);self.assertEqual(context,before)
+        for change in (lambda x:x['adopted_source_rows'].pop(0),
+                       lambda x:x['adopted_source_rows'].append(x['adopted_source_rows'][0]),
+                       lambda x:x['adopted_source_rows'][0].update(source_role='uncorrected_preparation'),
+                       lambda x:x['adopted_source_rows'][0].update(context='batch_effect/corrected_final'),
+                       lambda x:x['adopted_source_rows'][0].update(dataset='foreign')):
+            bad=copy.deepcopy(context);change(bad)
+            with self.assertRaises(ValueError):pub.unc32_metadata_exports(bad)
+
     def test_scope(self):
         scope=pub.unc32_paths(Path('/scratch/_ecoda_runs')/pub.UNC32_RUN)
         from collections import Counter

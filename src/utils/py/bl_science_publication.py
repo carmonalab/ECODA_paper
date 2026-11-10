@@ -1484,6 +1484,16 @@ def unc32_qualification(qualified, expected, science):
     return by_path
 
 
+def unc32_metadata_exports(context):
+    # Strict32 also preserves8 preparation caches and8 original timing rows.
+    # Only the8 metadata rows are EXPORTED witnesses, not those other roles.
+    exports = [r for r in context['adopted_source_rows'] if r['kind'] == 'metadata']
+    require(len(exports) == 8 and [r['dataset'] for r in exports] == list(UNC32_DATASETS)
+            and all(r['context'] == UNC32_CONTEXT and r['source_role'] == 'uncorrected_metadata' for r in exports),
+            'Original eight metadata export witnesses missing/foreign/duplicated')
+    return exports
+
+
 def verified_unc32_scope(control, science, review, run, nas):
     original = safe(science['original_run_root']); root = original / 'artifacts' / UNC32_CONTEXT
     require(original.parent == run.parent and original.name == UNC32_RUN and original != run
@@ -1549,8 +1559,8 @@ def verified_unc32_scope(control, science, review, run, nas):
     for item in adoption['evidence']:
         proof(item)
         require(item in science['preparation_lineage'], 'Preserve exact original preparation/export/writer evidence')
-    require(len(context['adopted_source_rows']) == 8, 'Original eight metadata export witnesses missing')
-    for index, item in enumerate(context['adopted_source_rows'], 1):
+    exports = unc32_metadata_exports(context)
+    for index, item in enumerate(exports, 1):
         path = safe(item['source']); status = fields(proof(item['status']))
         require(item['dataset'] == UNC32_DATASETS[index-1] and digest(path, 'md5') == item['md5']
                 and path.stat().st_size == item['size'] and digest(str(path) + '.md5') == item['sidecar_sha256']
@@ -1576,7 +1586,7 @@ def verified_unc32_scope(control, science, review, run, nas):
             owner(path, original, {'OK', 'FAIL', 'ACTIVE'})
         require(qualified[str(path)]['md5'] == current['md5'], 'Qualified bytes differ from exact PUBLISHED payload')
         if item['kind'] == 'sample_metadata':
-            exported = next(r for r in context['adopted_source_rows'] if r['dataset'] == item['dataset'])
+            exported = next(r for r in exports if r['dataset'] == item['dataset'])
             require(current['md5'] == exported['md5'] and current['size'] == str(exported['size']), 'Current metadata is not the originalv1 byte-copy')
         if item['kind'] == 'runtime':
             runtime = read_json(path); core = Path(runtime['artifact_path'])
