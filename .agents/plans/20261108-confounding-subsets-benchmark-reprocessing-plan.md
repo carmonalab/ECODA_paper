@@ -4585,3 +4585,61 @@ byte-identical original-fit runtime evidence can be used through checked copy
 lineage without pretending a new fit took place. Legacy209 evidence-audit
 staging/launch preparation proceeds in parallel using the existing603 snapshot
 and input-only review, not a success dependency on the failed97 gate.
+
+### Reporting recovery and publication checkpoint —2026-11-10
+
+- Validation repair was independently tested and pushed in`e74ae1b462f6b8df49d5402fec75e16f92957971`.
+  Its immutable source snapshot is`20261110-p6-screen-validation-v1/e74ae1b462f6b8df49d5402fec75e16f92957971`,
+  manifestSHA`7a3477fd1d68d7bab05c2e9124125c5be70b831b48c163074e6a2d2895f760da`.
+- Actual current-UNC32 native diagnostic v2 passed all32 retained RDS files:
+  eight preparation caches, eight pseudobulk results, eight composition and
+  eight metadata bundles. The original missing-variant calls fail exactly as
+  reproduced; all three identical lists pass with explicit final context.
+  Observation`remaining97_uncorrected_final_rds_20261110_v1/diagnostic.observed.v2.json`,
+  SHA`a79dee2144ae1ac30ffc94068c9b8350fe4c546dd5d8712d7cc8b56ac3591e67`.
+  Original results/proofs/owners/statuses remain unchanged, with no H5AD reads,
+  fits or scores. V1 failed only on legitimate blank lines in native metadata;
+  its source, output and failure evidence are preserved. V2 accepts literal
+  empty lines while retaining exact nonempty fields/duplicate-key rejection.
+- ROOT sealed the separate all11 saved-label input-only review at
+  `p6_prerequisites_20261110_v1/saved22.input_review.APPROVED.v1.json`,
+  SHA`7f34ac4c66fd270389b976782ea1227832fb05c5d7aa4bb4e4bac423ab9e8b20`.
+  It retains STOP/null/unapproved parent and zero scientific-result approvals;
+  it is not a replacement for later result review.
+- Legacy209 audit v1 launched once as job4666625; native worker failed before
+  reading results at`current input changed since observation`. Its official
+  waiter completed and sole inspect records FAILED1:0. Saved22 v1 then
+  independently launched once as4666626 and failed before H5AD/RDS analysis at
+  its current-input stat check; its waiter and sole inspect likewise completed.
+  Both actual failed runs are preserved. BATCH is repairing portability of
+  these two scoped witness checkers: device numbers are local to a kernel,
+  so compare inode/size/mode/mtime/ctime across login and worker only after
+  proving the selected path is on the expected BeeGFS scratch mount. Keep
+  full original stat facts and strict device checks within each invocation;
+  retain native full-hash proofs and all ownership/source contracts. New
+  diagnostics name the precise path and differing fields. No source/H5AD is
+  changed or rehashed for this checker repair. The exact failed node is
+  gpu004; direct read-only node SSH was refused by pam_slurm_adopt because
+  there was no active allocation there. No further direct-node attempt is made.
+- Publication54 adapter and its actual P6 reader/projector fixture passed both
+  ROOT and independent peer review and were pushed in`952e4cb8bb5e66f78048d0de9c0a335e1a51762f`.
+  Verified snapshot`20261110-old54-publication-v1/952e4cb8bb5e66f78048d0de9c0a335e1a51762f`
+  contains the frozen PythonSHA`72290857a4ecab73b2796bbe94b60b397e2db15d298a47c357c03ecd899293f4`.
+  ROOT authorized exact54rows/147payloads, retaining original STOP/null and
+  unknown stored-score policy. Thirty-one metadata files were staged and the
+  metadata-only sealer captured108 exact selected worker logs and emitted
+  all three context controls under`old-main-publication54-v1/sealed.v1`.
+  Benchmark publication v1 stopped before copying because the metadata sealer
+  omitted the existing required incident fields in science/review receipts.
+  Preserve that failed new run; DOCS is repairing only metadata sealing and
+  preparing a complete no-write validator preview before a fresh v2 run.
+  This is not a method failure or a reason to recompute completed outputs.
+- BENCHMARK owns a separate fixed current327-UNC32 publication arm using the
+  existing copy/ownership/checksum/NAS-mode primitives, with104 payloads
+  (40method cores,16runtime companions,40timings,8sample metadata) and no
+  copied RNA preparation caches. It must consume actual scientific evidence
+  for the Python outputs and metadata as well as the native RDS check.
+  BATCH resumes that bounded scientific audit after the portable-check fix;
+  DOCS prepares final A-ledger intake mappings in parallel. Counts-only11,
+  cell-depth11, PCA34 and final release projection remain pending their
+  reviewed parents. No final figures or overall completion are claimed yet.
