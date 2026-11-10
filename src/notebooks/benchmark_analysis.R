@@ -401,10 +401,23 @@ benchmark_load_screen_row <- function(release, row) {
 
 benchmark_zeroimp_scores <- function(release, datasets) {
   items <- benchmark_reviewed_screen_rows(release, "zeroimp", datasets)
-  frames <- list()
+  frames <- outcomes <- list(); typed <- logical(nrow(items))
   for (i in seq_len(nrow(items))) {
     item <- benchmark_load_screen_row(release, items[i, , drop = FALSE])
     methods <- item$result
+    typed[i] <- !is.null(methods$schema)
+    if (typed[i]) {
+      .analysis_zeroimp_screen(methods)
+      if (!identical(item$receipt$origin, "new") || !identical(methods$dataset, item$source$dataset))
+        stop("Counts-only screen requires its new reviewed cohort producer")
+      table <- methods$results
+      outcomes[[i]] <- data.frame(dataset = item$source$dataset, table, check.names = FALSE)
+      for (metric in evaluation_metrics()) frames[[length(frames) + 1L]] <- data.frame(
+        dataset = item$source$dataset, method = table$setting, score = metric, value = table[[metric]],
+        status = table$status, reason = table$reason)
+      rm(item, methods)
+      next
+    }
     if (!is.list(methods) || !length(methods) || is.null(names(methods)) ||
         anyDuplicated(names(methods)) || any(!nzchar(names(methods)))) stop("Malformed reviewed zero-imputation results")
     for (method in names(methods)) {
@@ -422,7 +435,23 @@ benchmark_zeroimp_scores <- function(release, datasets) {
     }
     rm(item, methods)
   }
-  benchmark_validate_screen_scores(do.call(rbind, frames))
+  frame <- do.call(rbind, frames)
+  if (!any(typed)) return(benchmark_validate_screen_scores(frame))
+  if (!all(typed)) stop("Counts-only screens cannot fall back to historical cohort summaries")
+  statuses <- do.call(rbind, outcomes)
+  eligible <- Reduce(intersect, lapply(datasets, function(dataset)
+    statuses$setting[statuses$dataset == dataset & statuses$status == "PASS"]))
+  comparison <- frame[frame$method %in% eligible, , drop = FALSE]
+  benchmark_validate_screen_scores(comparison)
+  excluded <- setdiff(unique(statuses$setting), eligible)
+  if (length(excluded)) warning(length(excluded), " of 43 zero-imputation recipes lack PASS in every selected cohort; ",
+    "comparisons use the complete common PASS menu, with all failures retained in recipe_status/all_recipe_scores")
+  attr(comparison, "recipe_status") <- statuses
+  attr(comparison, "all_recipe_scores") <- frame
+  attr(comparison, "excluded_methods") <- excluded
+  attr(comparison, "comparison_policy") <- paste("Common PASS recipes; exactly", length(datasets),
+    "cohorts per method/metric; all 43 outcomes per cohort retained; failed scores are NA, never imputed")
+  comparison
 }
 
 benchmark_transformation_scores <- function(release, datasets) {

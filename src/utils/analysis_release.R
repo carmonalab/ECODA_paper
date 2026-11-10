@@ -165,6 +165,65 @@ load_analysis_release <- function(ledger, expected_scope, require_projection = F
   unname(tools::md5sum(path))
 }
 
+# The producer's counts/source checks occur before projection. This compact
+# contract retains every recipe outcome and only sample-level PASS geometry.
+.analysis_zeroimp_screen <- function(value) {
+  metrics <- evaluation_metrics()
+  counts <- c("0.5", "2/3", "1", "5", "10", "20", "50", "100", "200")
+  percent <- c("0.001", "0.01", "0.1", "1", "2", "5")
+  menu <- c(unlist(lapply(counts, function(x) paste0(c("counts_zeros_", "counts_all_"), x)), use.names = FALSE),
+    unlist(lapply(percent, function(x) paste0(c("percentage_all_", "percentage_zeros_", "multLN_", "multRepl_"), x, "%")), use.names = FALSE), "asinsqrt")
+  need <- function(ok, message) if (!isTRUE(ok)) stop(message)
+  need(identical(value$schema, "ecoda_zeroimp_counts_five_v1") &&
+    identical(value$policy$schema, value$schema) && identical(value$policy$version, 1L) &&
+    identical(value$policy$recipe_menu, menu) && identical(value$policy$metrics, metrics) &&
+    identical(value$policy$scoring_policy, evaluation_scoring_policy()) &&
+    identical(value$policy$parent_counts_offset, 0.5) && identical(value$policy$seed, 123L),
+    "Unknown counts-only zero-imputation policy")
+  # These are the original producer's fingerprints, not hashes of a new RDS
+  # serialization: the checked A receipt binds the entire unchanged package.
+  hash <- function(x) is.character(x) && length(x) == 1L && !is.na(x) && grepl("^[a-f0-9]{32}$", x)
+  need(all(vapply(value[c("policy_md5", "labels_md5", "counts_md5", "recipe_body_md5",
+    "config_md5", "runner_md5", "release_md5")], hash, logical(1))), "Zero-imputation producer identities missing")
+  ids <- unname(names(value$labels))
+  need(length(ids) > 1L && !anyNA(ids) && !anyDuplicated(ids) && all(nzchar(ids)) &&
+    !anyNA(value$labels) && all(nzchar(as.character(value$labels))), "Invalid zero-imputation sample labels")
+  if (!is.null(value[["counts"]])) need(is.matrix(value[["counts"]]) && is.numeric(value[["counts"]]) &&
+    all(is.finite(value[["counts"]])) && all(value[["counts"]] >= 0) && all(value[["counts"]] == round(value[["counts"]])) &&
+    identical(unname(rownames(value[["counts"]])), ids), "Zero-imputation parent count identity differs")
+  else need(identical(value$projection_schema, "ecoda_zeroimp_counts_projection_v1"),
+    "Unprojected zero-imputation package lacks parent counts")
+  table <- value$results
+  need(is.data.frame(table) && identical(table$setting, menu) && identical(names(value$recipes), menu) &&
+    all(c("status", "reason", "scoring_sample_ids", "dropped_sample_ids", metrics) %in% names(table)) &&
+    !anyNA(table$status) && all(table$status %in% c("PASS", "FAILED_OR_DROPPED_BY_ORDINARY_PRODUCER")),
+    "Zero-imputation screen requires all 43 explicit recipe outcomes")
+  for (i in seq_along(menu)) {
+    record <- value$recipes[[i]]; row <- table[i, , drop = FALSE]
+    need(identical(record$setting, menu[i]) && identical(record$status, row$status) &&
+      identical(record$reason, row$reason) &&
+      identical(row$scoring_sample_ids, as.character(jsonlite::toJSON(record$sample_ids, auto_unbox = FALSE, null = "null"))) &&
+      identical(row$dropped_sample_ids, as.character(jsonlite::toJSON(record$dropped_ids, auto_unbox = FALSE, null = "null"))),
+      "Zero-imputation recipe outcome evidence differs")
+    if (row$status == "PASS") {
+      d <- as.matrix(record$dist_mat)
+      need(inherits(record$dist_mat, "dist") && identical(record$sample_ids, ids) &&
+        !length(record$dropped_ids) && !length(record$extra_ids) && identical(record$labels, value$labels) &&
+        identical(unname(rownames(d)), ids) && identical(unname(colnames(d)), ids) &&
+        all(is.finite(d)) && all(d >= -1e-10) && max(abs(d - t(d))) <= 1e-10 && max(abs(diag(d))) <= 1e-10 &&
+        hash(record$distance_md5), "PASS zero-imputation geometry/sample identity differs")
+      need(is.list(record$scores) && !anyDuplicated(names(record$scores)) &&
+        all(vapply(metrics, function(m) is.numeric(record$scores[[m]]) && length(record$scores[[m]]) == 1L &&
+          is.finite(record$scores[[m]]) && identical(record$scores[[m]], row[[m]]), logical(1))) &&
+        row$lisi_score >= 0 && row$lisi_score <= 1, "PASS zero-imputation canonical five differ")
+    } else need(is.null(record$scores) && is.null(record$dist_mat) && is.null(record$labels) &&
+      all(is.na(row[metrics])) && length(record$reason) == 1L && !is.na(record$reason) && nzchar(record$reason),
+      "Failed zero-imputation recipe cannot carry invented scores/geometry")
+  }
+  need(identical(value$recipes$counts_all_0.5$status, "PASS"), "Zero-imputation reference must pass")
+  invisible(value)
+}
+
 .analysis_projection_proof <- function(row, receipt) {
   if (!identical(receipt$projection_schema, "ecoda_analysis_projection_v1"))
     stop("Local result intake requires a reviewed metadata projection before reading RDS: ", row$method_key)
@@ -235,6 +294,18 @@ analysis_projection_ct_methods <- function() c("ECODA_authors_HR", "ECODA_author
     return(thin)
   }
   if (key == "__zeroimp__") {
+    if (!is.null(value$schema)) {
+      .analysis_zeroimp_screen(value)
+      if (!identical(value$dataset, as.character(item$source$dataset))) stop("Counts-only screen cohort differs from its ledger row")
+      if (!identical(item$receipt$origin, "new")) stop("Counts-only screens require their new reviewed producer")
+      fields <- c("schema", "dataset", "run_id", "results", "recipes", "labels", "labels_md5", "counts_md5",
+        "policy", "policy_md5", "source", "config_md5", "runner_md5", "release_md5", "recipe_body_md5",
+        "rng_before", "rng_after", "warnings", "csv_md5")
+      thin <- value[intersect(fields, names(value))]
+      thin$projection_schema <- "ecoda_zeroimp_counts_projection_v1"
+      .analysis_zeroimp_screen(thin)
+      return(thin)
+    }
     clean <- function(x, depth = 0L) {
       if (is.list(x) && length(x) && !is.null(names(x)) &&
           all(names(x) %in% c(evaluation_metrics(), "mod_knnsqrtn_score", "mod_knn6_score", "mod_knn9_score"))) {
