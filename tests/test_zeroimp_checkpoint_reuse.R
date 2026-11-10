@@ -3,7 +3,6 @@ suppressPackageStartupMessages({library(dplyr);library(survival)})
 for(p in c('src/utils/analysis_release.R','src/5_run_benchmark_methods/run_local_ecoda_derived.R','src/5_run_benchmark_methods/benchmark_pipeline.R','src/utils/math_utils.R','src/notebooks/run_zeroimp_count_screen.R'))source(p)
 fail<-function(x)stopifnot(inherits(tryCatch(force(x),error=identity),'error'))
 root<-tempfile('zeroimp-reuse-');dir.create(root);root<-normalizePath(root)
-on.exit<-function(...)NULL
 md5<-function(p)unname(tools::md5sum(p));sha<-function(p)digest::digest(file=p,algo='sha256')
 ids<-paste0('s',1:12);counts<-matrix(as.double(1:48),12,dimnames=list(ids,paste0('CT',1:4)));counts[c(1,18,27,40)]<-0
 input<-list(counts=counts,labels=setNames(factor(rep(c('A','B'),each=6)),ids))
