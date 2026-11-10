@@ -84,6 +84,41 @@ The remaining text records the availability audit, scientific contracts and earl
  077f4b75f53a053c326257e7a5871350c1e0cf897f8b44e853012400ca8cd1c0.
   New immutable source snapshot and final preflight/launch remain next.
 
+### Bulk launch and observed progress —20:44UTC
+
+- Source/test/plan checkpoint4d2bfbfb95467e70a69da88132908492290345fb was pushed
+  with only six task-owned files. A commit-review scope ambiguity was resolved
+  by checking the exact staged set and the separate downstream assignment;
+  its notebook/helper/figure files remained excluded. Bamboo pulled the clean
+  revision and created immutable20261110-singlecell-main-v2 snapshot, manifest
+  SHA0df679764ae5e4f191d71d74449d2cb4506e7bb5fb47524a3179cbc30b182d22,
+  archiveSHAa11cc1dbd76cf51a4347d6f5c539bdf2bdd8db60bebeed73ed28ca86f0f12b91.
+- All12parent metadata witnesses pass actual readonly preflight with zero H5
+  opens/value reads. Root launch review16370a08 binds exact11selection077f4b75,
+  controlffadd9cc and commandSHA
+  dfdd31eba3722c7a99da4c8ecd5ce8c0ce68fa0812b163f30f8ae672dd078e34.
+  Gate `ecoda_stage5_singlecell_batch_main_20261110_v2` launched once20:37:16UTC.
+  Original sole durable waiter23462 remains active; no additional waiter.
+- Actual initial roots:64Garray4677246,nine tasks;128Garray4677247,two tasks;
+  compute-node watchdog4677257. The bounded20:42filesystem observation confirms
+  exact emitted scope and all11workers past startup, with empty stderr. User's
+  explicit one-time20:44queue check shows only this new wave: seven running
+  tasks plus dependent watchdog; no older benchmark/batch work remains.
+- As of that check, four bulk rows have OK completion markers: BreastCOR,
+  CovidUNC/COR andJoanitoUNC. Including reused BreastUNC pilot,5of12unique
+  representations are complete. Remaining: AlzheimerUNC/COR,JoanitoCOR,
+  LupusUNC/COR andStephensonUNC/COR. Counts are observations, not release
+  approval; final complete accounting/native validation/review remain required.
+- Pilot NAS v1 was rejected before transfer because the native helper requires
+  a run-owned `_ecoda_backups/corrected_final/` prefix. Preserve v1 evidence.
+  V2 reuses all scientific/provenance bytes, fresh controls/receipt and allowed
+  destination; copy succeeded, separate verify/review remains next. No helper
+  relaxation, parent overwrite, local H5 transfer or analysis rerun occurred.
+- After reviewed completion, transfer only capped display/summary products for
+  local12PDF rendering. Bulk H5ADs stay HPC/NAS. The original processing plan
+  and completed DATA archives are now archived separately; no new diagnostic
+  artifact belongs in those closed namespaces.
+
 The availability audit and earlier expanded options below support the approved pilot. They do not enlarge the current12-figure scope.
 
 ## Responsibility and current boundary
