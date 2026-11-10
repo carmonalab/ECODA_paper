@@ -518,12 +518,12 @@ _audit_terminal_status() {
   AUDIT_TERMINAL_STATE="${state}"
 }
 
-# These no-fit producers have finite operation-specific output inventories,
+# These derived-data producers have finite operation-specific inventories,
 # rather than benchmark family outputs. Their source-pinned read-only validator
 # owns that schema; the generic identity and accounting checks still apply.
 _audit_analysis_release() {
   local purpose operation expected_operation validator
-  local expected_scheduler_kind=ARRAY
+  local expected_scheduler_kind=ARRAY expected_scalar=1
   local scope_producer=analysis_projection_scope submission_producer=analysis_projection_submission
   local validator_name=project_analysis_release.sh
   local metadata="${RUN_ROOT_REAL}/metadata"
@@ -537,6 +537,13 @@ _audit_analysis_release() {
       scope_producer=singlecell_pilot_scope
       submission_producer=singlecell_pilot_submission
       validator_name=singlecell_batch_geometry.sh
+      ;;
+    singlecell_batch_main_bulk)
+      expected_operation=singlecell-batch-main-bulk
+      scope_producer=singlecell_bulk_scope
+      submission_producer=singlecell_bulk_submission
+      validator_name=singlecell_batch_geometry_bulk.sh
+      expected_scalar=0
       ;;
     saved_cluster_counts_screen)
       expected_operation=saved-clusters
@@ -584,10 +591,16 @@ _audit_analysis_release() {
     "${scope_producer}" "${RUN_ID}" >/dev/null || return 1
   ecoda_validate_artifact_record "${RUN_ROOT_REAL}/manifests/scheduler_ids.tsv" \
     "${submission_producer}" "${RUN_ID}" >/dev/null || return 1
-  # Each supported operation submits exactly one scalar CPU job.
-  [[ "$(wc -l < "${RUN_ROOT_REAL}/manifests/scheduler_ids.tsv" | tr -d '[:space:]')" == 1 ]] || return 1
-  awk -F '\t' -v expected="${expected_scheduler_kind}" 'NF != 2 || $1 != expected || $2 !~ /^[0-9]+$/ { exit 1 }' \
-    "${RUN_ROOT_REAL}/manifests/scheduler_ids.tsv" || return 1
+  if [[ ${expected_scalar} -eq 1 ]]; then
+    [[ "$(wc -l < "${RUN_ROOT_REAL}/manifests/scheduler_ids.tsv" | tr -d '[:space:]')" == 1 ]] || return 1
+    awk -F '\t' -v expected="${expected_scheduler_kind}" 'NF != 2 || $1 != expected || $2 !~ /^[0-9]+$/ { exit 1 }' \
+      "${RUN_ROOT_REAL}/manifests/scheduler_ids.tsv" || return 1
+  else
+    # Only the fixed11 purpose owns two initial arrays, one watchdog and retries.
+    awk -F '\t' 'NF!=2 || $2!~/^[1-9][0-9]*$/ || seen[$2]++ {exit 1}
+      $1=="ARRAY"{a++;next} $1=="WATCHDOG"{w++;next} {exit 1}
+      END{if(a<2 || a>6 || w!=1)exit 1}' "${RUN_ROOT_REAL}/manifests/scheduler_ids.tsv" || return 1
+  fi
   _audit_scheduler_ids || return 1
   validator="$(ecoda_require_source_script_path \
     "${AUDIT_SOURCE_ROOT}/src/utils/bash/${validator_name}" \

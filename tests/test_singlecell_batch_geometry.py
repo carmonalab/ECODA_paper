@@ -57,8 +57,8 @@ class PilotTest(unittest.TestCase):
             g = h.create_group("obsp").create_group(p.NEIGHBORS + "_connectivities")
             for name, shape, dtype in [("data", (30183386,), "float32"), ("indices", (30183386,), "int32"), ("indptr", (1305023,), "int64")]:
                 g.create_dataset(name, shape=shape, dtype=dtype, chunks=(100,))
-        (self.root / "datasets.json").write_text(json.dumps({p.DATASET: dict(use_for_batch_effect=True, views={p.VIEW: {}},
-            columns=dict(sample="sample_id", batch=["assay", "suspension_dissociation_time"], cell_type_low_res="broad_cell_type", label="disease"))}))
+        config = json.loads((ROOT / "datasets.json").read_text())
+        (self.root / "datasets.json").write_text(json.dumps(config))
         artifacts = []
         for ds, path in [(p.DATASET, self.parent), ("Alzheimer", self.alz)]:
             proof = dict(PATH=str(path), MD5=p.digest(path, "md5"), SIZE=str(path.stat().st_size))
@@ -200,6 +200,107 @@ printf '900001;fixture\\n';exit "${rc}"
         failed = invoke("pilot_failed", fail=True); self.assertNotEqual(failed.returncode, 0)
         self.assertEqual((scratch / "_ecoda_runs/pilot_failed/manifests/scheduler_ids.tsv").read_text(), "ARRAY\t900001\n")
         self.assertIn("STATE=FAIL", (scratch / "_ecoda_runs/pilot_failed/status/terminal").read_text())
+
+    def bulk_control(self):
+        """Native-format12 metadata parents; only Breast COR values are used."""
+        artifacts = []; stats = {d: {} for d in p.DATASETS}
+        corrected = self.root / "Breast_COR.h5ad"; shutil.copy2(self.parent, corrected)
+        settings = p.row_settings(p.DATASET, "cor_harmony")
+        with h5py.File(corrected, "a") as h:
+            h.move("obsm/" + p.PC, "obsm/" + settings["pc"])
+            h.move("obsp/" + p.NEIGHBORS + "_connectivities", "obsp/" + settings["neighbors"] + "_connectivities")
+            h.move("uns/" + p.NEIGHBORS, "uns/" + settings["neighbors"])
+            g = h["uns"][settings["neighbors"]]
+            for key, value in [("connectivities_key", settings["neighbors"] + "_connectivities"), ("distances_key", settings["neighbors"] + "_distances")]: g[key][()] = value
+            g["params/use_rep"][()] = settings["pc"]
+            h.move("obs/" + p.LEIDEN, "obs/" + settings["leiden"])
+        for d in p.DATASETS:
+            for rep in p.REPRESENTATIONS:
+                s = p.row_settings(d, rep)
+                path = self.parent if (d, rep) == (p.DATASET, "unc_raw") else corrected if d == p.DATASET else self.root / (d + rep + ".h5ad")
+                if not path.exists(): path.write_bytes(b"synthetic nonselected parent; no array reads")
+                proof = dict(PATH=str(path), MD5=p.digest(path, "md5"), SIZE=str(path.stat().st_size))
+                record = dict(proof, STATE="PUBLISHED", PRODUCER="stage3", RUN_ID="stage3_confounds_20261108_v3")
+                owner = dict(PATH=str(path), STATE="OK", STAGE="stage3", RUN_ID=record["RUN_ID"])
+                w = dict(path=str(path), size=path.stat().st_size, md5=proof["MD5"], record_fields=record, owner_fields=owner)
+                for key, values in [("proof", proof), ("record", record), ("owner", owner)]:
+                    file = self.root / (d + rep + "." + key); file.write_text("".join(k + "=" + v + "\n" for k, v in values.items()))
+                    w[key] = dict(path=str(file), sha256=p.digest(file), size=file.stat().st_size)
+                artifacts.append(dict(dataset=d, view=s["view"], scratch=w))
+                stats[d][s["view"]] = {k: getattr(path.stat(), k) for k in ("st_dev", *p.STAT)}
+        receipt = self.root / "receipt12.json"; receipt.write_text(json.dumps(dict(artifacts=artifacts)))
+        review = self.root / "review12.json"; review.write_text(json.dumps(dict(status="APPROVED_SELECTED_ARTIFACT_REUSE", receipt_sha256=p.digest(receipt), original_gate_status="FAILED", failed_gate_released=False)))
+        return dict(schema="ecoda_singlecell_batch_main_v2", stage3_receipt=dict(path=str(receipt), sha256=p.digest(receipt)), stage3_review=dict(path=str(review), sha256=p.digest(review)), parent_stats=stats)
+
+    def test_bulk_fixed_scope_corrected_and_no_hpc_render(self):
+        control = self.bulk_control(); output = self.root / "bulk_COR"
+        counts = {d: (self.n, 33) for d in p.DATASETS}
+        with patch.object(p, "RECEIPT_SHA", control["stage3_receipt"]["sha256"]), patch.object(p, "REVIEW_SHA", control["stage3_review"]["sha256"]), patch.object(p, "COHORT_SIZE", counts):
+            with patch.object(p, "render", side_effect=AssertionError("No bulk HPC PDF")):
+                p.produce(control, output, "synthetic_bulk", p.DATASET, "cor_harmony")
+                p.validate_output(control, output, "synthetic_bulk", p.DATASET, "cor_harmony")
+            self.assertEqual({x.name for x in output.iterdir()}, set(p.BULK_OUTPUTS) | {"files.tsv"})
+            metrics = json.loads((output / "metrics.json").read_text())
+            self.assertFalse(metrics["HPC_rendering_performed"]); self.assertNotIn("rendering", json.loads((output / "phases.json").read_text()))
+            self.assertEqual(metrics["source_columns"]["author"], "broad_cell_type")
+            with h5py.File(output / "embedding.h5ad") as h:
+                self.assertNotIn("author_cell_type", h["obs"])  # no misleading HR-name alias in H5
+                self.assertIn("broad_cell_type", h["obs"])
+            with self.assertRaises(ValueError): p.produce(control, self.root / "forbidden", "x", p.DATASET, "unc_raw")
+            bad = copy.deepcopy(control); bad["parent_stats"]["Stephenson"]["batch_effect_corrected"]["st_size"] += 1
+            with patch.object(h5py, "File", side_effect=AssertionError("Before all12 native guards")):
+                with self.assertRaises(ValueError): p.produce(bad, self.root / "bad12", "x", p.DATASET, "cor_harmony")
+
+    def test_batch_balanced_display_determinism(self):
+        ids = ["id" + str(i) for i in range(221)]
+        labels = np.array(["rare"] + ["small"] * 2 + ["large"] * 218, dtype=object)
+        selected, policy = p.display_indices(ids, labels, limit=20, full_threshold=100)
+        self.assertEqual(len(selected), 20); self.assertEqual(len(set(selected)), 20); self.assertTrue({0, 1, 2} <= set(selected))
+        order = np.random.default_rng(3).permutation(len(ids))
+        reordered, _ = p.display_indices([ids[i] for i in order], labels[order], limit=20, full_threshold=100)
+        self.assertEqual([ids[i] for i in selected], [ids[order[i]] for i in reordered])
+        self.assertEqual(sum(x["selected"] for x in policy["strata"]), 20)
+        np.testing.assert_array_equal(p.display_indices(ids[:50], labels[:50])[0], np.arange(50))
+
+    def test_local_main_renderer_v1_pilot_reuse_single_scatter(self):
+        import matplotlib.axes
+        import matplotlib.figure
+        rows = []; source_root = "/synthetic/native"; review_path = self.root / "geometry.review.json"; reviewed = []
+        for d in p.DATASETS:
+            for rep in p.REPRESENTATIONS:
+                settings = p.row_settings(d, rep)
+                frame = pd.DataFrame(dict(cell_id=["c" + str(i) for i in range(self.n)], Sample=["s" + str(i % (45 if d == "Alzheimer" else 3)) for i in range(self.n)],
+                    author_cell_type=["cell" + str(i % 2) for i in range(self.n)], biological_label=["bio"] * self.n,
+                    batch_label=["batch" + str(i % 2) for i in range(self.n)], leiden2=[str(i % 3) for i in range(self.n)],
+                    PC1=np.arange(self.n, dtype=float), PC2=np.arange(self.n, dtype=float) / 2, UMAP1=np.arange(self.n, dtype=float) / 3, UMAP2=np.arange(self.n, dtype=float) / 4))
+                legacy = (d, rep) == (p.DATASET, "unc_raw")
+                if legacy: frame = frame.rename(columns=dict(author_cell_type="broad_cell_type", biological_label="disease", batch_label="suspension_dissociation_time", leiden2=p.LEIDEN))
+                f = self.root / (d + rep + ".feather"); frame.to_feather(f)
+                metric = dict(schema="ecoda_singlecell_pilot_metrics_v1" if legacy else "ecoda_singlecell_main_metrics_v2", dataset=d, run_id="synthetic", view=settings["view"],
+                    representation=settings["pc"], representation_id=rep, cells=self.n, dimensions=50, n_neighbors=90, perplexity=30, source_expression_read=False,
+                    source_columns=settings, batch=dict(scaled_cellwise_mean=.123456), cell_type=dict(scaled_cellwise_mean=.987654),
+                    display_contract=dict(rows=self.n, ordered_cell_id_sha256=p.ids_digest(frame.cell_id), md5=p.digest(f, "md5")))
+                m = self.root / (d + rep + ".json"); m.write_text(json.dumps(metric))
+                refs = {"display": dict(path=str(f), md5=p.digest(f, "md5"), source_path=source_root + "/" + f.name), "metrics": dict(path=str(m), md5=p.digest(m, "md5"), source_path=source_root + "/" + m.name)}
+                reviewed.extend(dict(path=r["source_path"], md5=r["md5"]) for r in refs.values())
+                rows.append(dict(dataset=d, representation=rep, **refs))
+        review_path.write_text(json.dumps(dict(schema="ecoda_singlecell_geometry_root_review_v1", status="APPROVED_SYNTHETIC_FIXTURE_ONLY", reviewer="TEST", reviewed_at="TEST", source_expression_read=False, run_id="synthetic", output_artifacts=reviewed)))
+        for row in rows: row["review"] = dict(path=str(review_path), sha256=p.digest(review_path))
+        control = dict(schema="ecoda_singlecell_main_display_control_v1", status="APPROVED_LOCAL_MAIN_DISPLAY_EXTRACTS", rows=rows)
+        calls = []; sample_legends = []; scatter = matplotlib.axes.Axes.scatter; save = matplotlib.figure.Figure.savefig
+        def capture(ax, x, y, **kwargs): calls.append((np.array(x), np.asarray(kwargs["c"]))); return scatter(ax, x, y, **kwargs)
+        def check(fig, *args, **kwargs):
+            self.assertTrue(all(len(ax.collections) == 1 for ax in fig.axes))
+            self.assertTrue(all(any("50D mean iLISI mixing=0.1235" in t.get_text() and "cLISI preservation=0.9877" in t.get_text() for t in ax.texts) for ax in fig.axes))
+            for ax in fig.axes:
+                if ax.get_title() == "Sample": sample_legends.append({t.get_text() for t in ax.get_legend().get_texts()})
+            return save(fig, *args, **kwargs)
+        with patch.object(p, "COHORT_SIZE", {d: (self.n, 33) for d in p.DATASETS}), patch.object(matplotlib.axes.Axes, "scatter", capture), patch.object(matplotlib.figure.Figure, "savefig", check), patch.object(p, "ann90", side_effect=AssertionError("Local ANN forbidden")), patch.object(h5py, "File", side_effect=AssertionError("Local H5 forbidden")):
+            p.render_main(control, self.root / "rendered")
+        self.assertEqual(len(calls), 108); np.testing.assert_array_equal(calls[0][0], calls[4][0]); np.testing.assert_array_equal(calls[0][1], calls[4][1])
+        report = json.loads((self.root / "rendered/render_manifest.json").read_text()); self.assertEqual(len(report["figures"]), 12)
+        self.assertTrue(all(x["score_computations"] == 0 for x in report["figures"]))
+        self.assertTrue(any(labels == {"s" + str(i) for i in range(45)} for labels in sample_legends))
 
 
 if __name__ == "__main__": unittest.main()

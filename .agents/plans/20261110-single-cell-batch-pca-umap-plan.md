@@ -2,7 +2,7 @@
 
 ## Current authority — Q14–15 supersede the earlier expanded draft
 
-**APPROVED_PILOT_FIRST,2026-11-10.** The user approved implementation, with a timed first task and an Alzheimer memory check before bulk expansion. Q15 reduces the initial scope to **12 main figures and12uniqueUMAP fits**: one2×4PCA and one2×5UMAP per cohort, comparing actual production UNC PCA with COR Harmony. Use broad annotations for five cohorts, source `louvain` for Lupus, and each row's own cached Leiden2 labels. Matched-HVG, fine/source-named and fixed-anchor variants are **deferred**, not scheduled or scored. The72-figure/18-fit proposal below is retained only as design history and deferred options.
+**IMPLEMENTING_MAIN12,2026-11-10.** The approved timing pilot and Alzheimer header-memory check passed; the measured costs support proceeding. Q15 reduces the initial scope to **12 main figures and12uniqueUMAP fits**: one2×4PCA and one2×5UMAP per cohort, comparing actual production UNC PCA with COR Harmony. Use broad annotations for five cohorts, source `louvain` for Lupus, and each row's own cached Leiden2 labels. Matched-HVG, fine/source-named and fixed-anchor variants are **deferred**, not scheduled or scored. The72-figure/18-fit proposal below is retained only as design history and deferred options.
 
 - First task: Breast UNC, all114,579cells, time UMAP, separate ANN90/50D LISI and rendering individually. No bulk launch until measured costs are reviewed.
 - Alzheimer: inspect selected obs/PC/graph shapes/dtypes and estimate memory including UMAP/ANN overhead before allocation. Load only selected arrays into expression-free AnnData; never load the whole RNA/count matrix or whole parent AnnData.
@@ -20,6 +20,69 @@ The remaining text records the availability audit, scientific contracts and earl
 - Author's four focused tests pass29.109s; independent reviewer `benchmark_dependency_audit` accepts the exact frozen files, with two independent checks passing27.112s. Coverage includes native Harmonypy LISI parity, missing/degenerate labels, real expression-free UMAP with forbidden expression/PCA/graph refits, display-ID/coordinate alignment, atomic outputs, Alzheimer header-only reads, copied Slurm-spool execution, native ownership and failure evidence.
 - Fixed pilot resources are8CPUs/64G/2h/shared-cpu, with no CPU-model/GPU restriction. Stage3 selected-artifact receipt/review and exact observed parent stats are bound in controlSHAac7bf25e30a0ad652f4695b4ff9a3a9c7113bde595a0a2c6ea788843cfd7c8e1. Root must commit/push only task-owned files, create a clean commit-keyed snapshot, stage the three small control files, run actual control/header preflight, then use one durable gate/wait/terminal review. Existing downstream dirty files remain excluded.
 - Implementation is source-reviewed; no pilot measurement or bulk-compute success is claimed at this checkpoint. NAS publication uses the existing finite backup helper after actual output review.
+
+### Pilot launch —19:46:46UTC
+
+- Task-owned source/spec checkpoint3c653f6253c54b78db1772181d80e0dc1031cab6 was pushed to master; foreign downstream/cancer files were excluded. Bamboo pulled it into a clean checkout and created the immutable20261110-singlecell-pilot-v1 snapshot. Source manifestSHAdcc739978fd45a0c967ab0d1c65bf49835ca47337e8136c0491b70d6dd0b3433; archiveSHA1d8a2e2b48c6e3451bf8932104e1fca87f938f7ddaf31609b577003fc2de3742.
+- Exact three small control files were staged/verified. Actual Breast control/proof/stat check passed before any H5 values. Actual Alzheimer header-only check8c109582 confirms507691580bytes of PCA/connectivity arrays, versus178565130756bytes for the parent H5AD; ANN90 output arrays are estimated1409423760bytes before algorithm overhead.128GiB remains a conservative provisional allowance, not measured peak or Alzheimer launch approval.
+- Final runtime/control/source/fresh-root/NAS preflight passed. Root launch review77f1252e binds the actual spec/command/preflight and reviewed GM33 predecessor. Gate `ecoda_stage5_singlecell_breast_unc_pilot_20261110_v1` launched once19:46:46UTC in ecoda-benchmark, exact commandSHA6909e2e7aa44d12ceb9f05eedfb387bada3513ccbcbf381ee0a85d98cfa5a082. Original sole waiter27045 is armed. Actual scheduler ID remains to be collected, never guessed.
+- Scope is one BreastUNC task only. No other cohort or variant is launched. Phase measurements/output review and native NAS publication remain pending.
+
+### Pilot results and next selection —20:02UTC
+
+- Pilot4673562 completed19:51:33UTC. Sole terminal accounting, accounting bridge,
+  immutable3c653 source-configured audit, Root scientific review02d5e59a and
+  official reviewer approval pass. All seven owned artifacts are PUBLISHED/OK;
+  no expression read, graph/PCA refit or parent modification.
+-114579cells/33samples: imports8.65s; selected input2.49s;UMAP101.68s;ANN90
+ 44.72s;LISI4.51s;two diagnosticPDFs12.77s;serialization0.98s. Peak observed
+  PythonRSS3.27GB. These are measured Breast costs, not an Alzheimer runtime
+  guarantee. Both batch/cell-type annotations have100%coverage in the pilot.
+- Cost review supports the initial12main figures. Preserve the completed
+  BreastUNC result and select exactly11remaining rows: AlzheimerUNC/COR,
+  BreastCOR,CovidUNC/COR,JoanitoUNC/COR,LupusUNC/COR,StephensonUNC/COR. Matched,
+  fine and fixed-anchor variants stay deferred.
+- Implementers: `docs_checkpoint_audit` owns generalizing Python/extracts/local
+  two-row rendering and numerical tests; `benchmark_dependency_audit` owns
+  the sibling bulk shell/native-audit branch and shell tests. Preferred wave:
+  nine64G rows and two Alzheimer128G rows,8CPUs each, independent arrays
+  submitted before one compute-node OOM-only watchdog. Record all attempts;
+  never hide failures or cancel valid other rows. No compute until exact
+  source/control/selection review and immutable snapshot are ready.
+- Exactly five bounded display/metric/PDF products plus unchanged birth proofs
+  were mirrored locally:4011422bytes, no H5AD/PC50/RNA. Pilot PCA/UMAP visual
+  review is clear. Final renderer must avoid categorical overdraw bias by using
+  one deterministic shuffled scatter, format scores to four decimals and use
+  human panel titles. These are rendering changes only; reuse fitted geometry.
+- Pilot NAS publication and remaining11source implementation/launch are
+  pending. The original data archive remains separate and closed.
+
+### Remaining11 implementation accepted —20:26UTC
+
+- The Python worker now supports exactly the approved six cohorts/two actual
+  views, guards all twelve parent identities before values, computes all-cell
+  UMAP/50D LISI, and emits only four bulk payloads plusfiles.tsv. No extra HPC
+  one-row PDFs. Display selection is deterministic, batch-balanced100000 with
+  rare strata retained and spare quota redistributed; cohorts≤200000 use all.
+- A separate fixed11 bulk shell preserves the pilot wrapper. It submits nine
+ 64G rows and two128G Alzheimer rows before one compute-node watchdog. Each
+  row has8CPUs/2h; OOM retries select only failed rows in fresh attempt paths,
+  bounded at256G/512G. Non-OOM failure leaves independent rows running and
+  fails closed. Native immutable submission journals retain every attempt;
+  historical failed accounting is never hidden or promoted to successful.
+- Focused native shell tests pass mixed OOM recovery, independent non-OOM
+  failure, both ceilings, stable healthy outputs, spool execution and generic
+  audit/ownership guards. Numerical/full-source7tests pass33.845s; independent
+  three new branches pass31.121s. Final renderer-only checks pass on both
+  implementer/reviewer sides, including full45-sample legends, identical draw
+  order/colors, every-panel50D means, V1pilot reuse and cohort memory cleanup.
+- Source frozen workerSHA1e8e97cd9a0d79da6ab2edf98e503c195febda1c5d1b32eb785c98336fafd8c8;
+  bulk shellSHAf7c63c9b7630417a05c836b9a52d519835e2961ded45a6d87eced8c07c299b93;
+  auditSHA c02c9692241f1c551719413d9da39e873fd41a97653b43eb96208d1071207d85.
+  Root accepts the exact11-row source scope. ControlSHAffadd9cc2181b3f25ffaa9033fb42798da81d1d18931d0b76ec4748e573cae13
+  and unchanged Stage3 receipt/review are create-only staged; selectionSHA
+ 077f4b75f53a053c326257e7a5871350c1e0cf897f8b44e853012400ca8cd1c0.
+  New immutable source snapshot and final preflight/launch remain next.
 
 The availability audit and earlier expanded options below support the approved pilot. They do not enlarge the current12-figure scope.
 

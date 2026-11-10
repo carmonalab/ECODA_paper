@@ -1,7 +1,7 @@
-"""Fixed Breast UNC pilot: selected PCs/graph only, never parent expression.
+"""Reviewed six-cohort UNC/Harmony geometry; selected arrays only, never expression.
 
-The Alzheimer mode inspects headers only. Bulk scheduling and other representations
-are deliberately outside this pilot. Source artifacts and configured columns stay intact.
+The original Breast pilot CLI remains supported. Local rendering reads only bounded
+display extracts; it cannot fit or score. Alzheimer memory mode reads headers only.
 """
 import argparse
 import contextlib
@@ -26,6 +26,30 @@ RECEIPT_SHA = "c8e1d9b5b0a4b485ecdb228c706c6f8a3de65f0861fc57b148de68cd39bb05b4"
 REVIEW_SHA = "5c05ac542f7aabc4924749a07159092184cec83a58c53deb59fdd68c7db2444c"
 STAT = ("st_ino", "st_size", "st_mode", "st_mtime_ns", "st_ctime_ns")
 OUTPUTS = ("embedding.h5ad", "metrics.json", "display.feather", "pilot_pca.pdf", "pilot_umap.pdf", "phases.json")
+BULK_OUTPUTS = ("embedding.h5ad", "metrics.json", "display.feather", "phases.json")
+DATASETS = ("Alzheimer", "Breast_cancer", "Covid19_PBMC", "Joanito", "Lupus_PBMC", "Stephenson")
+COHORT_SIZE = {"Alzheimer": (1305022, 101), "Breast_cancer": (114579, 33), "Covid19_PBMC": (254174, 44),
+               "Joanito": (252519, 124), "Lupus_PBMC": (458785, 94), "Stephenson": (543080, 110)}
+REPRESENTATIONS = ("unc_raw", "cor_harmony")
+
+
+def row_settings(dataset, representation):
+    need(dataset in DATASETS and representation in REPRESENTATIONS, "Unsupported main representation")
+    config = json.loads(regular(Path(os.environ["ECODA_SOURCE_ROOT"]) / "datasets.json").read_text())
+    row = config[dataset]; corrected = representation == "cor_harmony"
+    view = "batch_effect_corrected" if corrected else VIEW
+    need(row.get("use_for_batch_effect") is True and view in row["views"] and "columns" not in row["views"][view], "Dataset flag/view/column authority differs")
+    columns = row["columns"]; batch = columns["batch"]
+    batch = [batch] if isinstance(batch, str) else batch
+    if dataset == DATASET: need(batch == ["assay", "suspension_dissociation_time"], "Breast correction authority differs")
+    else: need(len(batch) == 1, "Unreviewed multi-key display batch")
+    suffix = view + "_hvg2000"; neighbor_suffix = suffix + ("_harmony" if corrected else "")
+    return dict(dataset=dataset, representation=representation, view=view, sample=columns["sample"], biology=columns["label"],
+                author="louvain" if dataset == "Lupus_PBMC" else columns["cell_type_low_res"],
+                batch="suspension_dissociation_time" if dataset == DATASET else batch[0], correction_batch_keys=batch,
+                pc=("X_pca_harmony_" if corrected else "X_pca_") + suffix,
+                neighbors="neighbors_" + neighbor_suffix, leiden="leiden_res_2_" + neighbor_suffix,
+                cells=COHORT_SIZE[dataset][0], samples=COHORT_SIZE[dataset][1])
 
 
 def need(ok, text):
@@ -77,20 +101,16 @@ def fields(raw):
     return dict(rows)
 
 
-def source_guard(c, dataset=DATASET):
-    need(c["schema"] == "ecoda_singlecell_breast_unc_pilot_v1", "Wrong pilot control")
+def source_guard(c, dataset=DATASET, representation="unc_raw"):
+    bulk = c["schema"] == "ecoda_singlecell_batch_main_v2"
+    need(bulk or c["schema"] == "ecoda_singlecell_breast_unc_pilot_v1", "Wrong geometry control")
+    settings = row_settings(dataset, representation)
     need(c["stage3_receipt"]["sha256"] == RECEIPT_SHA and c["stage3_review"]["sha256"] == REVIEW_SHA, "Unreviewed Stage3 source")
     receipt = json.loads(small(c["stage3_receipt"]))
     review = json.loads(small(c["stage3_review"]))
-    config = json.loads(regular(Path(os.environ["ECODA_SOURCE_ROOT"]) / "datasets.json").read_text())
-    row = config[DATASET]
-    need(row.get("use_for_batch_effect") is True and VIEW in row["views"] and "columns" not in row["views"][VIEW]
-         and row["columns"]["batch"] == ["assay", "suspension_dissociation_time"]
-         and row["columns"]["sample"] == "sample_id" and row["columns"]["cell_type_low_res"] == "broad_cell_type"
-         and row["columns"]["label"] == "disease", "Top-level Breast column authority differs")
     need(review["status"] == "APPROVED_SELECTED_ARTIFACT_REUSE" and review["receipt_sha256"] == RECEIPT_SHA
          and review["original_gate_status"] == "FAILED" and review["failed_gate_released"] is False, "Selected reuse review differs")
-    entry = next(a for a in receipt["artifacts"] if a["dataset"] == dataset and a["view"] == VIEW)
+    entry = next(a for a in receipt["artifacts"] if a["dataset"] == dataset and a["view"] == settings["view"])
     w = entry["scratch"]; p = regular(w["path"])
     need(p.stat().st_size == w["size"], "Parent size differs")
     proof = fields(small(w["proof"])); record = fields(small(w["record"])); owner = fields(small(w["owner"]))
@@ -99,7 +119,7 @@ def source_guard(c, dataset=DATASET):
          and owner["STATE"] == "OK" and owner["STAGE"] == "stage3" and record["RUN_ID"] == owner["RUN_ID"] == "stage3_confounds_20261108_v3", "Parent owner/publication differs")
     # st_dev is kernel-local; cross-node identity is native bytes plus all other
     # witness fields and the actual BeeGFS mount. In-process stats include st_dev.
-    expected = c["parent_stats"][dataset]
+    expected = c["parent_stats"][dataset][settings["view"]] if bulk else c["parent_stats"][dataset]
     actual = p.stat()
     need(all(getattr(actual, k) == expected[k] for k in STAT), "Parent stat differs")
     if sys.platform.startswith("linux"):
@@ -115,33 +135,44 @@ def source_guard(c, dataset=DATASET):
     return entry, snapshot
 
 
-def load_selected(path, expected_cells=None):
+def guard_control(c):
+    if c["schema"] != "ecoda_singlecell_batch_main_v2": return {(DATASET, "unc_raw"): source_guard(c)}
+    need(set(c["parent_stats"]) == set(DATASETS) and all(set(c["parent_stats"][d]) == {VIEW, "batch_effect_corrected"} for d in DATASETS), "Exact twelve parent scope required")
+    return {(d, r): source_guard(c, d, r) for d in DATASETS for r in REPRESENTATIONS}
+
+
+def load_selected(path, expected_cells=None, settings=None):
     import anndata as ad
     from anndata.io import read_elem
     import h5py
     import numpy as np
     import pandas as pd
     if expected_cells is None: expected_cells = PILOT_CELLS
-    columns = ["Sample", "sample_id", "broad_cell_type", "disease", "assay", "suspension_dissociation_time", LEIDEN]
+    bulk = settings is not None
+    if settings is None: settings = dict(pc=PC, neighbors=NEIGHBORS, leiden=LEIDEN, sample="sample_id", author="broad_cell_type", biology="disease", batch="suspension_dissociation_time", dataset=DATASET, samples=33)
+    columns = list(dict.fromkeys(["Sample", settings["sample"], settings["author"], settings["biology"], settings["batch"], settings["leiden"]] + (["assay"] if settings["dataset"] == DATASET else [])))
+    pc_key = settings["pc"]; neighbor_key = settings["neighbors"]
     with h5py.File(path, "r") as h:
         obs = h["obs"]; key = obs.attrs["_index"]
         if isinstance(key, bytes): key = key.decode()
         ids = pd.Index(read_elem(obs[key]))
         need(len(ids) == expected_cells and ids.is_unique and not ids.hasnans and all(isinstance(x, str) and x for x in ids), "Invalid ordered cell IDs")
         frame = pd.DataFrame({k: read_elem(obs[k]) for k in columns}, index=ids)
-        pcs = read_elem(h["obsm"][PC]); graph = read_elem(h["obsp"][NEIGHBORS + "_connectivities"])
-        neighbors = read_elem(h["uns"][NEIGHBORS])
+        pcs = read_elem(h["obsm"][pc_key]); graph = read_elem(h["obsp"][neighbor_key + "_connectivities"])
+        neighbors = read_elem(h["uns"][neighbor_key])
     need(pcs.shape == (expected_cells, 50) and np.isfinite(pcs).all(), "PC50 invalid")
     need(graph.shape == (expected_cells, expected_cells) and graph.format == "csr" and np.isfinite(graph.data).all()
          and (graph.data >= 0).all(), "Cached connectivity invalid")
     params = neighbors["params"]
-    need(params["use_rep"] == PC and params["n_pcs"] == 50 and params["n_neighbors"] == 15 and params["metric"] == "euclidean", "Cached graph provenance differs")
-    need(frame["Sample"].notna().all() and frame["sample_id"].notna().all()
-         and frame.groupby("sample_id", observed=True)["Sample"].nunique().eq(1).all()
-         and frame.groupby("Sample", observed=True)["sample_id"].nunique().eq(1).all(), "Canonical Sample mapping is not bijective")
-    need(frame.Sample.nunique() == 33, "Breast sample universe differs")
-    need(set(frame["assay"].dropna()) == {"10x 3' v3"}, "Breast assay is not the reviewed constant")
-    value = ad.AnnData(X=None, obs=frame, obsm={PC: pcs}, obsp={neighbors["connectivities_key"]: graph}, uns={NEIGHBORS: neighbors})
+    need(params["use_rep"] == pc_key and params["n_pcs"] == 50 and params["n_neighbors"] == 15 and params["metric"] == "euclidean", "Cached graph provenance differs")
+    need(frame["Sample"].notna().all() and frame[settings["sample"]].notna().all()
+         and frame.groupby(settings["sample"], observed=True)["Sample"].nunique().eq(1).all()
+         and frame.groupby("Sample", observed=True)[settings["sample"]].nunique().eq(1).all(), "Canonical Sample mapping is not bijective")
+    need(frame.Sample.nunique() == settings["samples"], "Sample universe differs")
+    if settings["dataset"] == DATASET: need(set(frame["assay"].dropna()) == {"10x 3' v3"}, "Breast assay is not the reviewed constant")
+    # H5AD obs retains original names; display aliases stay in the typed Feather,
+    # avoiding collision with Breast's distinct source HR author_cell_type.
+    value = ad.AnnData(X=None, obs=frame, obsm={pc_key: pcs}, obsp={neighbors["connectivities_key"]: graph}, uns={neighbor_key: neighbors})
     need(value.X is None and value.raw is None and not value.layers, "Expression-free construction failed")
     return value
 
@@ -218,6 +249,36 @@ def score_population(pcs, labels, samples, direction, threads, shared=None):
     return raw, scaled, summarize(raw, scaled, samples, valid, levels)
 
 
+def display_indices(ids, batch, limit=100000, full_threshold=200000):
+    """Equal batch quotas with rare groups retained, using cell-ID hash ranks.
+
+    This is display only. Neither UMAP nor LISI sees this selection. Missing
+    technical labels form a display stratum, never a new scoring category.
+    """
+    import numpy as np
+    import pandas as pd
+    need(len(ids) == len(batch) and len(set(ids)) == len(ids) and 0 < limit <= full_threshold, "Display identity/budget differs")
+    if len(ids) <= full_threshold: return np.arange(len(ids)), {"policy": "ALL_CELLS_LE_200000", "rows": len(ids)}
+    groups = {}
+    for i, label in enumerate(batch):
+        key = "MISSING" if pd.isna(label) else json.dumps([type(label).__name__, str(label)], ensure_ascii=False)
+        groups.setdefault(key, []).append(i)
+    keys = sorted(groups); capacity = np.array([len(groups[k]) for k in keys]); quota = np.zeros(len(keys), dtype=int); left = limit
+    while left:
+        active = np.flatnonzero(quota < capacity); base, remainder = divmod(left, len(active))
+        if not base:
+            quota[active[:remainder]] += 1; break
+        take = np.minimum(capacity[active] - quota[active], base); quota[active] += take; left -= int(take.sum())
+    chosen = []
+    for key, n in zip(keys, quota):
+        ranked = sorted(groups[key], key=lambda i: (hashlib.sha256(("display-seed0\0" + ids[i]).encode()).digest(), ids[i]))
+        chosen.extend(ranked[:n])
+    chosen.sort(key=lambda i: ids[i])
+    need(len(chosen) == len(set(chosen)) == limit, "Display budget is not exact/no-replacement")
+    return np.asarray(chosen), dict(policy="BATCH_BALANCED_100000_NO_REPLACEMENT", seed=0, rows=len(chosen),
+        strata=[dict(source_label=k, population=int(n), selected=int(q)) for k, n, q in zip(keys, capacity, quota)])
+
+
 @contextlib.contextmanager
 def phase(phases, name):
     def rss():
@@ -256,36 +317,55 @@ def render(display, metrics, output):
         plt.close(fig)
 
 
-def produce(c, output, run_id):
+def produce(c, output, run_id, dataset=None, representation=None):
     phases = {}
     with phase(phases, "package_imports"):
         import numpy as np
         import pandas as pd
         import scanpy as sc
-    need(not output.exists() and not output.is_symlink(), "Pilot output is create-only")
-    entry, before = source_guard(c); threads = int(os.environ.get("SLURM_CPUS_PER_TASK", "1")); need(1 <= threads <= 8, "Pilot CPU allocation outside1..8")
-    with phase(phases, "selected_input_load"): value = load_selected(entry["scratch"]["path"])
+    bulk = dataset is not None or representation is not None
+    need(output.is_absolute() and output.resolve() == output and not output.exists() and not output.is_symlink(), "Output is canonical and create-only")
+    if bulk:
+        need(c["schema"] == "ecoda_singlecell_batch_main_v2" and (dataset, representation) != (DATASET, "unc_raw"), "Published Breast UNC is excluded from bulk compute")
+        settings = row_settings(dataset, representation); before = guard_control(c); entry = before[(dataset, representation)][0]
+    else:
+        need(c["schema"] == "ecoda_singlecell_breast_unc_pilot_v1", "Bulk control requires explicit row selectors")
+        settings = None; entry, before = source_guard(c)
+    pc_key = settings["pc"] if bulk else PC; neighbor_key = settings["neighbors"] if bulk else NEIGHBORS
+    threads = int(os.environ.get("SLURM_CPUS_PER_TASK", "1")); need(1 <= threads <= 8, "CPU allocation outside1..8")
+    with phase(phases, "selected_input_load"): value = load_selected(entry["scratch"]["path"], settings["cells"] if bulk else None, settings)
     with phase(phases, "UMAP"):
-        sc.tl.umap(value, neighbors_key=NEIGHBORS, random_state=0)
+        sc.tl.umap(value, neighbors_key=neighbor_key, random_state=0)
         need(value.obsm["X_umap"].shape == (len(value), 2) and np.isfinite(value.obsm["X_umap"]).all(), "UMAP invalid")
     with phase(phases, "ANN90"):
-        nn = ann90(value.obsm[PC], threads)
+        nn = ann90(value.obsm[pc_key], threads)
     with phase(phases, "LISI"):
         summaries = {}
-        for key, column, direction in [("batch", "suspension_dissociation_time", "mixing"), ("cell_type", "broad_cell_type", "preservation")]:
-            raw, scaled, summaries[key] = score_population(value.obsm[PC], value.obs[column], value.obs.Sample, direction, threads, nn)
+        for key, column, direction in [("batch", settings["batch"] if bulk else "suspension_dissociation_time", "mixing"), ("cell_type", settings["author"] if bulk else "broad_cell_type", "preservation")]:
+            raw, scaled, summaries[key] = score_population(value.obsm[pc_key], value.obs[column], value.obs.Sample, direction, threads, nn)
             value.obs[key + "_lisi_raw"] = raw; value.obs[key + "_lisi_scaled"] = scaled
     del nn; gc.collect(); output.mkdir()
-    metrics = dict(schema="ecoda_singlecell_pilot_metrics_v1", dataset=DATASET, view=VIEW, representation=PC, run_id=run_id,
+    metrics = dict(schema="ecoda_singlecell_main_metrics_v2" if bulk else "ecoda_singlecell_pilot_metrics_v1", dataset=dataset if bulk else DATASET,
+                   view=settings["view"] if bulk else VIEW, representation=pc_key, run_id=run_id,
                    cells=len(value), dimensions=50, n_neighbors=90, perplexity=30, seed=0, threads=threads,
                    batch=summaries["batch"], cell_type=summaries["cell_type"], source_md5=entry["scratch"]["md5"],
                    original_global_gate_state="FAILED", stored_scores_approved=False, source_expression_read=False,
                    missing_label_policy="NA_OR_EMPTY_ONLY_NO_RECODING", UMAP_fixed_seed_optimization_may_be_serial=True,
                    ordered_cell_id_sha256=ids_digest(value.obs_names), display_policy="ALL_BREAST_CELLS_LE_200000")
-    # All Breast cells are displayed by the approved <=200000 rule; no sampling RNG is used.
-    display = value.obs.iloc[:, :7].copy(); display.insert(0, "cell_id", display.index)
-    display[["PC1", "PC2"]] = value.obsm[PC][:, :2]; display[["UMAP1", "UMAP2"]] = value.obsm["X_umap"]
-    with phase(phases, "rendering"): render(display, summaries, output)
+    if bulk:
+        metrics.update(representation_id=representation, source_columns=settings, HPC_rendering_performed=False,
+            annotation_semantics="SOURCE_LOUVAIN_CLUSTER_PRESERVATION" if dataset == "Lupus_PBMC" else "SOURCE_BROAD_ANNOTATION_PRESERVATION")
+        with phase(phases, "display_selection"):
+            selected, policy = display_indices(list(value.obs_names), value.obs[settings["batch"]])
+        metrics["display_policy"] = policy
+        display = pd.DataFrame({"Sample": value.obs.Sample, "author_cell_type": value.obs[settings["author"]],
+            "biological_label": value.obs[settings["biology"]], "batch_label": value.obs[settings["batch"]], "leiden2": value.obs[settings["leiden"]]}).iloc[selected].copy()
+    else:
+        selected = np.arange(len(value)); display = value.obs.iloc[:, :7].copy()
+    display.insert(0, "cell_id", display.index)
+    display[["PC1", "PC2"]] = value.obsm[pc_key][selected, :2]; display[["UMAP1", "UMAP2"]] = value.obsm["X_umap"][selected]
+    if not bulk:
+        with phase(phases, "rendering"): render(display, summaries, output)
     with phase(phases, "serialization"):
         # Scalar JSON retains explicit null/degenerate-score fields without
         # relying on HDF5's heterogeneous nested-dictionary serialization.
@@ -296,11 +376,11 @@ def produce(c, output, run_id):
         metrics["display_contract"] = dict(rows=len(display), columns=list(display.columns), ordered_cell_id_sha256=ids_digest(display.cell_id),
                                             md5=digest(output / "display.feather", "md5"), max_bytes=32 * 1024 * 1024)
         with atomic_file(output / "metrics.json") as path: path.write_text(json.dumps(metrics, allow_nan=False, indent=2) + "\n")
-    need(source_guard(c)[1] == before, "Parent/proofs changed during pilot")
+    need((guard_control(c) if bulk else source_guard(c)[1]) == before, "Parent/proofs changed during geometry computation")
     with atomic_file(output / "phases.json") as path: path.write_text(json.dumps(phases, indent=2) + "\n")
     with atomic_file(output / "files.tsv") as path:
         with path.open("w") as f:
-            for name in OUTPUTS: f.write(str(output / name) + "\t" + digest(output / name, "md5") + "\n")
+            for name in (BULK_OUTPUTS if bulk else OUTPUTS): f.write(str(output / name) + "\t" + digest(output / name, "md5") + "\n")
 
 
 def memory_preflight(c):
@@ -322,51 +402,180 @@ def memory_preflight(c):
                 overhead_factor_not_measured=8, full_Alzheimer_compute_approved=False, coordinate_values_read=0, expression_objects_opened=0)
 
 
-def validate_output(c, output, run_id):
+def validate_output(c, output, run_id, dataset=None, representation=None):
     import h5py
     import numpy as np
     import pandas as pd
     from anndata.io import read_elem
-    entry, before = source_guard(c)
+    bulk = dataset is not None or representation is not None
+    if bulk:
+        need(c["schema"] == "ecoda_singlecell_batch_main_v2" and (dataset, representation) != (DATASET, "unc_raw"), "Bulk row scope differs")
+        settings = row_settings(dataset, representation); before = guard_control(c); entry = before[(dataset, representation)][0]
+    else:
+        settings = None; entry, before = source_guard(c)
+    n = settings["cells"] if bulk else PILOT_CELLS; pc_key = settings["pc"] if bulk else PC
+    names = BULK_OUTPUTS if bulk else OUTPUTS
     rows = [line.split("\t") for line in regular(output / "files.tsv").read_text().splitlines()]
-    need(len(rows) == len(OUTPUTS) and [r[0] for r in rows] == [str(output / n) for n in OUTPUTS], "Unexpected pilot output inventory")
+    need(len(rows) == len(names) and [r[0] for r in rows] == [str(output / name) for name in names], "Unexpected output inventory")
     for path, md5 in rows: need(digest(path, "md5") == md5, "Changed pilot payload")
     metrics = json.loads((output / "metrics.json").read_text()); phases = json.loads((output / "phases.json").read_text())
-    need(metrics["schema"] == "ecoda_singlecell_pilot_metrics_v1" and metrics["run_id"] == run_id and metrics["cells"] == PILOT_CELLS
+    need(metrics["schema"] == ("ecoda_singlecell_main_metrics_v2" if bulk else "ecoda_singlecell_pilot_metrics_v1") and metrics["run_id"] == run_id and metrics["cells"] == n
          and metrics["source_md5"] == entry["scratch"]["md5"] and metrics["dimensions"] == 50
-         and metrics["n_neighbors"] == 90 and metrics["perplexity"] == 30 and metrics["seed"] == 0, "Pilot report scope differs")
-    need(set(phases) == {"package_imports", "selected_input_load", "UMAP", "ANN90", "LISI", "rendering", "serialization"}
+         and metrics["n_neighbors"] == 90 and metrics["perplexity"] == 30 and metrics["seed"] == 0
+         and metrics["representation"] == pc_key, "Report scope differs")
+    if bulk: need(metrics["source_columns"] == settings and metrics["representation_id"] == representation and metrics["HPC_rendering_performed"] is False, "Bulk column/representation scope differs")
+    need(set(phases) == {"package_imports", "selected_input_load", "UMAP", "ANN90", "LISI", "display_selection" if bulk else "rendering", "serialization"}
          and all(r["wall_seconds"] >= 0 and r["peak_RSS_bytes"] > 0 for r in phases.values()), "Missing phase measurements")
     with h5py.File(output / "embedding.h5ad", "r") as h:
         need(("X" not in h or h["X"].shape is None) and "raw" not in h and len(h["layers"]) == 0, "Unexpected expression in derivative")
-        need(h["obsm"][PC].shape == (PILOT_CELLS, 50) and h["obsm"]["X_umap"].shape == (PILOT_CELLS, 2), "Derivative geometry shape differs")
+        need(h["obsm"][pc_key].shape == (n, 50) and h["obsm"]["X_umap"].shape == (n, 2), "Derivative geometry shape differs")
         need(all(k in h["obs"] for k in ["batch_lisi_raw", "batch_lisi_scaled", "cell_type_lisi_raw", "cell_type_lisi_scaled"]), "Missing per-cell metrics")
         obs = h["obs"]; index = obs.attrs["_index"]; index = index.decode() if isinstance(index, bytes) else index
-        ids = read_elem(obs[index]); need(ids_digest(ids) == metrics["ordered_cell_id_sha256"], "Derivative ordered IDs differ")
+        ids = read_elem(obs[index]); need(len(ids) == len(set(ids)) == n and ids_digest(ids) == metrics["ordered_cell_id_sha256"], "Derivative ordered IDs differ")
         display = pd.read_feather(output / "display.feather"); contract = metrics["display_contract"]
-        need(len(display) == contract["rows"] == PILOT_CELLS and list(display.columns) == contract["columns"]
-             and display.cell_id.is_unique and ids_digest(display.cell_id) == contract["ordered_cell_id_sha256"] == ids_digest(ids)
+        display_n = n if n <= 200000 else 100000
+        if bulk: selected, display_policy = display_indices(list(ids), read_elem(obs[settings["batch"]]))
+        else: selected = np.arange(n)
+        need(len(display) == contract["rows"] == display_n and list(display.columns) == contract["columns"]
+             and display.cell_id.is_unique and ids_digest(display.cell_id) == contract["ordered_cell_id_sha256"] == ids_digest(np.asarray(ids)[selected])
              and (output / "display.feather").stat().st_size <= contract["max_bytes"] == 32 * 1024 * 1024
              and digest(output / "display.feather", "md5") == contract["md5"], "Display scope/ID/provenance differs")
-        for columns, key in [(["PC1", "PC2"], PC), (["UMAP1", "UMAP2"], "X_umap")]:
-            coordinates = h["obsm"][key][:, :2]
+        if bulk:
+            need(list(display.columns) == ["cell_id", "Sample", "author_cell_type", "biological_label", "batch_label", "leiden2", "PC1", "PC2", "UMAP1", "UMAP2"]
+                 and metrics["display_policy"] == display_policy, "Unreviewed display columns/selection policy")
+        for columns, key in [(["PC1", "PC2"], pc_key), (["UMAP1", "UMAP2"], "X_umap")]:
+            coordinates = h["obsm"][key][:, :2][selected]
             need(np.isfinite(coordinates).all() and np.array_equal(display[columns].to_numpy(), coordinates), "Display coordinates misaligned")
-        for column in ["Sample", "sample_id", "broad_cell_type", "disease", "assay", "suspension_dissociation_time", LEIDEN]:
-            need(pd.Series(np.asarray(read_elem(obs[column]))).equals(pd.Series(display[column].to_numpy())), "Display annotation misaligned: " + column)
-    need(source_guard(c)[1] == before, "Parent changed during validation")
+        columns = {"Sample": "Sample", "author_cell_type": settings["author"], "biological_label": settings["biology"], "batch_label": settings["batch"], "leiden2": settings["leiden"]} if bulk else {k: k for k in ["Sample", "sample_id", "broad_cell_type", "disease", "assay", "suspension_dissociation_time", LEIDEN]}
+        for column, original in columns.items():
+            need(pd.Series(np.asarray(read_elem(obs[original]))[selected]).equals(pd.Series(display[column].to_numpy())), "Display annotation misaligned: " + column)
+        if bulk:
+            samples = read_elem(obs["Sample"])
+            for key, column, direction in [("batch", settings["batch"], "mixing"), ("cell_type", settings["author"], "preservation")]:
+                labels = np.asarray(read_elem(obs[column])); valid = pd.notna(labels) & np.asarray([str(x).strip() != "" for x in labels])
+                raw = np.asarray(read_elem(obs[key + "_lisi_raw"])); scaled = np.asarray(read_elem(obs[key + "_lisi_scaled"]))
+                levels = len(pd.unique(labels[valid])); expected = np.full(n, np.nan)
+                if levels > 1: expected[valid] = np.clip((raw[valid] - 1) / (levels - 1) if direction == "mixing" else (levels - raw[valid]) / (levels - 1), 0, 1)
+                need(np.isfinite(raw[valid]).all() and np.isnan(raw[~valid]).all() and (raw[valid] >= 1 - 1e-8).all()
+                     and (raw[valid] <= levels + 1e-8).all() and np.allclose(scaled, expected, equal_nan=True, atol=1e-12), "Per-cell LISI/coverage/normalization differs")
+                need(summarize(raw, scaled, samples, valid, levels) == metrics[key], "Full-population mean/coverage differs")
+    need((guard_control(c) if bulk else source_guard(c)[1]) == before, "Parent changed during validation")
+
+
+def load_display(row):
+    """Only Root-reviewed, bounded local display+summary bytes; never a parent H5."""
+    import pandas as pd
+    import numpy as np
+    review = json.loads(small(row["review"]))
+    need(review["schema"] == "ecoda_singlecell_geometry_root_review_v1" and review["status"].startswith("APPROVED_")
+         and review["reviewer"] and review["reviewed_at"] and review["source_expression_read"] is False, "Display source review missing")
+    reviewed = {x["path"]: x for x in review["output_artifacts"]}
+    for name, limit in [("display", 32 * 1024 * 1024), ("metrics", 2 * 1024 * 1024)]:
+        ref = row[name]; p = regular(ref["path"])
+        need(p.stat().st_size <= limit and reviewed[ref["source_path"]]["md5"] == ref["md5"] == digest(p, "md5"), "Unreviewed display/metrics bytes")
+    metrics = json.loads(Path(row["metrics"]["path"]).read_text())
+    need(row["dataset"] in DATASETS and row["representation"] in REPRESENTATIONS, "Unexpected display row")
+    view = "batch_effect_corrected" if row["representation"] == "cor_harmony" else VIEW
+    expected_pc = ("X_pca_harmony_" if row["representation"] == "cor_harmony" else "X_pca_") + view + "_hvg2000"
+    need(metrics["dataset"] == row["dataset"] and metrics["run_id"] == review["run_id"] and metrics["dimensions"] == 50
+         and metrics["view"] == view and metrics["representation"] == expected_pc and metrics["cells"] == COHORT_SIZE[row["dataset"]][0]
+         and metrics["n_neighbors"] == 90 and metrics["perplexity"] == 30 and metrics["source_expression_read"] is False, "Display metric scope differs")
+    frame = pd.read_feather(row["display"]["path"]); contract = metrics["display_contract"]
+    need(len(frame) == contract["rows"] and frame.cell_id.is_unique and not frame.cell_id.isna().any()
+         and ids_digest(frame.cell_id) == contract["ordered_cell_id_sha256"] and digest(row["display"]["path"], "md5") == contract["md5"], "Display ID contract differs")
+    need(len(frame) == (metrics["cells"] if metrics["cells"] <= 200000 else 100000), "Wrong capped display population")
+    if metrics["schema"] == "ecoda_singlecell_pilot_metrics_v1":
+        need((row["dataset"], row["representation"]) == (DATASET, "unc_raw") and metrics["representation"] == PC
+             and metrics["cells"] == PILOT_CELLS and len(frame) == PILOT_CELLS, "Only the approved Breast UNC pilot may use V1 display schema")
+        mapping = dict(author_cell_type="broad_cell_type", biological_label="disease", batch_label="suspension_dissociation_time", leiden2=LEIDEN)
+        frame = frame.rename(columns={v: k for k, v in mapping.items()})
+        metrics["source_columns"] = dict(author="broad_cell_type", biology="disease", batch="suspension_dissociation_time", leiden=LEIDEN, sample="sample_id")
+    else:
+        need(metrics["schema"] == "ecoda_singlecell_main_metrics_v2" and metrics["representation_id"] == row["representation"], "Main representation differs")
+    need(np.isfinite(frame[["PC1", "PC2", "UMAP1", "UMAP2"]].to_numpy()).all(), "Display coordinates not finite")
+    for name in ["display", "metrics"]: need(digest(row[name]["path"], "md5") == row[name]["md5"], "Local input changed while reading")
+    small(row["review"])
+    return frame, metrics
+
+
+def render_main(c, output):
+    """Six pairs, one cohort at a time. No fitting, scoring or whole-H5 reads."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    import numpy as np
+    import pandas as pd
+    need(c["schema"] == "ecoda_singlecell_main_display_control_v1" and c["status"] == "APPROVED_LOCAL_MAIN_DISPLAY_EXTRACTS", "Local display control not approved")
+    expected = [(d, r) for d in DATASETS for r in REPRESENTATIONS]
+    need([(r["dataset"], r["representation"]) for r in c["rows"]] == expected and not output.exists() and output.resolve() == output, "Exact twelve display rows/fresh output required")
+    output.mkdir(); manifest = []
+    for dataset in DATASETS:
+        refs = [r for r in c["rows"] if r["dataset"] == dataset]
+        loaded = [load_display(r) for r in refs]; frames = [v[0] for v in loaded]; summaries = [v[1] for v in loaded]
+        ids = sorted(frames[0].cell_id); need(set(ids) == set(frames[1].cell_id), "Representation display ID sets differ")
+        frames = [f.set_index("cell_id").loc[ids].reset_index() for f in frames]
+        for column in ["Sample", "author_cell_type", "biological_label", "batch_label"]:
+            need(pd.Series(frames[0][column].to_numpy()).equals(pd.Series(frames[1][column].to_numpy())), "Cross-view source metadata differs: " + column)
+        # One globally shuffled cell-ID order removes last-category draw bias and
+        # is identical in every panel, row and geometry of this cohort.
+        order = sorted(range(len(ids)), key=lambda i: (hashlib.sha256(("draw-seed0\0" + ids[i]).encode()).digest(), ids[i]))
+        palettes = {}
+        for column in ["Sample", "author_cell_type", "leiden2", "biological_label", "batch_label"]:
+            levels = sorted({str(x) for f in frames for x in f[column] if pd.notna(x) and str(x).strip()})
+            palettes[column] = {label: matplotlib.colors.hsv_to_rgb([int(hashlib.sha256((column + "\0" + label).encode()).hexdigest()[:8], 16) / 2**32, .65, .8]).tolist() for label in levels}
+        for kind, coords, columns in [("PCA", ["PC1", "PC2"], ["Sample", "author_cell_type", "biological_label", "batch_label"]),
+                                      ("UMAP", ["UMAP1", "UMAP2"], ["Sample", "author_cell_type", "leiden2", "biological_label", "batch_label"])]:
+            fig, axes = plt.subplots(2, len(columns), figsize=(5 * len(columns), 16))
+            for i, (frame, metrics) in enumerate(zip(frames, summaries)):
+                number = lambda v: "NA (single label)" if v is None else f"{v:.4f}"
+                score = "50D mean iLISI mixing=" + number(metrics["batch"]["scaled_cellwise_mean"]) + "\nmean cLISI preservation=" + number(metrics["cell_type"]["scaled_cellwise_mean"])
+                for j, column in enumerate(columns):
+                    ax = axes[i, j]; palette = palettes[column]
+                    colors = [palette.get(str(x), [.74, .74, .74]) if pd.notna(x) and str(x).strip() else [.74, .74, .74] for x in frame[column]]
+                    ax.scatter(frame[coords[0]].to_numpy()[order], frame[coords[1]].to_numpy()[order], c=np.asarray(colors)[order], s=.5, rasterized=True)
+                    title = {"Sample": "Sample", "author_cell_type": "Source clusters" if dataset == "Lupus_PBMC" else "Source cell type", "leiden2": "Leiden res. 2", "biological_label": "Biology", "batch_label": "Batch: dissociation time" if dataset == DATASET else "Batch"}[column]
+                    ax.set_title(title, fontsize=9, pad=27); ax.text(.5, 1.02, score, transform=ax.transAxes, fontsize=6, ha="center", va="bottom")
+                    ax.set_xlabel(("PC 1" if i == 0 else "Harmony 1") if kind == "PCA" else "UMAP 1")
+                    ax.set_ylabel(("UNC raw" if i == 0 else "COR Harmony") + "\n" + (coords[1] if kind == "UMAP" else ("PC 2" if i == 0 else "Harmony 2")))
+                    handles = [Line2D([], [], linestyle="", marker="o", color=color, markersize=3, label=label) for label, color in palette.items()]
+                    if frame[column].isna().any() or any(not str(x).strip() for x in frame[column] if pd.notna(x)):
+                        handles.append(Line2D([], [], linestyle="", marker="o", color="#bdbdbd", markersize=3, label="Missing"))
+                    ax.legend(handles=handles, fontsize=4 if column == "Sample" else 5, ncol=4 if column == "Sample" else 3,
+                              loc="upper center", bbox_to_anchor=(.5, -.15), frameon=False)
+            fig.suptitle(dataset + ": actual UNC raw versus COR Harmony; scores use full-population50D cellwise means", fontsize=11)
+            if kind == "UMAP": fig.text(.5, .015, "Leiden IDs are row-local; equal numbers do not establish matching clusters.", ha="center", fontsize=7)
+            fig.subplots_adjust(hspace=1.0, bottom=.23, top=.90, wspace=.35)
+            path = output / (dataset + "_" + kind + ".pdf")
+            with atomic_file(path) as tmp: fig.savefig(tmp)
+            plt.close(fig)
+            manifest.append(dict(path=str(path), md5=digest(path, "md5"), dataset=dataset, geometry=kind,
+                display_rows=len(ids), ordered_display_id_sha256=ids_digest(ids), draw_order_sha256=ids_digest([ids[k] for k in order]),
+                palettes=palettes, source_columns=[m["source_columns"] for m in summaries], inputs=refs, score_computations=0))
+        del frames, loaded, summaries, frame, metrics, fig, axes, ax, ids, order, colors, handles, palette, palettes, refs
+        gc.collect()
+    with atomic_file(output / "render_manifest.json") as path: path.write_text(json.dumps(dict(schema="ecoda_singlecell_main_render_v1", figures=manifest, model_fits=0, score_calls=0), indent=2) + "\n")
 
 
 def main():
     p = argparse.ArgumentParser(); p.add_argument("--control", required=True); p.add_argument("--control-sha256", required=True)
     p.add_argument("--output"); p.add_argument("--run-id"); mode = p.add_mutually_exclusive_group()
+    p.add_argument("--dataset"); p.add_argument("--representation", choices=REPRESENTATIONS)
     mode.add_argument("--memory-preflight", action="store_true"); mode.add_argument("--check-control", action="store_true")
+    mode.add_argument("--render-main", action="store_true")
     mode.add_argument("--validate-output", action="store_true"); a = p.parse_args()
     c = json.loads(small(dict(path=a.control, sha256=a.control_sha256)))
+    if a.render_main:
+        need(a.output and not a.dataset and not a.representation and not a.run_id, "Local rendering has no compute-row selectors")
+        render_main(c, Path(a.output)); return
     if a.memory_preflight: print(json.dumps(memory_preflight(c), indent=2)); return
-    if a.check_control: source_guard(c); print("BREAST_UNC_PILOT_CONTROL_OK_NO_VALUES_READ"); return
+    if a.check_control:
+        need(not a.dataset and not a.representation, "Control check has no row selectors"); guard_control(c)
+        print("SINGLECELL_MAIN12_CONTROL_OK_NO_VALUES_READ" if c["schema"] == "ecoda_singlecell_batch_main_v2" else "BREAST_UNC_PILOT_CONTROL_OK_NO_VALUES_READ"); return
     need(a.output and a.run_id, "Explicit run/output required")
-    if a.validate_output: validate_output(c, Path(a.output), a.run_id)
-    else: produce(c, Path(a.output), a.run_id)
+    need(bool(a.dataset) == bool(a.representation), "Both row selectors are required")
+    if a.validate_output: validate_output(c, Path(a.output), a.run_id, a.dataset, a.representation)
+    else: produce(c, Path(a.output), a.run_id, a.dataset, a.representation)
 
 
 if __name__ == "__main__": main()
