@@ -3959,7 +3959,7 @@ if (isTRUE(cell_subsetting_requested) && !is.null(cell_subsetting_results)) {
     summarise(value = mean(value), .groups = "drop")
   cell_subsetting_aggregate <- cell_subsetting_dataset_means %>%
     group_by(target, metric) %>%
-    summarise(value = mean(value), se = sd(value) / sqrt(n()), .groups = "drop")
+    summarise(se = sd(value) / sqrt(n()), value = mean(value), .groups = "drop")
   p_cell_subsetting <- ggplot() +
     geom_errorbar(data = cell_subsetting_aggregate,
       aes(target, ymin = value - se, ymax = value + se), width = .2) +

@@ -145,11 +145,32 @@ finish<-grep("# Exploratory Stephenson UCell activity versus ECODA",lines,fixed=
 section<-lines[start:(finish-1)]
 first<-grep("^```\\{r",section)[1];last<-tail(grep("^```$",section),1)
 cell_subsetting_requested<-TRUE;cell_subsetting_results<-loaded;path_plots<-root
+# Reporting fixture only: all 11 cohorts/10 targets/5 metrics, no new draws or scores.
+display_datasets<-names(Filter(function(x)isTRUE(x$use_for_benchmark)&&!is.null(x$views$benchmark_analysis),raw_config))
+display_datasets<-display_datasets[!grepl("^_",display_datasets)]
+stopifnot(length(display_datasets)==11L)
+cell_subsetting_results$results<-do.call(rbind,lapply(seq_along(display_datasets),function(i){
+  frame<-loaded$results;frame$dataset<-display_datasets[i]
+  for(k in seq_along(metrics))frame[[metrics[k]]]<-i/20+as.integer(factor(frame$target))/100+k/1000+frame$replicate/10000
+  frame
+}))
 real_ggsave<-ggsave;ggsave<-function(filename,plot,...)invisible(filename)
 grDevices::pdf(file.path(root,"cell-depth-fixture.pdf"))
 tryCatch(eval(parse(text=section[(first+1):(last-1)])),finally={grDevices::dev.off();ggsave<-real_ggsave})
 built<-suppressWarnings(ggplot_build(p_cell_subsetting))
 stopifnot(length(unique(built$layout$layout$PANEL))==5L)
+stopifnot(nrow(cell_subsetting_dataset_means)==11L*10L*5L,nrow(cell_subsetting_aggregate)==50L,
+ all(is.finite(cell_subsetting_aggregate$se)),all(cell_subsetting_aggregate$se>0),
+ nrow(built$data[[1L]])==50L,all(is.finite(built$data[[1L]]$ymin)),all(is.finite(built$data[[1L]]$ymax)))
+display_long<-pivot_longer(cell_subsetting_results$results,all_of(metrics),names_to="metric",values_to="value")
+expected_means<-aggregate(value~dataset+target+metric,display_long,mean)
+expected_summary<-do.call(rbind,lapply(split(expected_means,paste(expected_means$target,expected_means$metric)),function(x){
+  stopifnot(nrow(x)==11L,length(unique(x$dataset))==11L)
+  data.frame(target=x$target[1],metric=x$metric[1],expected_value=mean(x$value),expected_se=sd(x$value)/sqrt(11L))
+}))
+comparison<-merge(as.data.frame(cell_subsetting_aggregate),expected_summary,by=c("target","metric"))
+stopifnot(nrow(comparison)==50L,max(abs(comparison$value-comparison$expected_value))<1e-14,
+ max(abs(comparison$se-comparison$expected_se))<1e-14)
 writeLines("corrupt",csv);fail(read_current())
 stopifnot(identical(tools::md5sum(names(original)),original))
 # Source publication remains create-only.
