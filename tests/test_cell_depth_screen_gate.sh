@@ -20,6 +20,8 @@ mkdir -p "${TREE}/src/utils/bash" "${TREE}/src/5_run_benchmark_methods" "${TMP}/
 for NAME in ecoda_run_common.sh cell_depth_screen.sh; do cp "${ROOT}/src/utils/bash/${NAME}" "${TREE}/src/utils/bash/${NAME}"; done
 cp "${ROOT}/src/utils/analysis_release.R" "${TREE}/src/utils/analysis_release.R"
 cp "${ROOT}/src/5_run_benchmark_methods/run_local_ecoda_derived.R" "${TREE}/src/5_run_benchmark_methods/run_local_ecoda_derived.R"
+# The real controller bind may read control/receipt metadata, never scientific count parents.
+printf '\necoda_screen_release_sources <- function(...) stop("controller must not deserialize scientific parents")\n' >> "${TREE}/src/5_run_benchmark_methods/run_local_ecoda_derived.R"
 cp "${ROOT}/datasets.json" "${TREE}/datasets.json"
 printf 'immutable test source\n' > "${TREE}/source.manifest"
 cat > "${TREE}/src/slurm_config.sh" <<'SH'
@@ -144,6 +146,43 @@ mv "${TEST_NAS}" "${TEST_NAS}.hidden"
 bash "${ENTRY}" --validate > "${TMP}/validated.log" 2>&1
 mv "${TEST_NAS}.hidden" "${TEST_NAS}"
 grep -q '^CELL_DEPTH_SCREEN_VALIDATED=screen_ok$' "${TMP}/validated.log"
+[[ "$(cat "${RUN}/manifests/operation")" == cell-depth-screen ]]
+# Exercise the exact generic PURPOSE route with real records and native validator.
+"${TEST_PYTHON}" - "${ROOT}/src/utils/bash/ecoda_run_audit.sh" "${TMP}/audit_route.sh" <<'PY_ROUTE'
+import pathlib,sys
+s=pathlib.Path(sys.argv[1]).read_text();start=s.index('_audit_analysis_release() {');end=s.index('\n}\n',start)+3
+pathlib.Path(sys.argv[2]).write_text(s[start:end])
+# Cell-depth retains its existing worker ledger; other analysis routes require ARRAY.
+assert 'expected_scheduler_kind=worker' in s[start:end] and s[start:end].count('expected_scheduler_kind=worker')==1
+PY_ROUTE
+source "${TMP}/audit_route.sh"
+_audit_metadata_value() { sed -n "s/^$2=//p" "$1"; }
+_audit_metadata_count() { sed -n "s/^$2=//p" "$1" | wc -l | tr -d ' '; }
+_audit_regular_file() { [[ -f "$1" && ! -L "$1" ]]; }
+_audit_die() { echo "$*" >&2; return 1; }
+_audit_scheduler_ids() { [[ "$(cat "${RUN_ROOT_REAL}/manifests/scheduler_ids.tsv")" == "$(printf 'worker\t812345')" ]]; }
+source "${TREE}/src/slurm_config.sh"
+source "${TREE}/src/utils/bash/ecoda_run_common.sh"
+RUN_ROOT_REAL="${RUN}" RUN_ID=screen_ok SELECTION_ARG="${RUN}/manifests/selection.tsv" AUDIT_TERMINAL_STATE=OK AUDIT_SOURCE_ROOT="${TREE}" SOURCE_MANIFEST_ARG="${ECODA_SOURCE_MANIFEST}"
+_audit_analysis_release > "${TMP}/generic-validated.log" 2>&1
+grep -q '^CELL_DEPTH_SCREEN_VALIDATED=screen_ok$' "${TMP}/generic-validated.log"
+cp "${RUN}/metadata" "${TMP}/metadata.saved"
+sed 's/counts_only_cell_depth_screen/counts_only_zeroimp_screen/' "${TMP}/metadata.saved" > "${RUN}/metadata"
+expect_fail _audit_analysis_release
+cp "${TMP}/metadata.saved" "${RUN}/metadata"
+# Purpose/operation and owner-stage failures remain read-only.
+cp "${RUN}/manifests/operation" "${TMP}/operation.saved"
+chmod u+w "${RUN}/manifests/operation"; printf 'wrong-operation\n' > "${RUN}/manifests/operation"
+expect_fail _audit_analysis_release
+cp "${TMP}/operation.saved" "${RUN}/manifests/operation"; chmod a-w "${RUN}/manifests/operation"
+P="${RUN}/artifacts/cell_depth/analysis/ECODA_authors_HR_cell_subsetting.rds"
+OWNER="$(ecoda_artifact_owner_dir "${P}")"; cp "${OWNER}/owner" "${TMP}/owner.saved"
+sed 's/STAGE=stage5/STAGE=stage3/' "${TMP}/owner.saved" > "${OWNER}/owner"
+OWNER_BEFORE="$(ecoda_sha256_file "${OWNER}/owner")"; STATUS_BEFORE="$(ecoda_sha256_file "${RUN}/status/terminal")"
+expect_fail bash "${ENTRY}" --validate
+[[ "$(ecoda_sha256_file "${OWNER}/owner")" == "${OWNER_BEFORE}" && "$(ecoda_sha256_file "${RUN}/status/terminal")" == "${STATUS_BEFORE}" ]]
+cp "${TMP}/owner.saved" "${OWNER}/owner"
+
 [[ "$(wc -l < "${TEST_SBATCH_CAPTURE}" | tr -d ' ')" == 1 ]]
 [[ "$(find "${RUN}/artifacts/cell_depth/analysis" -type f | wc -l | tr -d ' ')" == 12 ]]
 expect_fail run_screen

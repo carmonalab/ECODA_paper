@@ -11,6 +11,7 @@ source "${SCRIPT_DIR}/ecoda_runtime.sh"
 SELF="${PROJECT_ROOT}/src/utils/bash/cell_depth_screen.sh"
 RUNNER="${PROJECT_ROOT}/src/5_run_benchmark_methods/run_local_ecoda_derived.R"
 PURPOSE=counts_only_cell_depth_screen
+OPERATION=cell-depth-screen
 PRODUCER=cell_depth_screen
 MODE=controller
 if [[ "${1:-}" == --worker || "${1:-}" == --validate ]]; then MODE="${1#--}"; shift; fi
@@ -51,7 +52,7 @@ export ECODA_RUN_ROOT ECODA_RUN_ID
 MANIFESTS="${RUN}/manifests"
 OUTPUT="${RUN}/artifacts/cell_depth/analysis"
 STATUS="${RUN}/status/cell_depth.status"
-SCOPE_FILES=(source.manifest runtime.identity selection.tsv analysis_release.rds inputs.tsv screen_identity.json)
+SCOPE_FILES=(source.manifest runtime.identity operation selection.tsv analysis_release.rds inputs.tsv screen_identity.json)
 OUTPUT_FILES=(ECODA_authors_HR_cell_subsetting.rds ECODA_authors_HR_cell_subsetting.csv derived_source_manifest.json derived_run_manifest.json status.json .ecoda_run_owner)
 
 if [[ "${MODE}" == controller ]]; then
@@ -64,7 +65,7 @@ source(file.path(args[1], "src/5_run_benchmark_methods/run_local_ecoda_derived.R
 invisible(.analysis_checked_file(args[2], args[3]))
 raw <- jsonlite::fromJSON(args[7], simplifyVector=FALSE)
 selected <- ecoda_select_screen_datasets(ecoda_raw_config_union(raw, "benchmark_union"), args[4])
-invisible(ecoda_screen_release_sources(args[2], args[3], selected, raw))
+# Scientific count parents are read only by the pinned worker after native input ownership checks.
 control <- readRDS(args[2]); invisible(.analysis_checked_file(args[2], args[3]))
 ledger <- control$ledger[control$ledger$dataset %in% selected,,drop=FALSE]
 paths <- c(args[2], ledger$artifact_path, ledger$receipt_path)
@@ -85,11 +86,12 @@ write.table(inventory, file.path(args[6], "inputs.tsv"), sep="\t", quote=FALSE, 
 write.table(data.frame(selected, "benchmark_analysis", "cell_subsetting"), file.path(args[6], "selection.tsv"), sep="\t", quote=FALSE, row.names=FALSE, col.names=FALSE)
 R
   ecoda_atomic_copy "${CONTROL}" "${MANIFESTS}/analysis_release.rds"
+  ecoda_atomic_write "${MANIFESTS}/operation" "${OPERATION}\n"
   "${PYTHON_BIN}" - "${RUN}" "${PURPOSE}" "${CONTROL_MD5}" "${DATASETS_JSON_FILE}" <<'PY'
 import hashlib,json,pathlib,sys
 run=pathlib.Path(sys.argv[1]);m=run/'manifests'
-names=['source.manifest','runtime.identity','selection.tsv','analysis_release.rds','inputs.tsv']
-identity={'schema':1,'purpose':sys.argv[2],'run_id':run.name,'control_md5':sys.argv[3],
+names=['source.manifest','runtime.identity','operation','selection.tsv','analysis_release.rds','inputs.tsv']
+identity={'schema':1,'purpose':sys.argv[2],'operation':'cell-depth-screen','run_id':run.name,'control_md5':sys.argv[3],
           'config_path':sys.argv[4],'config_sha256':hashlib.sha256(pathlib.Path(sys.argv[4]).read_bytes()).hexdigest(),
           'identities':{n:hashlib.sha256((m/n).read_bytes()).hexdigest() for n in names}}
 if hashlib.md5((m/'analysis_release.rds').read_bytes()).hexdigest()!=identity['control_md5']: raise SystemExit('ERROR: control changed during binding')
@@ -104,7 +106,7 @@ fi
 
 validate_scope() {
   local NAME PATH_IN MD5_IN OWNER PARENT RECORD BIRTH_PRODUCER
-  [[ "$(sed -n 's/^PURPOSE=//p' "${RUN}/metadata")" == "${PURPOSE}" ]] || return 1
+  [[ "$(sed -n 's/^PURPOSE=//p' "${RUN}/metadata")" == "${PURPOSE}" && "$(cat "${MANIFESTS}/operation")" == "${OPERATION}" ]] || return 1
   ecoda_runtime_validate_bound_run || return 1
   for NAME in "${SCOPE_FILES[@]}"; do
     ecoda_validate_artifact_record "${MANIFESTS}/${NAME}" cell_depth_scope "${ECODA_RUN_ID}" >/dev/null || return 1
@@ -112,8 +114,8 @@ validate_scope() {
   "${PYTHON_BIN}" - "${RUN}" "${PURPOSE}" "${HPC_SCRATCH_DIR}" "${DATASETS_JSON_FILE}" <<'PY' || return 1
 import hashlib,json,pathlib,re,sys
 run=pathlib.Path(sys.argv[1]);m=run/'manifests';x=json.loads((m/'screen_identity.json').read_text())
-expected={'source.manifest','runtime.identity','selection.tsv','analysis_release.rds','inputs.tsv'}
-if x['schema']!=1 or x['purpose']!=sys.argv[2] or x['run_id']!=run.name or set(x['identities'])!=expected or x['config_path']!=sys.argv[4]: raise SystemExit('ERROR: cell-depth identity differs')
+expected={'source.manifest','runtime.identity','operation','selection.tsv','analysis_release.rds','inputs.tsv'}
+if x['schema']!=1 or x['operation']!='cell-depth-screen' or (m/'operation').read_bytes()!=b'cell-depth-screen\n' or x['purpose']!=sys.argv[2] or x['run_id']!=run.name or set(x['identities'])!=expected or x['config_path']!=sys.argv[4]: raise SystemExit('ERROR: cell-depth identity differs')
 if hashlib.sha256(pathlib.Path(sys.argv[4]).read_bytes()).hexdigest()!=x['config_sha256']: raise SystemExit('ERROR: config changed')
 for n,sha in x['identities'].items():
     p=m/n
@@ -174,7 +176,7 @@ validate_report() {
     ecoda_validate_artifact_record "${OUTPUT}/${NAME}" "${PRODUCER}" "${ECODA_RUN_ID}" >/dev/null || return 1
     OWNER="$(ecoda_artifact_owner_dir "${OUTPUT}/${NAME}")" || return 1
     _ecoda_artifact_owner_validate_dir "${OWNER}" "${OUTPUT}/${NAME}" || return 1
-    [[ "${ECODA_ARTIFACT_OWNER_RUN}" == "${ECODA_RUN_ID}" && "${ECODA_ARTIFACT_OWNER_STATE}" == OK ]] || return 1
+    [[ "${ECODA_ARTIFACT_OWNER_RUN}" == "${ECODA_RUN_ID}" && "${ECODA_ARTIFACT_OWNER_STAGE}" == stage5 && "${ECODA_ARTIFACT_OWNER_STATE}" == OK ]] || return 1
   done
   screen_r validate || return 1
 }
@@ -183,7 +185,7 @@ fail_active_outputs() {
   for NAME in "${OUTPUT_FILES[@]}"; do
     OWNER="$(ecoda_artifact_owner_dir "${OUTPUT}/${NAME}" 2>/dev/null)" || continue
     if _ecoda_artifact_owner_validate_dir "${OWNER}" "${OUTPUT}/${NAME}" &&
-       [[ "${ECODA_ARTIFACT_OWNER_RUN}" == "${ECODA_RUN_ID}" && "${ECODA_ARTIFACT_OWNER_STATE}" == ACTIVE ]]; then
+       [[ "${ECODA_ARTIFACT_OWNER_RUN}" == "${ECODA_RUN_ID}" && "${ECODA_ARTIFACT_OWNER_STAGE}" == stage5 && "${ECODA_ARTIFACT_OWNER_STATE}" == ACTIVE ]]; then
       ecoda_artifact_owner_set_state "${OUTPUT}/${NAME}" FAIL cell_depth_failed >/dev/null || true
     fi
   done

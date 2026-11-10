@@ -523,6 +523,7 @@ _audit_terminal_status() {
 # owns that schema; the generic identity and accounting checks still apply.
 _audit_analysis_release() {
   local purpose operation expected_operation validator
+  local expected_scheduler_kind=ARRAY
   local scope_producer=analysis_projection_scope submission_producer=analysis_projection_submission
   local validator_name=project_analysis_release.sh
   local metadata="${RUN_ROOT_REAL}/metadata"
@@ -536,6 +537,13 @@ _audit_analysis_release() {
       scope_producer=saved_cluster_scope
       submission_producer=saved_cluster_submission
       validator_name=saved_cluster_screen.sh
+      ;;
+    counts_only_cell_depth_screen)
+      expected_operation=cell-depth-screen
+      scope_producer=cell_depth_scope
+      submission_producer=cell_depth_submission
+      validator_name=cell_depth_screen.sh
+      expected_scheduler_kind=worker
       ;;
     counts_only_zeroimp_screen)
       expected_operation=zeroimp-count-screen
@@ -572,7 +580,7 @@ _audit_analysis_release() {
     "${submission_producer}" "${RUN_ID}" >/dev/null || return 1
   # Each supported operation submits exactly one scalar CPU job.
   [[ "$(wc -l < "${RUN_ROOT_REAL}/manifests/scheduler_ids.tsv" | tr -d '[:space:]')" == 1 ]] || return 1
-  awk -F '\t' 'NF != 2 || $1 != "ARRAY" || $2 !~ /^[0-9]+$/ { exit 1 }' \
+  awk -F '\t' -v expected="${expected_scheduler_kind}" 'NF != 2 || $1 != expected || $2 !~ /^[0-9]+$/ { exit 1 }' \
     "${RUN_ROOT_REAL}/manifests/scheduler_ids.tsv" || return 1
   _audit_scheduler_ids || return 1
   validator="$(ecoda_require_source_script_path \
