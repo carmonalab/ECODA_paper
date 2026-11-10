@@ -5069,3 +5069,103 @@ and input-only review, not a success dependency on the failed97 gate.
   and its provenance/control chain. A native two-sibling core/release backup
   option is under review to overlap immutable22510-file core IO with Gong;
   no such copy has yet been launched or represented as complete.
+
+### Parallel processed-data CORE archive —approved finite scope
+
+- To overlap independent IO with Gong, approve a closed native-data CORE
+  archive now and a separate closed GM33 data release later. Existing helper
+  f5/5c010efa supports separate controls/receipts under one backup run without
+  source changes or a new scheduler/controller. No verified directory is expanded
+  and no22510-file recopy is planned. Downstream figure/scoring archives are
+  outside this chat's newly narrowed scope.
+- HostBamboo; source physical scratch
+  /srv/beegfs/scratch/users/h/halterc/ECODA_paper; backup run
+  stage5_p6_final_derivatives_backup_20261110_v1. CORE destination is
+  /srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper/_ecoda_backups/corrected_final/stage5_p6_final_derivatives_backup_20261110_v1/derived_core.
+  Exact22510files/231708145bytes =475known102 data/control/proof files plus
+  22035approvedprojectionv2 files, no overlaps. InventorySHA
+  a8637e08f4450876379d78676fb580eccaee2ba9c18a36e0c56e9fdaa6a07c59.
+  Root independently rebuilt this union from both frozen inventories, checked
+  paths/types/counts/bytes and complete packet SHA closure without rereading
+  scientific payloads. No H5AD/SIF/RData, local publication files or running
+  Gong artifacts are selected. Native copy performs mandatory full hash checks.
+- Concrete packet .gate/p6_final_derivative_backup_20261110_v1/core_v1
+  (manifest2a710ba2…): immutableF5 source manifest1e969998…/archive d6a279a…;
+  unchanged native NAS helper5c010efa…. First create-only stage the small actual
+  Root review, then checked source/mount/shared777/fresh-root preflight and
+  native ecoda_init_run stage5 exactly once. Stage only5frozen controls with
+  native MD5/SIZE/PATH sidecars under manifests/core. Native preflight/copy/
+  verify use separate explicit operations and core_backup.receipt.json.
+  This is NAS bookkeeping, with no Slurm ID, scientific job or fake durable gate.
+- After all GM33 data/projection reviews, freeze its actual new data/control/
+  provenance delta under manifests/final, copy/verify to sibling derived_release
+  with a distinct release receipt. One final finite backup_metadata archive
+  records both payload receipts/control sets/Root approvals and an explicit
+  component-to-destination catalog. Neither sibling alone is claimed to contain
+  the combined final data release. All selected NAS files666/directories777;
+  scratch/home permissions and original scientific gate states remain unchanged.
+
+- CORE actual execution: Root reviewbdb6e51a… is create-only staged, checked
+  metadata initialization/staging passes (5controls; zero scientific payload
+  reads/copies/jobs), and native NAS preflight exits0. Native copy is now
+  running in local operation session81367 against only derived_core. Its
+  receipt/explicit verify and final catalog review remain pending; this is not
+  a completed-backup claim. Gong continues independently under waiter68872.
+
+### Data handoff preparation —13:10UTC
+
+- Gong's12:52 filesystem-only observation confirms all50training epochs and
+  inference completed. Sample-distance calculation remains active, with no
+  exception or terminal marker; the original single waiter68872 is retained.
+- Cross-chat process IDs cannot be attached by the downstream chat. Prepare
+  bounded, validated RDS exports of the existing scored benchmark915 state and
+  resident batch reports under
+  .gate/publication_figure_updates_20261110_v1/resident_handoff/.
+  These contain only explicit derived objects, thin distances, composition
+  features and plotting metadata. No global session dump, expression data,
+  rescoring, cohort reload or figure rerender is authorized in this handoff.
+  Preserve both original R processes, state/RNG and existing output bytes.
+- The future1133 metadata merge now has frozen copies of the accepted native
+  metadata helper and merge definitions, independent of mutable plotting
+  helpers. Its focused tests preserve every old1100 row/top-level field and
+  reject overlaps/foreign keys/input mismatches. Actual merge remains blocked
+  until the reviewed33 control and finite projection mirror exist.
+
+- Actual downstream handoff completed13:22UTC. Benchmark export
+  resident_handoff/benchmark_v2/benchmark_state.rds is168283696bytes,
+  MD57920708cbfdd3a39396a9b25ff2f3b15; manifestSHA
+  9a3afe70e5cd9c87aca7f84149ea0101158727d504834efb1b6fd95e4080902e.
+  All915methods/4575canonical cells, full explicit state, setup, baseline, RNG
+  and Rplots round-trip unchanged; Root independently verified file hashes.
+  V1's restrictive type guard stopped before output creation on native dist
+  call attributes. V2 preserves only those inert, unevaluated provenance calls,
+  recursively excluding functions/environments; no scored data were modified.
+- Batch export resident_handoff/batch_v1/manifest.json SHA
+  3044579569fdb178cd6d5476f9dba6989a29d39f8ab095c7368e97a9fbaf201a
+  binds765scores,120retained non-NULL distances and45plain plotting-data trees.
+  All8cohorts' plotted group vectors and both Kidney axes are included; full
+  retained metadata exists only forCOVID44. Saved NULL labels/geometry remain
+  in report provenance. No feature matrices, functions, environments, new
+  artifact reads or scoring. Root independently verified all3RDS/checksums.
+  Both original R processes are retained and their export writers released.
+  Exact paths/digests and these limitations were sent to the downstream owner.
+- Historical figure QA inventories remain historical: the downstream owner
+  has authorized renames/new renders. Neither export claims that the old figure
+  paths or bytes remain current. Gong13:22 remains in distance calculation,
+  without a terminal marker or exception; original waiter68872 remains active.
+
+- CORE copy operation81367 ended successfully at approximately13:27UTC, exit0
+  and no stderr. Its distinct native verify operation was invoked exactly once
+  at13:28UTC (session9324). Final receipt/mode/checksum review remains pending;
+  no repeated copy or expansion of the closed22510-file scope occurred.
+
+- CORE archive completed and Root-reviewed13:46UTC: native copy receipt records
+  13:27:27UTC; separate verify9324 exits0, with empty stderr. ReceiptMD5
+  758a81eb908b87dd6d01a6d5487f9b69/SHA
+  11e99602cf000bb488dd35b73ac7fba092b44fac8f618488731b4f8dd2304546
+  and strict birth-path sidecar match. Pinned native helper verifies all22510
+  destination files/231708145bytes, exact membership,666/777permissions,
+  unchanged inventory/source manifest and smednas515:/volume1/Shared mount.
+  Evidence and explicit Root completion review are in core_v1. The closed CORE
+  destination will not be expanded; final GM33/e75 data delta and the catalog
+  referencing both archives remain pending. Gong's original waiter remains active.
