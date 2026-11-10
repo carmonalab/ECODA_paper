@@ -74,8 +74,14 @@ def run():
         assert tokens_for(read_request(request, config), "Bassez", "benchmark_analysis", "pilotgm") == pilotgm
         assert selected_files("Bassez", "pilotgm", pilotgm) == [
             f"embeddings/Bassez_{token}_pilotgm_dists.feather" for token in pilotgm]
-        request.write_text("Bassez\tbenchmark_analysis\tpilotgm\thvg1000_lowres\n")
-        rejects(lambda: read_request(request, config), "unknown parameter token")
+        step_gm = ("hvg1000_highres", "hvg3000_highres", "hvg2000_lowres")
+        request.write_text("".join(f"Stephenson\tbenchmark_analysis\tpilotgm\t{token}\n" for token in step_gm))
+        assert tokens_for(read_request(request, config), "Stephenson", "benchmark_analysis", "pilotgm") == step_gm
+        assert selected_files("Stephenson", "pilotgm", step_gm) == [
+            f"embeddings/Stephenson_{token}_pilotgm_dists.feather" for token in step_gm]
+        for token in ("hvg1000_lowres", "hvg3000_lowres"):
+            request.write_text(f"Bassez\tbenchmark_analysis\tpilotgm\t{token}\n")
+            rejects(lambda: read_request(request, config), "unknown parameter token")
         request.write_text(original)
 
         config_path = base / "datasets.json"; config_path.write_text(json.dumps(config))
@@ -106,6 +112,10 @@ def run():
                 whole = validator.expected_artifacts(run_root / "artifacts/benchmark", "Stephenson", "scpoli",
                     False, None, config_path=config_path)
                 assert len(whole) == 8 and any("lowres" in path.name for path in whole)
+                # The explicit LR token does not widen a whole-family GM request.
+                gm_whole = validator.expected_artifacts(run_root / "artifacts/benchmark", "Stephenson", "pilotgm",
+                    False, None, config_path=config_path)
+                assert [path.name for path in gm_whole] == ["Stephenson_hvg2000_highres_pilotgm_dists.feather"]
             exact.write_text(original.replace("hvg2000_bl", "hvg500"))
             rejects(lambda: active_scope(config_path), "identity changed")
             exact.write_text(original)
