@@ -1668,6 +1668,108 @@ ECODA_DERIVED_METHODS <- list(
   bundle
 }
 
+.ecoda_rekey_saved_res50 <- function(bundle, dataset, expected) {
+  method <- "ECODA_seuratres_50"
+  raw <- unname(as.character(rownames(bundle$feat_mat)))
+  .ecoda_validate_bundle(bundle, raw, method)
+  if (identical(raw, expected)) return(list(bundle = bundle, action = "BYTE_IDENTICAL_COPY"))
+  if (!identical(dataset, "Gongsharma_cmv_young_males") || identical(bundle$source_identity$sample_col, "Sample"))
+    stop("Only the reviewed Gong raw-alias projection is permitted")
+  canonical <- unname(standardize_sample_names(raw))
+  if (anyDuplicated(canonical) || !identical(canonical, expected)) stop("Gong identifier projection is not the exact current bijection/order")
+  original <- bundle
+  rownames(bundle$feat_mat) <- canonical; rownames(bundle$counts) <- canonical; names(bundle$labels) <- canonical
+  if (inherits(bundle$dist_mat, "dist")) attr(bundle$dist_mat, "Labels") <- canonical
+  else dimnames(bundle$dist_mat) <- list(canonical, canonical)
+  for (field in c("feat_mat", "counts", "dist_mat"))
+    if (!identical(unname(as.matrix(bundle[[field]])), unname(as.matrix(original[[field]])))) stop("Identifier projection changed numeric data")
+  if (!identical(unname(bundle$labels), unname(original$labels)) || !identical(bundle$scores, original$scores))
+    stop("Identifier projection changed labels or scores")
+  bundle$source_identity$identifier_projection <- list(schema = "ecoda_saved_res50_identifier_projection_v1",
+    raw_ids = raw, canonical_ids = canonical, original_count_fingerprint = original$source_identity$count_fingerprint,
+    numeric_data_unchanged = TRUE, label_values_unchanged = TRUE, scores_unchanged = TRUE)
+  bundle$source_identity$count_fingerprint <- .ecoda_screen_digest(bundle$counts)
+  bundle$source_identity$count_fingerprint_basis <- "stored projected counts, including the unchanged +0.5 offset"
+  .ecoda_validate_bundle(bundle, expected, method)
+  list(bundle = bundle, action = "IDENTIFIER_ONLY_PROJECTION")
+}
+
+# One reviewed partial res50 run, not a general resume/recomputation interface.
+.ecoda_reuse_saved_res50 <- function(project, run_root) {
+  if (!identical(normalizePath(run_root), Sys.getenv("ECODA_RUN_ROOT"))) stop("Reuse output must be the current owned run")
+  m <- file.path(run_root, "manifests"); output <- file.path(run_root, "artifacts/saved_labels/res50")
+  control_path <- file.path(m, "res50_reuse.json"); diagnostic_path <- file.path(m, "res50_diagnostic.json")
+  control <- jsonlite::fromJSON(control_path, simplifyVector = FALSE)
+  diagnostic <- jsonlite::fromJSON(diagnostic_path, simplifyVector = FALSE)
+  if (!identical(control$schema, "ecoda_saved_res50_reuse_v1") || !identical(control$status, "APPROVED_SAVED_RES50_REUSE") ||
+      !isTRUE(control$review_complete) || !is.character(control$reviewer) || !nzchar(trimws(control$reviewer)) ||
+      !identical(digest::digest(file = diagnostic_path, algo = "sha256"), control$diagnostic$sha256) ||
+      !identical(control$original_run_id, "stage5_p6_saved22_20261110_v2") ||
+      !identical(diagnostic$original_run_id, control$original_run_id) || !identical(diagnostic$original_gate_state, "FAILED") ||
+      !identical(diagnostic$native_res50_manifest_state, "COMPLETED")) stop("Unapproved fixed res50 reuse contract")
+  selected <- unlist(control$datasets, use.names = FALSE)
+  witness <- jsonlite::fromJSON(file.path(m, "input_witness.json"), simplifyVector = FALSE)
+  config_path <- file.path(project, "datasets.json"); raw_config <- jsonlite::fromJSON(config_path, simplifyVector = FALSE)
+  if (length(selected) != 11L || anyDuplicated(selected) || !setequal(selected, names(diagnostic$rows)) ||
+      !setequal(selected, ecoda_raw_config_union(raw_config, "benchmark_union"))) stop("Reuse requires the exact eleven enabled cohorts")
+  references <- file.path(m, "input_references.tsv")
+  sources <- .ecoda_bound_sources(list(input_references = references,
+    input_references_sha256 = digest::digest(file = references, algo = "sha256"), scope = "benchmark_union"), raw_config, selected, "res50")
+  original_root <- file.path(dirname(run_root), control$original_run_id)
+  original <- file.path(original_root, "artifacts/saved_labels/res50")
+  paths <- setNames(file.path(original, paste0(selected, "_ECODA_seuratres_50.rds")), selected)
+  # The controller has also guarded every record/FAIL owner before this call.
+  for (path in paths) {
+    expected <- diagnostic$source_file_facts[[path]]
+    if (is.null(expected) || !identical(.ecoda_validate_output_sidecar(path)$MD5, expected$md5)) stop("Original res50 bytes differ from reviewed diagnostic")
+  }
+  if (file.exists(output) || .ecoda_is_symlink(output)) stop("Reuse output must be new")
+  dir.create(output, recursive = TRUE); run_id <- paste0(basename(run_root), "_res50")
+  .ecoda_write_run_owner(output, run_id)
+  runner <- file.path(project, "src/5_run_benchmark_methods/run_local_ecoda_derived.R")
+  source_manifest_path <- file.path(output, "derived_source_manifest.json")
+  reuse <- list(schema = "ecoda_saved_res50_reuse_lineage_v1", control_sha256 = digest::digest(file = control_path, algo = "sha256"),
+    diagnostic = control$diagnostic, original_run_root = original_root, original_gate_state = "FAILED",
+    original_source_commit = diagnostic$source_commit, counts_recomputed = FALSE, scores_computed = FALSE, model_fits = FALSE)
+  source_manifest <- list(run_id = run_id, analysis = "res50", scope = "benchmark_union", source_mode = "bound_saved_cluster_obs",
+    requested_cores = 1L, selected_datasets = selected, derived_root = dirname(output), status = "SOURCES_VERIFIED",
+    config_path = config_path, config_md5 = .ecoda_md5(config_path), runner_path = runner, runner_md5 = .ecoda_md5(runner),
+    source_manifest_path = source_manifest_path, source_manifest_md5 = NULL, artifacts = list(), sources = unname(sources),
+    input_references_path = references, input_references_sha256 = digest::digest(file = references, algo = "sha256"), res50_reuse = reuse)
+  ecoda_validate_derived_manifest(source_manifest, required_sources = TRUE)
+  .ecoda_write_json_atomic(source_manifest, source_manifest_path)
+  artifacts <- list()
+  for (dataset in selected) {
+    path <- paths[[dataset]]; before <- .ecoda_md5(path); value <- readRDS(path)
+    observed <- Filter(function(x) identical(x$dataset, dataset), witness$rows)
+    if (length(observed) != 1L || value$source_identity$h5ad_md5 != sources[[dataset]]$h5ad_md5 ||
+        value$source_identity$h5ad_path != sources[[dataset]]$h5ad_path) stop("Reused result current input differs")
+    ids <- unlist(observed[[1]]$sample_ids, use.names = FALSE)
+    result <- .ecoda_rekey_saved_res50(value, dataset, ids)
+    truth <- unlist(observed[[1]]$named_labels, use.names = TRUE)[ids]
+    if (!identical(as.character(result$bundle$labels), unname(truth))) stop("Reused biological labels differ from current truth")
+    destination <- file.path(output, basename(path))
+    if (result$action == "BYTE_IDENTICAL_COPY") {
+      temporary <- paste0(destination, ".tmp.", Sys.getpid())
+      if (!file.copy(path, temporary, overwrite = FALSE) || .ecoda_md5(temporary) != before ||
+          !file.rename(temporary, destination)) stop("Create-only res50 copy failed")
+      .ecoda_write_text_atomic(paste0(destination, ".md5"), c(paste0("MD5=", before),
+        paste0("SIZE=", file.info(destination)$size), paste0("PATH=", destination)))
+    } else .ecoda_save_rds(result$bundle, destination)
+    artifact <- .ecoda_artifact_record(destination, dataset, "ECODA_seuratres_50")
+    artifact$res50_reuse <- list(source_path = path, source_md5 = before, source_owner_state = "FAIL", action = result$action)
+    artifacts[[length(artifacts) + 1L]] <- artifact
+    if (!identical(before, .ecoda_validate_output_sidecar(path)$MD5)) stop("Original res50 changed during reuse")
+    rm(value, result); invisible(gc(FALSE))
+  }
+  run_manifest <- source_manifest; run_manifest$status <- "COMPLETED"; run_manifest$output_dir <- output
+  run_manifest$source_manifest_md5 <- .ecoda_md5(source_manifest_path); run_manifest$artifacts <- artifacts
+  ecoda_validate_derived_manifest(run_manifest, required_sources = TRUE)
+  .ecoda_write_json_atomic(run_manifest, file.path(output, "derived_run_manifest.json"))
+  .ecoda_write_json_atomic(.ecoda_status(run_id, "res50", "benchmark_union", "COMPLETED", output, derived_root = dirname(output)), file.path(output, "status.json"))
+  invisible(run_manifest)
+}
+
 .ecoda_local_sample_counts <- function(counts, target_cells, seed) {
   counts <- as.matrix(counts)
   if (nrow(counts) <= 0L || ncol(counts) <= 0L ||
@@ -1881,6 +1983,25 @@ ECODA_DERIVED_METHODS <- list(
   if (!identical(digest::digest(file = path, algo = "sha256"), sha)) stop("Input references changed during read")
   sources
 }
+.ecoda_saved_sample_obs <- function(obs, sample_col) {
+  raw <- as.character(obs[[sample_col]])
+  if (!length(raw) || any(.ecoda_is_missing_sentinel(raw))) stop("Invalid configured sample IDs")
+  original <- unique(raw)
+  if (identical(sample_col, "Sample")) return(list(obs = obs,
+    aliases = data.frame(raw = original, canonical = original, stringsAsFactors = FALSE)))
+  expected <- unname(standardize_sample_names(original))
+  if (any(.ecoda_is_missing_sentinel(expected)) || anyDuplicated(expected)) stop("Configured sample aliases collide")
+  if ("Sample" %in% names(obs)) {
+    aliases <- unique(data.frame(raw = raw, canonical = as.character(obs$Sample), stringsAsFactors = FALSE))
+    if (anyDuplicated(aliases$raw) || anyDuplicated(aliases$canonical) ||
+        !identical(unname(aliases$canonical), expected)) stop("Canonical Sample is not the production alias bijection")
+    obs[[sample_col]] <- as.character(obs$Sample)
+  } else {
+    if (!identical(original, expected)) stop("Changed sample aliases require the existing canonical Sample witness")
+    aliases <- data.frame(raw = original, canonical = original, stringsAsFactors = FALSE)
+  }
+  list(obs = obs, aliases = aliases)
+}
 .ecoda_bound_counts <- function(source, project_root) {
   if (!identical(.ecoda_bound_input_stat(source), source$stat)) stop("Bound source/proof stat changed")
   python <- Sys.getenv("RETICULATE_PYTHON")
@@ -1890,10 +2011,12 @@ ECODA_DERIVED_METHODS <- list(
   handle <- h5py$File(source$h5ad_path, "r"); on.exit(handle$close())
   group <- handle$get("obs")
   columns <- unique(c(source$sample_col, source$label_col, source$cluster_col))
+  if (!"Sample" %in% columns && isTRUE(reticulate::py_to_r(group$`__contains__`("Sample")))) columns <- c(columns, "Sample")
   values <- setNames(lapply(columns, function(column)
     as.character(reticulate::py_to_r(decoder$read_obs_column(group, column)))), columns)
   if (length(unique(lengths(values))) != 1L || lengths(values)[1] <= 0L) stop("Configured obs column lengths disagree")
   obs <- as.data.frame(values, stringsAsFactors = FALSE, check.names = FALSE)
+  canonical <- .ecoda_saved_sample_obs(obs, source$sample_col); obs <- canonical$obs
   samples <- as.character(obs[[source$sample_col]])
   if (!length(samples) || any(.ecoda_is_missing_sentinel(samples))) stop("Invalid configured sample IDs")
   ids <- unique(samples); biology <- as.character(obs[[source$label_col]])
@@ -1912,6 +2035,7 @@ ECODA_DERIVED_METHODS <- list(
       any(as.matrix(counts) != floor(as.matrix(counts))) || any(rowSums(counts) <= 0)) stop("Invalid saved-label counts")
   if (!identical(.ecoda_bound_input_stat(source), source$stat)) stop("Bound source changed during obs read")
   list(counts = counts, labels = factor(labels), sample_ids = ids, n_obs = nrow(obs),
+    sample_aliases = canonical$aliases,
     used_annotation_cells = sum(counts), dropped_annotation_cells = nrow(obs) - sum(counts),
     count_fingerprint = .ecoda_screen_digest(counts),
     legacy_csv_compatibility = "not claimed; old CSVs remain immutable compatibility candidates")
@@ -2971,7 +3095,7 @@ ECODA_DERIVED_METHODS <- list(
             bundle$scores$lisi_score < 0 || bundle$scores$lisi_score > 1)
           stop("Saved-cluster results require all five finite separation scores")
         bundle$scoring_policy <- "calc_sep_score_five_v1_lisi_separation"
-        bundle$source_identity <- c(source, input[c("n_obs", "used_annotation_cells", "dropped_annotation_cells", "count_fingerprint", "legacy_csv_compatibility")])
+        bundle$source_identity <- c(source, input[c("n_obs", "used_annotation_cells", "dropped_annotation_cells", "count_fingerprint", "legacy_csv_compatibility", "sample_aliases")])
         artifact_path <- .ecoda_output_path(file.path(output_dir, paste0(dataset, "_", method, ".rds")), output_dir)
         .ecoda_save_rds(bundle, artifact_path)
         artifacts[[length(artifacts) + 1L]] <- .ecoda_artifact_record(artifact_path, dataset, method)

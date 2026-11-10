@@ -70,6 +70,7 @@ source<-function(file,...) {
 }
 args<-.ecoda_parse_flags(a[-1])
 if(Sys.getenv('TEST_FAIL_HARMONY')=='1' && args$analysis=='harmony')stop('injected scientific worker failure')
+if(Sys.getenv('TEST_REUSE_NO_RES50_CLI')=='1' && args$analysis=='res50')stop('res50 recount forbidden in recovery')
 .ecoda_run(args)
 R
 chmod +x "${TMP}/bin/sbatch" "${TMP}/bin/Rscript"
@@ -94,10 +95,14 @@ parent=scratch/'_ecoda_runs/prior_preflight';witness=[];references=[];preflight=
 for i,ds in enumerate(cohorts,1):
  columns=config[ds]['columns'];path=scratch/ds/'output'/config[ds]['views']['benchmark_analysis']['output_file_name'];path.parent.mkdir(parents=True)
  n=53 if ds=='Stephenson' else 26 if ds=='Bassez' else 6;ids=[ds+str(k) for k in range(n)];labels=['A' if k%2==0 else 'B' for k in range(n)]
+ if ds=='Adams':ids=['g'+str(k)+'C-a' for k in range(n)] # configured Sample hyphens are legitimate.
+ raw_ids=['PB-'+str(k) for k in range(n)] if ds=='Gongsharma_cmv_young_males' else ids
+ if ds=='Gongsharma_cmv_young_males':ids=['PB_'+str(k) for k in range(n)]
  with h5py.File(path,'w') as handle:
   group=handle.create_group('obs')
-  for name,values in [(columns['sample'],ids),(columns['label'],labels),('leiden_res_50_benchmark_analysis_hvg2000',[str(k%3) for k in range(n)]),('leiden_res_2_benchmark_analysis_hvg2000_harmony',[str(k%2) for k in range(n)])]:
+  for name,values in [(columns['sample'],raw_ids),(columns['label'],labels),('leiden_res_50_benchmark_analysis_hvg2000',[str(k%3) for k in range(n)]),('leiden_res_2_benchmark_analysis_hvg2000_harmony',[str(k%2) for k in range(n)])]:
    group.create_dataset(name,data=np.asarray(values,dtype=h5py.string_dtype()))
+  if columns['sample']!='Sample':group.create_dataset('Sample',data=np.asarray(ids,dtype=h5py.string_dtype()))
  md5=hashlib.md5(path.read_bytes()).hexdigest();size=str(path.stat().st_size)
  proof=evidence(pathlib.Path(str(path)+'.md5'),dict(MD5=md5,SIZE=size,PATH=str(path)))
  record=evidence(parent/'manifests/artifacts'/(hashlib.sha256(str(path).encode()).hexdigest()[:32]+'.record'),dict(PATH=str(path),MD5=md5,SIZE=size,RUN_ID=parent.name,PRODUCER='stage5_preflight',STATE='PUBLISHED'))
@@ -167,8 +172,76 @@ grep -q '^STATE=FAIL$' "${SCRATCH}/_ecoda_runs/partial/status/terminal"
 path="${SCRATCH}/_ecoda_runs/partial/artifacts/saved_labels/res50/Adams_ECODA_seuratres_50.rds"
 owner="$(ecoda_artifact_owner_dir "${path}")";grep -q '^STATE=OK$' "${owner}/owner"
 [[ "$(wc -l < "${SCRATCH}/scheduler.calls" | tr -d ' ')" == 2 && ! -e "${TMP}/forbidden" ]]
+# Fixed partial-reuse boundary: native FAIL owners remain untouched, ten exact
+# copies and one Gong ID-only derivative, then only the missing Harmony work.
+OLD_ID=stage5_p6_saved22_20261110_v2
+OLD="${SCRATCH}/_ecoda_runs/${OLD_ID}"
+ecoda_init_run stage5 "${OLD_ID}" >/dev/null
+cp "${RUN}/manifests/input_references.tsv" "${OLD}/manifests/input_references.tsv"
+cp "${RUN}/manifests/input_witness.json" "${OLD}/manifests/input_witness.json"
+"${TEST_REAL_R}" --vanilla - "${TREE}" "${RUN}" "${OLD}" <<'R_OLD'
+a<-commandArgs(TRUE);source(file.path(a[1],'src/5_run_benchmark_methods/run_local_ecoda_derived.R'))
+root<-file.path(a[3],'artifacts/saved_labels/res50');dir.create(root,recursive=TRUE)
+w<-jsonlite::fromJSON(file.path(a[3],'manifests/input_witness.json'),simplifyVector=FALSE)
+for(row in w$rows) {
+ name<-paste0(row$dataset,'_ECODA_seuratres_50.rds');value<-readRDS(file.path(a[2],'artifacts/saved_labels/res50',name))
+ if(row$dataset=='Gongsharma_cmv_young_males') {
+  raw<-gsub('_','-',rownames(value$feat_mat),fixed=TRUE)
+  rownames(value$feat_mat)<-raw;rownames(value$counts)<-raw;names(value$labels)<-raw;attr(value$dist_mat,'Labels')<-raw
+  value$source_identity$count_fingerprint<-.ecoda_screen_digest(value$counts)
+ }
+ .ecoda_validate_bundle(value,rownames(value$feat_mat),'ECODA_seuratres_50')
+ .ecoda_save_rds(value,file.path(root,name))
+}
+R_OLD
+for path in "${OLD}/artifacts/saved_labels/res50/"*.rds; do
+  ecoda_write_artifact_record "${path}" saved_cluster_screen "${OLD_ID}" >/dev/null
+  ecoda_artifact_owner_acquire "${path}" stage5 "${OLD_ID}" 0 0 0 >/dev/null
+  ecoda_artifact_owner_set_state "${path}" FAIL fixture_failed_wrapper >/dev/null
+ done
+export TEST_OLD="${OLD}"
+"${TEST_PYTHON}" - <<'PY_REUSE'
+import json,os,pathlib,hashlib
+old=pathlib.Path(os.environ['TEST_OLD']);folder=pathlib.Path(os.environ['TEST_SCRATCH'])/'_ecoda_inputs/fixture'
+w=json.loads((old/'manifests/input_witness.json').read_text());facts={};owners={};results={}
+def fact(p):facts[str(p)]=dict(size=p.stat().st_size,md5=hashlib.md5(p.read_bytes()).hexdigest())
+for row in w['rows']:
+ ds=row['dataset'];p=old/'artifacts/saved_labels/res50'/(ds+'_ECODA_seuratres_50.rds');key=p.name+'_'+hashlib.sha256(str(p).encode()).hexdigest()[:32]
+ owner=old.parent.parent/'_ecoda_owners/artifact'/key/'owner';record=old/'manifests/artifacts'/(hashlib.sha256(str(p).encode()).hexdigest()[:32]+'.record')
+ for f in (p,pathlib.Path(str(p)+'.md5'),owner,record):fact(f)
+ owners[ds]=dict(line.split('=',1) for line in owner.read_text().splitlines())
+ results[ds]=dict(native_internal_validator=dict(pass_=True),feature_finite=True,distance_finite=True,counts_finite=True,canonical_current_set=True,canonical_current_order=True,canonical_labels_mismatches=0,canonical5_finite=True)
+ results[ds]['native_internal_validator']={'pass':True}
+for p in (old/'manifests/input_references.tsv',old/'manifests/input_witness.json'):fact(p)
+diag=dict(schema='ecoda_saved22_partial11_diagnostic_report_v1',original_run_id=old.name,source_commit='457fd153c45a1c6b79b0ae281ea784f33019619d',original_gate_state='FAILED',original_worker_state='FAILED',native_res50_manifest_state='COMPLETED',scientifically_approved_rows=0,H5AD_reads=0,models=0,scores_computed=0,old_writes=0,rows=results,source_file_facts=facts,actual_owners=owners)
+p=folder/'reuse_diagnostic.json';p.write_text(json.dumps(diag))
+control=dict(schema='ecoda_saved_res50_reuse_v1',status='APPROVED_SAVED_RES50_REUSE',review_complete=True,reviewer='synthetic fixed11 reviewer',datasets=[r['dataset'] for r in w['rows']],original_run_id=old.name,diagnostic=dict(path=str(p),sha256=hashlib.sha256(p.read_bytes()).hexdigest()))
+(folder/'reuse_control.json').write_text(json.dumps(control));bad=dict(control,status='PENDING');(folder/'reuse_pending.json').write_text(json.dumps(bad))
+(folder/'old_source_facts.json').write_text(json.dumps(facts))
+PY_REUSE
+invoke_reuse() {
+  local id="$1" reuse="$2"
+  ECODA_RUN_ID="${id}" ECODA_RUN_ROOT="${SCRATCH}/_ecoda_runs/${id}" TEST_REUSE_NO_RES50_CLI=1 bash "${TREE}/src/utils/bash/saved_cluster_screen.sh" \
+    --input-references "${INPUTS}/references.tsv" --input-references-sha256 "$(ecoda_sha256_file "${INPUTS}/references.tsv")" \
+    --input-review "${INPUTS}/review.json" --input-review-sha256 "$(ecoda_sha256_file "${INPUTS}/review.json")" --datasets "${DATASETS}" \
+    --res50-reuse-control "${reuse}" --res50-reuse-sha256 "$(ecoda_sha256_file "${reuse}")"
+}
+reject invoke_reuse reuse_pending "${INPUTS}/reuse_pending.json"
+invoke_reuse recovery "${INPUTS}/reuse_control.json" > "${TMP}/recovery.log" 2>&1 || { tail -50 "${TMP}/recovery.log" >&2;exit 1; }
+ECODA_RUN_ID=recovery ECODA_RUN_ROOT="${SCRATCH}/_ecoda_runs/recovery" bash "${TREE}/src/utils/bash/saved_cluster_screen.sh" --validate > "${TMP}/recovery-validated.log"
+"${TEST_PYTHON}" - <<'PY_UNCHANGED'
+import os,pathlib,json,hashlib
+folder=pathlib.Path(os.environ['TEST_SCRATCH'])/'_ecoda_inputs/fixture';facts=json.loads((folder/'old_source_facts.json').read_text())
+assert all(pathlib.Path(p).stat().st_size==v['size'] and hashlib.md5(pathlib.Path(p).read_bytes()).hexdigest()==v['md5'] for p,v in facts.items())
+new=pathlib.Path(os.environ['TEST_SCRATCH'])/'_ecoda_runs/recovery/artifacts/saved_labels/res50'
+r=json.loads((new/'derived_run_manifest.json').read_text());assert r['status']=='COMPLETED' and len(r['artifacts'])==11
+assert sum(a['res50_reuse']['action']=='BYTE_IDENTICAL_COPY' for a in r['artifacts'])==10
+assert sum(a['res50_reuse']['action']=='IDENTIFIER_ONLY_PROJECTION' for a in r['artifacts'])==1
+assert all(a['res50_reuse']['source_owner_state']=='FAIL' for a in r['artifacts'])
+PY_UNCHANGED
+[[ "$(wc -l < "${SCRATCH}/scheduler.calls" | tr -d ' ')" == 3 ]]
 # A changed source stat invalidates the prior full-content witness; no H5 hash or job.
 path="$(head -1 "${INPUTS}/references.tsv" | cut -f3)";touch "${path}"
 reject invoke changed_input "${INPUTS}/review.json"
-[[ "$(wc -l < "${SCRATCH}/scheduler.calls" | tr -d ' ')" == 2 ]]
+[[ "$(wc -l < "${SCRATCH}/scheduler.calls" | tr -d ' ')" == 3 ]]
 echo 'PASS saved22 exact11 refs/two native obs producers/one scalar/hiddenNAS/ownership/terminal/purpose/failure preservation'

@@ -13,6 +13,7 @@ PRODUCER=saved_cluster_screen
 MODE=controller
 if [[ "${1:-}" == --worker || "${1:-}" == --validate ]]; then MODE="${1#--}"; shift; fi
 REFERENCES=""; REFERENCES_SHA=""; REVIEW=""; REVIEW_SHA=""; DATASETS=""
+REUSE_RES50=""; REUSE_RES50_SHA=""
 while [[ $# -gt 0 ]]; do
   [[ $# -ge 2 ]] || exit 1
   case "$1" in
@@ -21,6 +22,8 @@ while [[ $# -gt 0 ]]; do
     --input-review) [[ -z "${REVIEW}" ]] || exit 1; REVIEW="$2" ;;
     --input-review-sha256) [[ -z "${REVIEW_SHA}" ]] || exit 1; REVIEW_SHA="$2" ;;
     --datasets) [[ -z "${DATASETS}" ]] || exit 1; DATASETS="$2" ;;
+    --res50-reuse-control) [[ -z "${REUSE_RES50}" ]] || exit 1; REUSE_RES50="$2" ;;
+    --res50-reuse-sha256) [[ -z "${REUSE_RES50_SHA}" ]] || exit 1; REUSE_RES50_SHA="$2" ;;
     *) echo 'ERROR: unknown saved-cluster argument' >&2; exit 1 ;;
   esac
   shift 2
@@ -32,19 +35,22 @@ SCRATCH="$(ecoda_realpath_existing "${HPC_SCRATCH_DIR}")"
 RUN="${SCRATCH}/_ecoda_runs/${ECODA_RUN_ID}"
 [[ -z "${ECODA_RUN_ROOT:-}" || "${ECODA_RUN_ROOT}" == "${RUN}" ]] || exit 1
 if [[ "${MODE}" == controller ]]; then
+  [[ -z "${REUSE_RES50}${REUSE_RES50_SHA}" ||
+     ( "${REUSE_RES50}" == "${SCRATCH}/_ecoda_inputs/"* && "${REUSE_RES50_SHA}" =~ ^[a-f0-9]{64}$ ) ]] || exit 1
   [[ ! -e "${RUN}" && ! -L "${RUN}" && "${REFERENCES}" == "${SCRATCH}/_ecoda_inputs/"* &&
      "${REVIEW}" == "${SCRATCH}/_ecoda_inputs/"* && "${REFERENCES_SHA}" =~ ^[a-f0-9]{64}$ &&
      "${REVIEW_SHA}" =~ ^[a-f0-9]{64}$ && -n "${DATASETS}" ]] || exit 1
   ecoda_init_run stage5 "${ECODA_RUN_ID}" >/dev/null
   ecoda_atomic_write "${RUN}/metadata" "STAGE=stage5\nRUN_ID=${ECODA_RUN_ID}\nSTATE=ACTIVE\nPURPOSE=${PURPOSE}\n"
 else
-  [[ -z "${REFERENCES}${REFERENCES_SHA}${REVIEW}${REVIEW_SHA}${DATASETS}" ]] || exit 1
+  [[ -z "${REFERENCES}${REFERENCES_SHA}${REVIEW}${REVIEW_SHA}${DATASETS}${REUSE_RES50}${REUSE_RES50_SHA}" ]] || exit 1
   ecoda_open_run "${ECODA_RUN_ID}" stage5
 fi
 export ECODA_RUN_ROOT="${RUN}" ECODA_RUNTIME_PROFILE=stage5 RETICULATE_PYTHON="${PYTHON_BIN}"
 M="${RUN}/manifests"; OUTPUT="${RUN}/artifacts/saved_labels"
 STATUS="${RUN}/status/saved_cluster.status"
 SCOPE_FILES=(source.manifest runtime.identity operation selection.tsv inputs.tsv input_references.tsv input_review.json input_witness.json label_review.json native_worker.sh native_common.sh preflight.tsv scope.json)
+if [[ -f "${M}/res50_reuse.json" ]]; then SCOPE_FILES+=(res50_reuse.json res50_diagnostic.json); fi
 failed() {
   local path owner
   ecoda_atomic_write "${STATUS}" "STATE=FAIL\nRUN_ID=${ECODA_RUN_ID}\n" || true
@@ -53,7 +59,7 @@ failed() {
     while IFS= read -r path; do
       owner="$(ecoda_artifact_owner_dir "${path}")" || continue
       if _ecoda_artifact_owner_validate_dir "${owner}" "${path}" &&
-         [[ "${ECODA_ARTIFACT_OWNER_RUN}" == "${ECODA_RUN_ID}" && "${ECODA_ARTIFACT_OWNER_STATE}" == ACTIVE ]]; then
+         [[ "${ECODA_ARTIFACT_OWNER_RUN}" == "${ECODA_RUN_ID}" && "${ECODA_ARTIFACT_OWNER_STAGE}" == stage5 && "${ECODA_ARTIFACT_OWNER_STATE}" == ACTIVE ]]; then
         ecoda_artifact_owner_set_state "${path}" FAIL saved_cluster_failed >/dev/null || true
       fi
     done < "${M}/outputs.tsv"
@@ -62,9 +68,9 @@ failed() {
 if [[ "${MODE}" != validate ]]; then trap failed EXIT; fi
 
 metadata() {
-  "${PYTHON_BIN}" - "$1" "${RUN}" "${PROJECT_ROOT}" "${REFERENCES}" "${REFERENCES_SHA}" "${REVIEW}" "${REVIEW_SHA}" "${DATASETS}" <<'PY'
+  "${PYTHON_BIN}" - "$1" "${RUN}" "${PROJECT_ROOT}" "${REFERENCES}" "${REFERENCES_SHA}" "${REVIEW}" "${REVIEW_SHA}" "${DATASETS}" "${REUSE_RES50}" "${REUSE_RES50_SHA}" <<'PY'
 import hashlib,json,os,pathlib,re,sys,tempfile
-mode,root,project,refs,refs_sha,review_path,review_sha,datasets=sys.argv[1:]
+mode,root,project,refs,refs_sha,review_path,review_sha,datasets,reuse_path,reuse_sha=sys.argv[1:]
 root=pathlib.Path(root);m=root/'manifests';project=pathlib.Path(project)
 observed_stats={}
 def need(ok,text):
@@ -169,6 +175,47 @@ for ds,view,path,md5,size,proof in rows:
     need(portable_stat(stat(record['path']),record['stat'],record['path']),'native record stat changed')
     need(stat(path)['st_mtime_ns']<=record['stat']['st_mtime_ns'] and stat(path)['st_ctime_ns']<=record['stat']['st_mtime_ns'],'source postdates fullhash record')
     paths.extend([path,proof,record['path'],status['path']])
+# Fixed recovery of the reviewed eleven res50 outputs; generic input ownership
+# remains strict. Old FAIL owners are evidence, never finalized by this run.
+if mode=='bind' and reuse_path:
+    need(re.fullmatch('[a-f0-9]{64}',reuse_sha),'invalid res50 reuse SHA')
+    raw=small(reuse_path);need(digest(raw)==reuse_sha,'res50 reuse control changed');put('res50_reuse.json',raw)
+    put('res50_diagnostic.json',read_ref(json.loads(raw)['diagnostic']))
+reuse=(m/'res50_reuse.json').exists();reuse_paths=[]
+need(reuse==(m/'res50_diagnostic.json').exists(),'incomplete res50 reuse metadata')
+if reuse:
+    control=json.loads(small(m/'res50_reuse.json'));diagnostic=json.loads(small(m/'res50_diagnostic.json'))
+    need(control['schema']=='ecoda_saved_res50_reuse_v1' and control['status']=='APPROVED_SAVED_RES50_REUSE'
+         and control['review_complete'] is True and isinstance(control['reviewer'],str) and control['reviewer'].strip()
+         and control['datasets']==selected and control['original_run_id']=='stage5_p6_saved22_20261110_v2'
+         and digest(small(m/'res50_diagnostic.json'))==control['diagnostic']['sha256'],'unapproved fixed res50 reuse')
+    original=root.parent/control['original_run_id'];owners=root.parent.parent/'_ecoda_owners/artifact'
+    need(diagnostic['schema']=='ecoda_saved22_partial11_diagnostic_report_v1' and diagnostic['original_run_id']==original.name
+         and diagnostic['source_commit']=='457fd153c45a1c6b79b0ae281ea784f33019619d'
+         and diagnostic['original_gate_state']==diagnostic['original_worker_state']=='FAILED'
+         and diagnostic['native_res50_manifest_state']=='COMPLETED' and diagnostic['scientifically_approved_rows']==0
+         and diagnostic['H5AD_reads']==diagnostic['models']==diagnostic['scores_computed']==diagnostic['old_writes']==0
+         and set(diagnostic['rows'])==set(selected),'wrong prior res50 diagnostic')
+    for name,fact in diagnostic['source_file_facts'].items():
+        p=regular(name);need((original in p.parents or owners in p.parents) and p.suffix not in ('.h5','.h5ad','.sif'),'reuse evidence escapes fixed old namespace')
+        before=stat(p);md5=hashlib.md5()
+        with p.open('rb') as stream:
+            for chunk in iter(lambda:stream.read(1024*1024),b''):md5.update(chunk)
+        need(stat(p)==before and before['st_size']==fact['size'] and md5.hexdigest()==fact['md5'],'prior res50 evidence/owner changed: '+name)
+        reuse_paths.append(str(p))
+    for ds in selected:
+        result=diagnostic['rows'][ds]
+        need(result['native_internal_validator']['pass'] is True and result['feature_finite'] and result['distance_finite'] and result['counts_finite']
+             and result['canonical_current_set'] and result['canonical_current_order'] and result['canonical_labels_mismatches']==0
+             and result['canonical5_finite'],'unqualified res50 cohort')
+        path=str(original/'artifacts/saved_labels/res50'/(ds+'_ECODA_seuratres_50.rds'));fact=diagnostic['source_file_facts'][path]
+        record=fields(small(original/'manifests/artifacts'/(digest(path.encode())[:32]+'.record')))
+        need(record==dict(PATH=path,MD5=fact['md5'],SIZE=str(int(fact['size'])),RUN_ID=original.name,PRODUCER='saved_cluster_screen',STATE='PUBLISHED'),'prior res50 producer differs')
+        key=re.sub(r'[/,:\t |]','_',pathlib.Path(path).name)+'_'+digest(path.encode())[:32]
+        own=fields(small(owners/key/'owner'))
+        need(own==diagnostic['actual_owners'][ds] and own['RUN_ID']==original.name and own['STAGE']=='stage5' and own['PATH']==path and own['STATE']=='FAIL','prior res50 FAIL ownership differs')
+    need(small(m/'input_references.tsv')==small(original/'manifests/input_references.tsv')
+         and small(m/'input_witness.json')==small(original/'manifests/input_witness.json'),'reuse current inputs/labels differ')
 selection=''.join(ds+'\tbenchmark_analysis\t'+method+'\n' for analysis,method in [('res50','ECODA_seuratres_50'),('harmony','ECODA_seuratres_2_harmony')] for ds in selected).encode()
 outputs=''.join(str(root/'artifacts/saved_labels'/analysis/name)+'\n' for analysis,method in [('res50','ECODA_seuratres_50'),('harmony','ECODA_seuratres_2_harmony')]
                 for name in [*(ds+'_'+method+'.rds' for ds in selected),'derived_source_manifest.json','derived_run_manifest.json','status.json','.ecoda_run_owner']).encode()
@@ -177,7 +224,7 @@ if mode=='bind':
     put('operation',b'saved-clusters\n');put('selection.tsv',selection);put('outputs.tsv',outputs);put('inputs.tsv',inputs)
     identity=dict(schema=1,purpose='saved_cluster_counts_screen',run_id=root.name,datasets=selected,
         config_sha256=digest(small(project/'datasets.json')),metadata_sha256={p.name:digest(small(p)) for p in m.iterdir() if p.is_file()},
-        input_stats={p:stat(p) for p in paths})
+        input_stats={p:stat(p) for p in paths},res50_reuse=reuse,reuse_input_stats={p:stat(p) for p in reuse_paths})
     put('scope.json',(json.dumps(identity,sort_keys=True)+'\n').encode())
 else:
     identity=json.loads(small(m/'scope.json'))
@@ -187,6 +234,8 @@ else:
     for name,sha in identity['metadata_sha256'].items():need(digest(small(m/name))==sha,'run-owned metadata changed')
     need(set(identity['input_stats'])==set(paths),'selected stat inventory differs')
     for p in paths:portable_stat(stat(p),identity['input_stats'][p],p)
+    need(identity.get('res50_reuse',False)==reuse and set(identity.get('reuse_input_stats',{}))==set(reuse_paths),'reuse scope changed')
+    for p in reuse_paths:portable_stat(stat(p),identity['reuse_input_stats'][p],p)
 for path in list(observed_stats):stat(path)
 PY
 }
@@ -194,6 +243,7 @@ if [[ "${MODE}" == controller ]]; then
   ecoda_atomic_copy "${ECODA_SOURCE_MANIFEST}" "${M}/source.manifest"
   ecoda_runtime_validate_submission apptainer
   metadata bind
+  if [[ -f "${M}/res50_reuse.json" ]]; then SCOPE_FILES+=(res50_reuse.json res50_diagnostic.json); fi
   for NAME in "${SCOPE_FILES[@]}" outputs.tsv; do
     ecoda_write_checksum "${M}/${NAME}"
     ecoda_write_artifact_record "${M}/${NAME}" saved_cluster_scope "${ECODA_RUN_ID}" >/dev/null
@@ -213,6 +263,7 @@ validate_scope() {
 validate_analysis() {
   ${PIXI_RSCRIPT} --vanilla - "${PROJECT_ROOT}" "${RUN}" "$1" <<'R'
 args<-commandArgs(TRUE);source(file.path(args[1],'src/5_run_benchmark_methods/run_local_ecoda_derived.R'))
+source(file.path(args[1],'src/utils/seurat_utils.R'))
 analysis<-args[3];stopifnot(analysis%in%c('res50','harmony'))
 scope<-jsonlite::fromJSON(file.path(args[2],'manifests/scope.json'),simplifyVector=FALSE)
 input_witness<-jsonlite::fromJSON(file.path(args[2],'manifests/input_witness.json'),simplifyVector=FALSE)
@@ -244,6 +295,20 @@ for(i in seq_along(ids)) {
   expected_ids<-unlist(observed[[1]]$sample_ids,use.names=FALSE)
   truth<-unlist(observed[[1]]$named_labels,use.names=TRUE)[expected_ids]
   value<-readRDS(path);.ecoda_validate_bundle(value,expected_ids,method)
+  if(analysis=='res50'&&file.exists(file.path(args[2],'manifests/res50_reuse.json'))) {
+    control<-jsonlite::fromJSON(file.path(args[2],'manifests/res50_reuse.json'),simplifyVector=FALSE)
+    diagnostic<-jsonlite::fromJSON(file.path(args[2],'manifests/res50_diagnostic.json'),simplifyVector=FALSE)
+    old<-file.path(dirname(args[2]),control$original_run_id,'artifacts/saved_labels/res50',basename(path))
+    prior<-diagnostic$source_file_facts[[old]];stopifnot(.ecoda_validate_output_sidecar(old)$MD5==prior$md5)
+    lineage<-artifact$res50_reuse
+    stopifnot(lineage$source_path==old,lineage$source_md5==prior$md5,lineage$source_owner_state=='FAIL',
+      identical(run$res50_reuse,native$res50_reuse),run$res50_reuse$counts_recomputed==FALSE,
+      run$res50_reuse$scores_computed==FALSE,run$res50_reuse$model_fits==FALSE)
+    if(ids[i]=='Gongsharma_cmv_young_males') {
+      projected<-.ecoda_rekey_saved_res50(readRDS(old),ids[i],expected_ids)
+      stopifnot(lineage$action==projected$action,identical(value,projected$bundle))
+    } else stopifnot(lineage$action=='BYTE_IDENTICAL_COPY',proof$MD5==prior$md5)
+  }
   stopifnot(all(.ecoda_screen_metrics()%in%names(value$scores)),all(is.finite(unlist(value$scores[.ecoda_screen_metrics()]))),
     value$scores$lisi_score>=0,value$scores$lisi_score<=1,identical(value$scoring_policy,'calc_sep_score_five_v1_lisi_separation'),
     identical(as.character(value$labels),unname(truth)),
@@ -282,9 +347,18 @@ if [[ "${MODE}" == worker ]]; then
   export ECODA_DERIVED_ROOT="${OUTPUT}" OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMBA_NUM_THREADS=1
   BOUND_CSV="$(${PYTHON_BIN} -c 'import json,sys;print(",".join(json.load(open(sys.argv[1]))["datasets"]))' "${M}/scope.json")"
   for ANALYSIS in res50 harmony; do
+    if [[ "${ANALYSIS}" == res50 && -f "${M}/res50_reuse.json" ]]; then
+      ${PIXI_RSCRIPT} --vanilla - "${PROJECT_ROOT}" "${RUN}" <<'R_REUSE'
+args<-commandArgs(TRUE)
+source(file.path(args[1],'src/5_run_benchmark_methods/run_local_ecoda_derived.R'))
+source(file.path(args[1],'src/utils/seurat_utils.R'))
+.ecoda_reuse_saved_res50(args[1],args[2])
+R_REUSE
+    else
     ${PIXI_RSCRIPT} --vanilla "${RUNNER}" --analysis "${ANALYSIS}" --scope benchmark_union --config_path "${DATASETS_JSON_FILE}" \
       --input_references "${M}/input_references.tsv" --input_references_sha256 "$(ecoda_sha256_file "${M}/input_references.tsv")" \
       --datasets "${BOUND_CSV}" --output_dir "${OUTPUT}/${ANALYSIS}" --run_id "${ECODA_RUN_ID}_${ANALYSIS}"
+    fi
     validate_scope || exit 1
     while IFS= read -r PATH_IN; do
       case "${PATH_IN}" in "${OUTPUT}/${ANALYSIS}/"*)
