@@ -119,6 +119,18 @@ The remaining text records the availability audit, scientific contracts and earl
   and completed DATA archives are now archived separately; no new diagnostic
   artifact belongs in those closed namespaces.
 
+### Checkpoint and local captions —20:58UTC
+
+- User-requested queue check found no older model jobs. Completed processing
+  documentation and coordinated publication-analysis source are pushed in
+  logical commits9a00a3d and74bc49e. Unrelated working files remain preserved.
+- The active geometry wave still executes immutable4d2bfbf; later commits do
+  not change running workers. Its original sole waiter23462 remains active.
+- A local renderer-only caption change now identifies displayed/total cells
+  and explicitly marks batch-balanced displays as not original cell abundances.
+  Scores remain full-population50D means. One focused artist-only test passes;
+  no numerical fitting or HPC work was repeated.
+
 The availability audit and earlier expanded options below support the approved pilot. They do not enlarge the current12-figure scope.
 
 ## Responsibility and current boundary

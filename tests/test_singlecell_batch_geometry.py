@@ -302,5 +302,22 @@ printf '900001;fixture\\n';exit "${rc}"
         self.assertTrue(all(x["score_computations"] == 0 for x in report["figures"]))
         self.assertTrue(any(labels == {"s" + str(i) for i in range(45)} for labels in sample_legends))
 
+    def test_display_caption_artist_only(self):
+        import ast
+        import inspect
+        from matplotlib.figure import Figure
+        # Execute only the actual caption statements, with no panels, PDFs or geometry.
+        tree = ast.parse(inspect.getsource(p.render_main))
+        statements = [node for node in ast.walk(tree) if
+            isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "display_policy" for t in node.targets)
+            or isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute) and node.value.func.attr == "suptitle"]
+        self.assertEqual(len(statements), 2)
+        code = compile(ast.fix_missing_locations(ast.Module(body=sorted(statements, key=lambda n: n.lineno), type_ignores=[])), "caption", "exec")
+        for dataset, displayed, total, policy in [("Breast_cancer", 114579, 114579, "all cells"), ("Alzheimer", 100000, 1305022, "batch-balanced; not original cell abundances")]:
+            fig = Figure(); exec(code, dict(fig=fig, dataset=dataset, ids=range(displayed), summaries=[dict(cells=total)]))
+            text = fig._suptitle.get_text()
+            self.assertIn(f"Display: {displayed:,}/{total:,} cells per row ({policy})", text)
+            self.assertIn("scores: full-population 50D cellwise means", text)
+
 
 if __name__ == "__main__": unittest.main()

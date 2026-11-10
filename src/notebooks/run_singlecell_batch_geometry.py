@@ -543,7 +543,9 @@ def render_main(c, output):
                         handles.append(Line2D([], [], linestyle="", marker="o", color="#bdbdbd", markersize=3, label="Missing"))
                     ax.legend(handles=handles, fontsize=4 if column == "Sample" else 5, ncol=4 if column == "Sample" else 3,
                               loc="upper center", bbox_to_anchor=(.5, -.15), frameon=False)
-            fig.suptitle(dataset + ": actual UNC raw versus COR Harmony; scores use full-population50D cellwise means", fontsize=11)
+            display_policy = "all cells" if len(ids) == summaries[0]["cells"] else "batch-balanced; not original cell abundances"
+            fig.suptitle(dataset + ": actual UNC raw versus COR Harmony\n"
+                         + f"Display: {len(ids):,}/{summaries[0]['cells']:,} cells per row ({display_policy}); scores: full-population 50D cellwise means", fontsize=11)
             if kind == "UMAP": fig.text(.5, .015, "Leiden IDs are row-local; equal numbers do not establish matching clusters.", ha="center", fontsize=7)
             fig.subplots_adjust(hspace=1.0, bottom=.23, top=.90, wspace=.35)
             path = output / (dataset + "_" + kind + ".pdf")
