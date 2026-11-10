@@ -622,6 +622,255 @@ def verify_login_reboot(control, science, review, gate, inspected, evidence, sch
     return coverage
 
 
+# A fixed audited subset of this incident, never a general alternative validator.
+AUDIT54_SCHEMA = 'ecoda_oldmain54_audited_subset_validation_v1'
+AUDIT54_COUNTS = {'benchmark': (34, 36, 25, 34),
+                  'batch_effect/uncorrected_final': (12, 12, 4, 12),
+                  'batch_effect/corrected_final': (8, 8, 8, 8)}
+AUDIT54_PINS = {'context_identities9': '3e447a04fa088f54e1f461e121ef8c56e96a81549041312bf0c2616c8ef7f72e',
+ 'current_labels11': '87595f0793d57b25e0481f5f644337c682c4246cda4b78a9dedb26a6b876c3f8',
+ 'feather26': '481874931ba67639dee2e38f59018fc5a4e7c154066c09e1162ef056ba2817a0',
+ 'gloscope8': '29649a1ccd69d554975c3db0f2e031bb8c8348fc85a2e3faf61b20e50b4024d5',
+ 'gloscope8_control': 'c9921553e1bf4f069c5d69d87d7018116fa4e29e351dbe44d6ad03d8f0e6507f',
+ 'inventory153': '24d22117c1df6f458eaa7222d1d5414debc324b078e160149412ac2608479223',
+ 'old26_control': '7d844a24deed1074be2bd264c18cd116ffe15fcbcdfa96111b5eed5aae42e153',
+ 'rds24': '9f7bf631efa0f612789d7d97893007e7a14fd18348b873922b71befae6b4e4f5',
+ 'rds24_control': '3390b406218746548313f868d0a789228c20b8b795dcbd1f1bf17aeb2e64e4db',
+ 'source603': '84c953be4622b4f004506bf0d6bc6eafd66a3d953c5eab9aa09491a167971554',
+ 'timing26': '0fb28d5fcd6ad2af70f8b15f941d02ea6b049c4de799194dfcd7ff4b5a388d1a'}
+AUDIT54_PATHS = {'batch_effect/corrected_final': {'core': 'b257bad7e46483dfa2348be7241d3d3b81e2a13131761dbcf6976da9f54b42cd',
+                                  'rows': 'ffa4842311c9cc5c68081250cecbdc119f08afcf568a599908603938c6825f29',
+                                  'runtime': 'c31aced02b4bc166c882230c7b1c6d9721f62d9c9ceb544024db43cb7f92c38c',
+                                  'timings': 'a96390d38a53924a5fb52e0350d0357a6061e1f006d2fb62100494206df31297'},
+ 'batch_effect/uncorrected_final': {'core': 'cf09cfca84bac61e8f4383a3659cb16d27beeb361978071fc9e19facf297f5ed',
+                                    'rows': 'a9541d4c124a26d3371681762e9476ff23b6a208ece01dd99c1b089ab4fa6202',
+                                    'runtime': '1c456aebfe7906390cbde4bc7210c6a88862c94819a312504c9a2720be14a45b',
+                                    'timings': '932b15a4ba91b544508b4a76d13dd109c4da45531b5e4cfe4efa2060982b94c1'},
+ 'benchmark': {'core': 'ae565b8077c394104660fe3e0f752b7b4baf801e0ce82e292c62642839e40799',
+               'rows': 'acabb0769c970ffa1c775cc47d888eaee1dba425885179d087b5db49d524c788',
+               'runtime': 'ddf24aca5ebd03b735f2afdfc62164dc76fa5c0794b5d735706821227dcc2adb',
+               'timings': 'e9cdf1d7eb4f5226fd13b60a67010f04fef6d4ab0e32add5c67caba32830cfd2'}}
+
+
+def audit54_hash(values):
+    return hashlib.sha256(json.dumps(sorted(values), sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def audit54_paths(validation, catalog, context, original):
+    require(validation['schema'] == AUDIT54_SCHEMA and catalog['context'] == context, 'Unknown fixed54 validation')
+    keys = [[context, *(row[k] for k in ('dataset', 'view', 'method', 'parameter'))] for row in catalog['rows']]
+    require(audit54_hash(keys) == AUDIT54_PATHS[context]['rows'], 'Fixed54 scientific tuples differ')
+    root = original / 'artifacts' / context
+    core = {str(safe(path)) for path in validation['selected_core_paths']}
+    runtime = {str(safe(path)) for path in validation['runtime_companions']}
+    timings = {str(safe(path)) for path in validation['timing_paths']}
+    for values, kind in ((core, 'core'), (runtime, 'runtime')):
+        require(all(root in Path(path).parents for path in values)
+                and audit54_hash([str(Path(path).relative_to(root)) for path in values]) == AUDIT54_PATHS[context][kind],
+                'Fixed54 ' + kind + ' path union differs')
+    require(all(Path(path).parent == original / 'logs' for path in timings)
+            and audit54_hash([Path(path).name for path in timings]) == AUDIT54_PATHS[context]['timings'], 'Fixed54 timing path union differs')
+    require((len(keys), len(core), len(runtime), len(timings)) == AUDIT54_COUNTS[context]
+            and all(path.endswith('.runtime.json') and path[:-13] in core for path in runtime), 'Fixed54 companion/core association differs')
+    return core, runtime, timings
+
+
+def audit54_observed_file(row):
+    """Recheck immutable source facts, including absent owners; no deserialization."""
+    path = safe(row['path']); keys = set(STAT_KEYS) | {'st_mode'}
+    require(row['bytes_valid'] is True and row['proofs_valid'] is True
+            and set(row['stat_after']) == keys
+            and all(getattr(path.stat(), key) == value for key, value in row['stat_after'].items())
+            and digest(path) == row['sha256'], 'Fixed54 source bytes/stat differ')
+    for key in ('sidecar', 'producer_record'):
+        item = row[key]; current = proof(item)
+        require(all(getattr(current.stat(), key) == value for key, value in item['stat'].items()), 'Fixed54 native proof stat differs')
+    item = row['owner']; path = safe(item['path'], item['exists'])
+    if item['exists']:
+        proof(item)
+        require(all(getattr(path.stat(), key) == value for key, value in item['stat'].items()), 'Fixed54 owner stat differs')
+    else:
+        require(not path.exists(), 'Fixed54 originally absent owner appeared')
+
+
+def audit54_bundle_ids(observed, source_ids, truth):
+    """Interpret the actual saved audit; unknown scores are never approved here."""
+    if observed['kind'] == 'metadata':
+        require(observed['named_labels_valid'] is True and observed['cells_per_sample_valid'] is True
+                and observed['n_samples'] == len(source_ids), 'Fixed54 metadata qualification differs')
+        return source_ids, []
+    if observed['kind'] == 'trans_v2':
+        # The pinned RDS audit checked each stored label by its actual Sample
+        # name. JSON omits those vector names; do not invent source-first-cell
+        # positional order for a summary's internally aligned named package.
+        require(observed['policy']['version'] == 2 and observed['draws'] == 120
+                and observed['n_samples'] == len(source_ids)
+                and observed['disposition'] == 'EXPLICIT_TRANS_V2_POLICY_VALIDATED_PENDING_ROOT_REVIEW'
+                and sorted(observed['stored_labels']) == sorted(truth.values()), 'Fixed54 transformation named input/policy differs')
+        return source_ids, []
+    require(observed['kind'] == 'result_bundles' and observed['bundles'], 'Fixed54 RDS has no qualified bundles')
+    universe = None
+    for method, bundle in observed['bundles'].items():
+        ids, dropped = bundle['sample_ids'], bundle['dropped_sample_ids']
+        require(ids == [x for x in source_ids if x not in set(dropped)]
+                and len(ids) + len(dropped) == len(source_ids)
+                and (not dropped or method.startswith('scITD_')), 'Fixed54 retained sample order/drop differs')
+        expected = [truth[x] for x in ids]; labels = bundle['stored_labels']
+        require(sorted(labels) == sorted(expected) if '_NULL' in method else labels == expected,
+                'Fixed54 stored labels differ from their primary/NULL role')
+        require(bundle['timing']['method'] == method and isinstance(bundle['timing']['time_secs'], (int, float))
+                and math.isfinite(bundle['timing']['time_secs']) and bundle['timing']['time_secs'] >= 0,
+                'Fixed54 selected bundle cost differs')
+        require(universe is None or universe == (ids, dropped), 'Fixed54 aggregate has differing sample universes')
+        universe = (ids, dropped)
+    return universe
+
+
+def audit54_validation(validation, catalog, inventory, context, original, source, identities):
+    core, runtimes, timings = audit54_paths(validation, catalog, context, original)
+    reports = validation['audit_reports']
+    require(set(reports) == set(AUDIT54_PINS) and all(reports[k]['sha256'] == value for k, value in AUDIT54_PINS.items()),
+            'Fixed54 guarded audit evidence differs')
+    data = {key: read_json(proof(ref)) for key, ref in reports.items()}
+    auth_path = proof(validation['read_authorization']); auth = read_json(auth_path)
+    require(digest(auth_path) == '7e9bb7820addbe9b04bee2c445dee4e32dd69f14ef0b638c41fde2df63bb948d'
+            and auth['status'] == 'APPROVED_READONLY_ARTIFACT_SCIENCE_AUDIT'
+            and auth['scientific_reuse_approved'] is False and auth['no_original_writes'] is True,
+            'Fixed54 original read permission differs')
+    # Common50 covered 24 benchmark RDS +26 Feathers. The eight UNC Glo RDS
+    # were separately guarded; they are not retrospectively added to Common50.
+    read_rds = {path for row in data['rds24']['rows'] for path in row['postcheck'] if path.startswith('/')}
+    feather = {row['path']: row for row in data['feather26']['artifacts']}
+    require(len(read_rds) == 24 and len(feather) == 26 and set(auth['allowed_core_paths']) == read_rds | set(feather),
+            'Fixed54 truthful Common50/read-superset differs')
+    require({Path(path).name for path in read_rds if path.endswith('_zeroimp.rds')}
+            == {'Stephenson_zeroimp.rds', 'Bassez_zeroimp.rds'}, 'Fixed54 excluded zeroimp diagnostics differ')
+    validation_source = proof(data['rds24_control']['pins']['validation_source'])
+    require(digest(validation_source) == '430ba56f55797ab3ab6993780004d5ea7fca8c92edc2f576bf07bd82ab03faed'
+            and fields(validation_source)['SOURCE_COMMIT'] == '8ad3bcace28100c80d613528843169e87a03780d', 'Fixed54 validator source differs')
+    for report in (data['rds24'], data['feather26'], data['timing26'], data['gloscope8']):
+        require(report['scientific_reuse_approved'] is False, 'An audit was relabeled as scientific approval')
+    require(data['feather26']['status'] == 'NATIVE26_DIAGNOSTIC_COMPLETE_PENDING_ROOT_REVIEW'
+            and data['timing26']['status'] == 'SELECTED26_COSTS_VALIDATED_PENDING_ROOT_REVIEW'
+            and len(data['gloscope8']['rows']) == 8
+            and all(row['status'] == 'POSTCHECK_DIAGNOSTIC_VALIDATED_PENDING_ROOT_REVIEW' for row in data['gloscope8']['rows']),
+            'Fixed54 actual audit did not complete')
+    reference603 = data['source603']
+    require(reference603['sha256'] == 'c69359fe006a05f147b5d645f85de46b34ba90a8ba743d2a913ca78dd220c5bd'
+            and hashlib.sha256(reference603['text'].encode()).hexdigest() == reference603['sha256'],
+            'Fixed54 audited source603 reference differs')
+    reference_source = proof(dict(path=reference603['source_manifest'], sha256=reference603['sha256']))
+    reference_fields = fields(reference_source)
+    require(reference_fields['SOURCE_COMMIT'] == '6032f5e3b62a39b3b08fb503b2c1982bda26950a'
+            and reference_fields['DATASETS_SHA256'] == source['DATASETS_SHA256']
+            and reference_fields['AUX_ROOT'] == reference_fields['SOURCE_ROOT'] + '/aux', 'Fixed54 reference source/config/aux differs')
+    for item in data['context_identities9']['rows']:
+        current = proof(item)
+        require(all(getattr(current.stat(), key) == value for key, value in item['stat'].items()), 'Fixed54 source/input identity stat differs')
+    # The reviewed fullhash witnesses are reused; H5ADs are stat-only here.
+    for item in data['current_labels11']['rows']:
+        current = safe(item['path']).stat()
+        require(all(getattr(current, key) == value for key, value in item['stat_after'].items()), 'Fixed54 benchmark input stat changed')
+        for key in ('proof', 'preflight_record', 'preflight_status'):
+            proof(item[key])
+    for item in data['old26_control']['current_inputs']:
+        current = safe(item['path']).stat()
+        require(all(getattr(current, key) == value for key, value in item['stat'].items()), 'Fixed54 selected batch input stat changed')
+        for key in ('proof', 'record', 'status', 'preflight'):
+            proof(item[key])
+    prior = {row['path']: row for row in data['inventory153']['rows']}
+    require(len(prior) == 153 and {row['source'] for row in inventory} == core | runtimes | timings, 'Fixed54 full147 payload scope differs')
+    for path in core | runtimes | timings:
+        audit54_observed_file(prior[path])
+    for path in runtimes:
+        value = read_json(path); old = prior[path]
+        require(value == old['runtime_metadata'] and value['artifact_path'] in core
+                and value['artifact_md5'] == prior[value['artifact_path']]['md5'], 'Fixed54 runtime fit identity differs')
+    labels = {row['dataset']: row for row in data['current_labels11']['rows']}
+    batch = {(row['dataset'], row['view']): row for row in data['feather26']['batch_metadata']}
+    rds = {path: observed for row in data['rds24']['rows'] for path, observed in row['postcheck'].items() if path.startswith('/')}
+    glo = {row['dataset']: row for row in data['gloscope8']['rows']}
+    costs = {row['path']: row for row in data['timing26']['results']}; checked = []
+    validator_rds_inputs = set(); rds_signatures = set()
+    # Preserve and verify the actual eight-ad per-artifact command arguments,
+    # including the two unapproved zeroimp reads, never fabricate a 9ca CLI.
+    for cohort in data['rds24']['rows']:
+        require(cohort['status'] == 'DIAGNOSTIC_VALIDATED_WITH_RECORDED_DISPOSITIONS_NOT_REUSE_APPROVAL', 'Fixed54 RDS audit failed')
+        for call in cohort['commands']:
+            argv = call['argv']; path = cli_value(argv, '--artifact')
+            require(call['status'] == 0 and 'benchmark RDS artifact contract OK' in call['stdout'].splitlines()
+                    and argv[1] == str(Path(fields(validation_source)['SOURCE_ROOT']) / 'src/5_run_benchmark_methods/validate_benchmark_rds_contract.R')
+                    and cli_value(argv, '--config') == source['SOURCE_ROOT'] + '/datasets.json'
+                    and cli_value(argv, '--source-identity') == str(original.parent / MAIN_RUNS['benchmark'] / 'manifests/source_identity.json')
+                    and path in read_rds and cli_value(argv, '--view') == 'benchmark_analysis'
+                    and not any('historical' in word for word in argv), 'Fixed54 actual RDS command provenance differs')
+            artifact = next(item for item in data['rds24_control']['artifacts'] if item['path'] == path)
+            require(cli_value(argv, '--dataset') == artifact['dataset'] and cli_value(argv, '--method') == artifact['method']
+                    and argv.count('--metadata') == int(artifact['metadata']), 'Fixed54 actual RDS method/metadata arguments differ')
+            validator_rds_inputs.add(path)
+            if path in core:
+                rds_signatures.add((path, artifact['method'], artifact['dataset'], 'benchmark_analysis', str(int(artifact['metadata']))))
+    require(validator_rds_inputs == read_rds, 'Fixed54 actual RDS read coverage differs')
+    prior_glo = read_json(proof(data['gloscope8_control']['original_control']))
+    prior_failure = read_json(proof(data['gloscope8_control']['original_observation']))
+    require(len(prior_glo['rows']) == len(prior_failure['rows']) == 8
+            and all('Stored labels differ from independent metadata by Sample' in row['error'] for row in prior_failure['rows']),
+            'Fixed54 prior sequential UNC native-CLI basis differs')
+    for row in prior_glo['rows']:
+        argv = row['rds_cli']; path = row['result']['path']
+        require(argv[1] == str(Path(fields(validation_source)['SOURCE_ROOT']) / 'src/5_run_benchmark_methods/validate_benchmark_rds_contract.R')
+                and all(cli_value(argv, key) == value for key, value in (
+                    ('--artifact', path), ('--dataset', row['dataset']), ('--view', 'batch_effect_uncorrected'),
+                    ('--method', 'gloscope'), ('--batch-pass', 'uncorrected'), ('--analysis-variant', 'final'),
+                    ('--config', source['SOURCE_ROOT'] + '/datasets.json'))), 'Fixed54 prior UNC native command differs')
+        if path in core:
+            rds_signatures.add((path, 'gloscope', row['dataset'], 'batch_effect_uncorrected', '0'))
+    for selected in catalog['rows']:
+        ds, view, method, parameter = (selected[k] for k in ('dataset', 'view', 'method', 'parameter'))
+        identity = identities[(ds, view)]; source_ids = identity['sample_ids']
+        truth = labels[ds]['named_labels'] if context == 'benchmark' else batch[(ds, view)]['named_evaluation_labels']['primary']
+        expected, signatures = main_v2_expected_artifacts(original, source, source['SOURCE_ROOT'] + '/datasets.json',
+                                                        read_json(original / 'manifests/artifact_bindings.json'), context, selected)
+        retained, dropped = source_ids, []
+        for path in expected:
+            if path in rds:
+                retained, dropped = audit54_bundle_ids(rds[path], source_ids, truth)
+            elif path in feather:
+                item, cost = feather[path], costs[path]
+                require(item['status'] == 'NATIVE_VALIDATED_PENDING_ROOT_REVIEW' and item['sample_ids'] == source_ids
+                        and item['historical_compatibility'] is False and cost['status'] == 'SELECTED_COST_VALIDATED_NOT_FIT_APPROVAL'
+                        and cost['output_md5'] == prior[path]['md5'], 'Fixed54 Feather/schema/order/cost qualification differs')
+            else:
+                require(context == 'batch_effect/uncorrected_final' and method == 'gloscope', 'Fixed54 unqualified core artifact')
+                row = glo[ds]; item = row['postcheck']
+                require(row['prior_native_cli_basis'] == 'SHA_PINNED_PRIOR_SEQUENTIAL_CALLS_REACHED_EXACT_POSTCHECK_FAILURE'
+                        and row['native_cli_repeated'] is False and row['unchanged'] is True
+                        and item['sample_ids'] == source_ids and item['named_labels_match_primary_truth'] is True
+                        and item['source_order_matches_result'] is True and item['distance_named_geometry_valid'] is True
+                        and item['selected_timing_costs_match'] is True and item['stored_named_labels'] == [truth[x] for x in source_ids],
+                        'Fixed54 separate UNC Glo current-truth/geometry/cost qualification differs')
+        if method == 'scitd':
+            require(len(source_ids) == 53 and len(retained) == 39 and len(dropped) == 14, 'Fixed54 exact scITD14-drop exception differs')
+        filename = ('execution_times_' + context.replace('/', '_') + '_' + method + '_' + ds + '.feather') if context != 'benchmark' else ('execution_times_' + method + '_' + ds + ('_selected' if ds == 'Bassez' and method == 'pseudobulk' else '_' + parameter if parameter else '') + '.feather')
+        timing = str(original / 'logs' / filename)
+        require(timing in timings, 'Fixed54 exact selected timing input differs')
+        checked.append(dict(row=[ds, view, method, parameter], input_md5=identity['md5'], artifact_contract_valid=True,
+                            current_labels_valid=True, sample_order_valid=True, timing_valid=True, sample_ids=retained,
+                            dropped_sample_ids=dropped, labels=[truth[x] for x in retained], expected_artifacts=sorted(expected),
+                            timing_artifacts=[timing], sample_order_policy='VALIDATED_INTERNAL_NAMED_PACKAGE; INPUT_UNIVERSE_IN_SOURCE_ORDER' if method == 'trans' else 'EXACT_SOURCE_ORDER_FILTERED_BY_DOCUMENTED_SCITD_DROPS',
+                            completion_criterion='VALIDATED_PUBLISHED_ARTIFACTS', worker_exit_not_established=True))
+    preparation = next(row for row in data['rds24']['rows'] if row['dataset'] == 'Stephenson')['preparation_lineage']
+    require(preparation['receipt']['sha256'] == 'be7cfc7ab3dda369c8167c4fdef043f3501d4f97b87e823f63f194f73cfe1800'
+            and preparation['semantic_witness']['sha256'] == '5ece0f9a7a5f70bad1509ac731261ce192aed1b7a6f3c55c6bf538d7c691b30c',
+            'Fixed54 six-cache preparation reuse lineage differs')
+    proof(preparation['receipt']); proof(preparation['semantic_witness'])
+    proof(preparation['original_preparation_timing']['identity'])
+    # The Bassez CT cost belongs to two variants and is accounted for once.
+    shared = next(row for row in data['rds24']['rows'] if row['dataset'] == 'Bassez')['postcheck']['__ct_shared_timing__']
+    require(shared['shared_time_secs'] == 146.694 and shared['shared_cost_recorded_once'] is True, 'Fixed54 CT shared cost differs')
+    return checked, core, runtimes, timings, rds_signatures
+
+
 def verified_main_v2_scope(control, science, review, run, nas):
     """Fixed failed main-v2 input; the reviewed finite audit defines the rows.
 
@@ -743,8 +992,10 @@ def verified_main_v2_scope(control, science, review, run, nas):
             and safe(selected_context[3]).read_bytes() == evidence['input_artifacts'].read_bytes(), 'Original parent/child scientific scope differs')
     catalog_path = proof(science['catalog']); catalog = read_json(catalog_path)
     validation_path = proof(science['scientific_validation']); validation = read_json(validation_path)
+    audited54 = validation.get('schema') == AUDIT54_SCHEMA
+    require(not audited54 or reboot, 'Fixed54 audit is only valid for the preserved reboot incident')
     require(catalog['schema'] == 'ecoda_main_v2_publication_catalog_v1' and catalog['context'] == context
-            and validation['schema'] == 'ecoda_main_v2_artifact_validation_v1'
+            and validation['schema'] in ({AUDIT54_SCHEMA} if audited54 else {'ecoda_main_v2_artifact_validation_v1'})
             and validation['catalog_sha256'] == science['catalog']['sha256']
             and validation['source_identity_sha256'] == digest(evidence['source_identity'])
             and validation['config_sha256'] == digest(config) and validation['new_model_fit'] is False,
@@ -762,48 +1013,58 @@ def verified_main_v2_scope(control, science, review, run, nas):
     require(inventory_rows and all(len(r) == 7 and all(r) for r in inventory_rows), 'Malformed finite publication inventory')
     inventory = [dict(zip(keys, r)) for r in inventory_rows]
     require(len({r['source'] for r in inventory}) == len(inventory) and len({r['relative'] for r in inventory}) == len(inventory), 'Duplicate publication payload')
+    core_kinds = {'timing', 'runtime'} if audited54 else {'timing'}
     needed_validators = {'rds' if Path(r['source']).suffix == '.rds' else 'feather'
-                         for r in inventory if r['kind'] != 'timing'}
+                         for r in inventory if r['kind'] not in core_kinds}
     observed_validators = set(); validator_inputs = set(); rds_inputs = set()
-    for invocation in validation['validator_runs']:
-        kind = invocation['kind']; script = proof(invocation)
-        expected = {'rds': ('validate_benchmark_rds_contract.R', 'benchmark RDS artifact-list contract OK'),
-                    'feather': ('matrix_artifact_validator.py', 'matrix artifact contract OK')}
-        require(kind in expected and script == Path(source['SOURCE_ROOT']) / 'src/5_run_benchmark_methods' / expected[kind][0]
-                and type(invocation['actual_exit']) is int and invocation['actual_exit'] == 0
-                and str(script) in invocation['argv']
-                and cli_value(invocation['argv'], '--config') == str(config)
-                and cli_value(invocation['argv'], '--source-identity') == str(evidence['source_identity'])
-                and expected[kind][1] in proof(invocation['stdout']).read_text().splitlines(), 'Missing/failed current production artifact validator')
-        proof(invocation['stderr']); observed_validators.add(kind)
-        argv = invocation['argv']
-        require(not any(word.startswith('--') and 'historical' in word for word in argv), 'Historical validator relaxation is prohibited')
-        expected_pass = None if context == 'benchmark' else 'corrected' if context.endswith('/corrected_final') else 'uncorrected'
-        expected_variant = None if context == 'benchmark' else 'corrected_final' if context.endswith('/corrected_final') else 'final'
-        require(cli_value(argv, '--batch-pass') == expected_pass and cli_value(argv, '--analysis-variant') == expected_variant,
-                'Production validator batch/variant mode differs from publication context')
-        if kind == 'feather' and expected_pass == 'corrected':
-            contract = proof(invocation['expected_batch_contract'])
-            require(original / 'manifests' in contract.parents and cli_value(argv, '--expected-batch-contract') == str(contract),
-                    'Corrected Feather validator source contract is missing/foreign')
-        elif expected_pass != 'corrected':
-            require(cli_value(argv, '--expected-batch-contract') is None and cli_value(argv, '--batch-contract') is None,
-                    'Unexpected correction contract in benchmark/uncorrected validation')
-        if kind == 'rds':
-            inputs_file = proof(invocation['input_list'])
-            require(cli_value(argv, '--artifact-list') == str(inputs_file)
-                    and all(cli_value(argv, name) is None for name in ('--artifact', '--root', '--selection', '--dataset', '--view', '--method'))
-                    and '--metadata' not in argv, 'Actual RDS validator input list differs')
-            inputs_rows = rows(inputs_file)
-            require(inputs_rows and all(len(r) == 5 and all(r) and r[4] in {'0', '1'} for r in inputs_rows)
-                    and len({tuple(r) for r in inputs_rows}) == len(inputs_rows), 'Malformed actual RDS validator input list')
-            validator_inputs.update(r[0] for r in inputs_rows)
-            rds_inputs.update(tuple(r) for r in inputs_rows)
-        else:
-            require(argv.count('--artifact') == 1, 'Feather validator must name its exact artifact')
-            validator_inputs.add(argv[argv.index('--artifact')+1])
+    audited_runtime = set()
+    if audited54:
+        entries = read_json(evidence['source_identity'])['entries']
+        audited_identities = {(item['dataset'], item['view']): item for item in entries}
+        derived_rows, validator_inputs, audited_runtime, _, rds_inputs = audit54_validation(
+            validation, catalog, inventory, context, original, source, audited_identities)
+        validation = dict(validation, rows=derived_rows)
+        observed_validators = needed_validators
+    else:
+        for invocation in validation['validator_runs']:
+            kind = invocation['kind']; script = proof(invocation)
+            expected = {'rds': ('validate_benchmark_rds_contract.R', 'benchmark RDS artifact-list contract OK'),
+                        'feather': ('matrix_artifact_validator.py', 'matrix artifact contract OK')}
+            require(kind in expected and script == Path(source['SOURCE_ROOT']) / 'src/5_run_benchmark_methods' / expected[kind][0]
+                    and type(invocation['actual_exit']) is int and invocation['actual_exit'] == 0
+                    and str(script) in invocation['argv']
+                    and cli_value(invocation['argv'], '--config') == str(config)
+                    and cli_value(invocation['argv'], '--source-identity') == str(evidence['source_identity'])
+                    and expected[kind][1] in proof(invocation['stdout']).read_text().splitlines(), 'Missing/failed current production artifact validator')
+            proof(invocation['stderr']); observed_validators.add(kind)
+            argv = invocation['argv']
+            require(not any(word.startswith('--') and 'historical' in word for word in argv), 'Historical validator relaxation is prohibited')
+            expected_pass = None if context == 'benchmark' else 'corrected' if context.endswith('/corrected_final') else 'uncorrected'
+            expected_variant = None if context == 'benchmark' else 'corrected_final' if context.endswith('/corrected_final') else 'final'
+            require(cli_value(argv, '--batch-pass') == expected_pass and cli_value(argv, '--analysis-variant') == expected_variant,
+                    'Production validator batch/variant mode differs from publication context')
+            if kind == 'feather' and expected_pass == 'corrected':
+                contract = proof(invocation['expected_batch_contract'])
+                require(original / 'manifests' in contract.parents and cli_value(argv, '--expected-batch-contract') == str(contract),
+                        'Corrected Feather validator source contract is missing/foreign')
+            elif expected_pass != 'corrected':
+                require(cli_value(argv, '--expected-batch-contract') is None and cli_value(argv, '--batch-contract') is None,
+                        'Unexpected correction contract in benchmark/uncorrected validation')
+            if kind == 'rds':
+                inputs_file = proof(invocation['input_list'])
+                require(cli_value(argv, '--artifact-list') == str(inputs_file)
+                        and all(cli_value(argv, name) is None for name in ('--artifact', '--root', '--selection', '--dataset', '--view', '--method'))
+                        and '--metadata' not in argv, 'Actual RDS validator input list differs')
+                inputs_rows = rows(inputs_file)
+                require(inputs_rows and all(len(r) == 5 and all(r) and r[4] in {'0', '1'} for r in inputs_rows)
+                        and len({tuple(r) for r in inputs_rows}) == len(inputs_rows), 'Malformed actual RDS validator input list')
+                validator_inputs.update(r[0] for r in inputs_rows)
+                rds_inputs.update(tuple(r) for r in inputs_rows)
+            else:
+                require(argv.count('--artifact') == 1, 'Feather validator must name its exact artifact')
+                validator_inputs.add(argv[argv.index('--artifact')+1])
     require(observed_validators == needed_validators, 'Production validator kinds differ from exact selected payloads')
-    require(validator_inputs == {r['source'] for r in inventory if r['kind'] != 'timing'}, 'Actual production validator input union differs from selected science inventory')
+    require(validator_inputs == {r['source'] for r in inventory if r['kind'] not in core_kinds}, 'Actual production validator input union differs from selected science inventory')
     dispatch = {tuple(r[:3]) for r in rows(evidence['dispatch_selection'])}
     source_ids = read_json(evidence['source_identity'])['entries']
     identities = {(r['dataset'], r['view']): r for r in source_ids}
@@ -862,7 +1123,7 @@ def verified_main_v2_scope(control, science, review, run, nas):
         expected_payloads.update(expected)
         require(checked['timing_artifacts'], 'Selected timing input list missing')
         expected_timings.update(checked['timing_artifacts'])
-    require(expected_payloads == {r['source'] for r in inventory if r['kind'] != 'timing'}
+    require(expected_payloads == {r['source'] for r in inventory if r['kind'] not in core_kinds}
             and expected_timings == {r['source'] for r in inventory if r['kind'] == 'timing'}, 'Expected-row contract differs from exact finite payload union')
     require(rds_inputs == expected_rds_inputs, 'Actual RDS validator dataset/view/method/metadata columns differ from production contract')
     preflight_rows = rows(evidence['preflight_manifest'])
@@ -908,7 +1169,8 @@ def verified_main_v2_scope(control, science, review, run, nas):
         path = safe(row['source']); relative = Path(row['relative'])
         require(not relative.is_absolute() and '..' not in relative.parts and str(relative) == row['relative']
                 and relative.parts[0] in {'results', 'embeddings', 'pseudobulks', 'gloscope_dists'}
-                and row['kind'] in {'result', 'metadata', 'cache', 'timing'} and path.suffix in {'.rds', '.feather'}, 'Unsafe/unselected payload kind/path')
+                and row['kind'] in ({'result', 'metadata', 'cache', 'timing', 'runtime'} if audited54 else {'result', 'metadata', 'cache', 'timing'})
+                and (path.suffix in {'.rds', '.feather'} or (audited54 and row['kind'] == 'runtime' and str(path) in audited_runtime)), 'Unsafe/unselected payload kind/path')
         expected = original / ('logs/' + path.name if row['kind'] == 'timing' else 'artifacts/' + context + '/' + str(relative))
         require(path == expected and (row['kind'] != 'timing' or str(relative) == 'embeddings/timing_sources/' + path.name), 'Source outside exact original context')
         current = record(path, original, row['original_producer']); proof(item['producer_record']); proof(item['sidecar'])
@@ -919,6 +1181,8 @@ def verified_main_v2_scope(control, science, review, run, nas):
         else:
             if row['kind'] == 'timing':
                 require(not owner_file(path, original).exists(), 'An unowned timing shard acquired an owner')
+            elif audited54 and row['kind'] == 'runtime':
+                require(str(path) in audited_runtime and not owner_file(path, original).exists(), 'Fixed54 runtime owner absence differs')
             else:
                 verify_ownerless_gloscope(row, item, context, original, checked_by_path[str(path)], reboot_coverage)
         for runtime_proof in item['runtime_evidence']:
@@ -1196,6 +1460,22 @@ def verified_hr22_scope(control, science, review, receipt_path, run, nas):
     return control, science, inventory, run, nas, destination
 
 
+def audit54_runtime_lineage(inventory, mappings):
+    """Checked copies retain their original-fit path; this is not a new producer."""
+    copied = {item['source']: item for item in mappings}; result = []
+    for item in inventory:
+        if item['kind'] != 'runtime':
+            continue
+        value = read_json(item['source']); parent = copied[value['artifact_path']]; runtime = copied[item['source']]
+        require(value['artifact_md5'] == parent['md5'] and item['md5'] == runtime['md5'], 'Fixed54 runtime/core copy association differs')
+        for kind in ('scratch', 'nas'):
+            require(digest(parent[kind], 'md5') == value['artifact_md5'] and digest(runtime[kind], 'md5') == item['md5'],
+                    'Fixed54 runtime/core copied bytes differ')
+        result.append(dict(original_runtime=item['source'], original_core=value['artifact_path'],
+                           original_core_md5=value['artifact_md5'], copied_runtime=runtime, copied_core=parent))
+    return result
+
+
 def tsv(inventory):
     return ''.join('\t'.join(str(row[k]) for k in ('dataset', 'kind', 'source', 'relative', 'md5', 'size', 'original_producer')) + '\n' for row in inventory)
 
@@ -1222,12 +1502,22 @@ def copy_payload(args):
         control_path = safe(args.control)
         require(digest(control_path, 'md5') == args.control_md5, 'Runtime-copy control digest differs')
         control = read_json(control_path); selected_run = control_path.parent.parent
-        require(control['schema'] == UNC4_SCHEMA and control_path == selected_run / 'manifests/control.json'
-                and selected_run.parent.name == '_ecoda_runs' and control['run_id'] == selected_run.name, 'Runtime-copy control is not the fixed run-owned scope')
-        allowed = {root / 'artifacts/batch_effect/uncorrected_final/embeddings' /
-                   f'{ds}_batch_effect_uncorrected_final_hvg2000_highres_mrvi_dists.feather.runtime.json'
-                   for root in (selected_run, selected_run.parent / UNC4_RUN) for ds in UNC4_DATASETS}
-        require(source in allowed, 'Runtime copy is outside the fixed four-fit scope')
+        require(control_path == selected_run / 'manifests/control.json' and selected_run.parent.name == '_ecoda_runs'
+                and control['run_id'] == selected_run.name, 'Runtime-copy control is not the fixed run-owned scope')
+        if control['schema'] == UNC4_SCHEMA:
+            allowed = {root / 'artifacts/batch_effect/uncorrected_final/embeddings' /
+                       f'{ds}_batch_effect_uncorrected_final_hvg2000_highres_mrvi_dists.feather.runtime.json'
+                       for root in (selected_run, selected_run.parent / UNC4_RUN) for ds in UNC4_DATASETS}
+        elif control['schema'] == REBOOT_SCHEMA:
+            science = read_json(proof(control['science_receipt'])); validation = read_json(proof(science['scientific_validation']))
+            catalog = read_json(proof(science['catalog'])); context = control['context']
+            original = selected_run.parent / MAIN_RUNS[context]
+            _, runtime_paths, _ = audit54_paths(validation, catalog, context, original)
+            allowed = {Path(path) for path in runtime_paths} | {
+                selected_run / 'artifacts' / context / Path(path).relative_to(original / 'artifacts' / context) for path in runtime_paths}
+        else:
+            raise ValueError('Runtime copy is outside the two fixed companion scopes')
+        require(source in allowed, 'Runtime copy is outside its fixed core-associated scope')
     else:
         require(source.suffix in {'.rds', '.feather'} or source.name == 'nas_checksums.md5', 'Copy source is outside finite BL payload kinds')
     require(boundary in destination.parents and not destination.exists(), 'Copy target exists/outside boundary')
@@ -1335,6 +1625,16 @@ def main():
             result.update(worker_exit_not_established=True, completion_criterion='VALIDATED_PUBLISHED_ARTIFACTS', publication_scope='FOUR_MRVI_FITS_ONLY', sample_metadata_published=False,
                           runtime_companion_policy='BYTE_IDENTICAL_ORIGINAL_FIT_EVIDENCE_NOT_REBASED',
                           sample_metadata_policy='Separate validated v1 selected metadata-adoption lineage; no exports or TASK provenance are created.')
+        if control['schema'] == REBOOT_SCHEMA and read_json(proof(science['scientific_validation'])).get('schema') == AUDIT54_SCHEMA:
+            runtime_lineage = audit54_runtime_lineage(inventory, mappings)
+            result.update(audited_subset_schema=AUDIT54_SCHEMA, runtime_companions=runtime_lineage,
+                          runtime_companion_policy='BYTE_IDENTICAL_ORIGINAL_FIT_EVIDENCE_NOT_REBASED; VALIDATE_ORIGINAL_PRODUCER_PATH_AND_CHECKED_COPY_LINEAGE',
+                          scoring_policy='UNKNOWN_STORED_POLICY_REQUIRES_LATER_DISTANCE_ONLY_FIVE_METRIC_EVALUATION; TRANS_V2_KEEPS_ITS_EXPLICIT_POLICY',
+                          scientific_read_superset='24_BENCHMARK_RDS_UNDER_COMMON50_PLUS8_SEPARATE_UNC_GLO_RDS; ZEROIMP2_READ_BUT_NOT_PUBLISHED',
+                          excluded_zeroimp_summaries=['Stephenson_zeroimp.rds', 'Bassez_zeroimp.rds'],
+                          transformation_alignment_policy='TRANS_V2_RETAINS_VALIDATED_INTERNAL_NAMED_COUNTS_LABEL_ORDER; DOES_NOT_CLAIM_H5_FIRST_CELL_POSITIONAL_ORDER',
+                          shared_CT_cost_seconds=146.694, shared_CT_cost_counted_once=True,
+                          preparation_reuse_semantic_sha256='5ece0f9a7a5f70bad1509ac731261ce192aed1b7a6f3c55c6bf538d7c691b30c')
         if control['schema'] == REBOOT_SCHEMA:
             result.update(incident=control['incident'], orchestration_outcome='LOGIN_REBOOT_LOSS', wrapper_exit_code=None,
                           policy='New reviewed artifact copies; original PRELAUNCH_STOP, absent wrapper outcome, statuses and owners remain unchanged. No scheduler query, fit, or H5AD read.')
