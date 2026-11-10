@@ -1026,9 +1026,10 @@ ECODA_DERIVED_METHODS <- list(
   label_ids <- names(labels)
   if (is.null(label_ids) || length(label_ids) != length(sample_ids) ||
       anyNA(label_ids) || anyDuplicated(label_ids) ||
-      !identical(as.character(label_ids), sample_ids)) {
+      !setequal(as.character(label_ids), sample_ids)) {
     stop("local HR composition labels are not aligned to count rows")
   }
+  labels <- labels[sample_ids]
   label_values <- as.character(labels)
   if (length(label_values) != length(sample_ids) ||
       any(.ecoda_is_missing_sentinel(label_values))) {
@@ -1069,6 +1070,13 @@ ECODA_DERIVED_METHODS <- list(
   }
   labels <- as.factor(as.character(labels))
   names(labels) <- sample_ids
+  if (!is.null(metadata$labels)) {
+    truth <- metadata$labels
+    if (is.null(names(truth)) || anyNA(names(truth)) || anyDuplicated(names(truth)) ||
+        !setequal(names(truth), sample_ids) ||
+        !identical(unname(as.character(truth[sample_ids])), unname(as.character(labels))))
+      stop("local HR composition labels disagree with metadata by Sample")
+  }
   metadata_values <- suppressWarnings(
     as.numeric(metadata_counts[sample_ids])
   )
