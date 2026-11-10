@@ -173,6 +173,7 @@ case "$(cat "${ECODA_RUN_ROOT}/manifests/operation")" in
   render-pca) producer=analysis_pca_render; output=benchmark_pca ;;
   legacy-audit) producer=legacy_analysis_compatibility; output=evidence ;;
   orphaned-main-observer) producer=orphaned_main_dependency_observation; output=evidence ;;
+  singlecell-batch-main-bulk) producer=singlecell_batch_geometry; output=singlecell_batch_geometry ;;
   *) exit 1 ;;
 esac
 path="${ECODA_RUN_ROOT}/artifacts/${output}/result.txt"
@@ -184,6 +185,7 @@ printf 'operation-validator:%s\n' "${producer}" >> "${AUDIT_VALIDATOR_LOG}"
 SH
   cp "${tree}/src/utils/bash/project_analysis_release.sh" "${tree}/src/utils/bash/legacy_analysis_audit.sh"
   cp "${tree}/src/utils/bash/project_analysis_release.sh" "${tree}/src/utils/bash/orphaned_main_observer.sh"
+  cp "${tree}/src/utils/bash/project_analysis_release.sh" "${tree}/src/utils/bash/singlecell_batch_geometry_bulk.sh"
   printf '# fixture matrix validator\n' > \
     "${tree}/src/5_run_benchmark_methods/matrix_artifact_validator.py"
   printf '# fixture h5ad validator\n' > \
@@ -689,9 +691,11 @@ run_audit() {
 
 test_analysis_operations() {
   local operation purpose producer output run_root selection accounting path name
+  local operations=(projection render-pca legacy-audit orphaned-main-observer)
+  [[ $# -eq 0 ]] || operations=("$@")
   export AUDIT_FIXTURE_COMMON="${ROOT}/src/utils/bash/ecoda_run_common.sh"
   export AUDIT_FIXTURE_RUNTIME="${RUNTIME_IDENTITY}"
-  for operation in projection render-pca legacy-audit orphaned-main-observer; do
+  for operation in "${operations[@]}"; do
     local scope_producer=analysis_projection_scope submission_producer=analysis_projection_submission
     case "${operation}" in
       projection) purpose=analysis_metadata_projection; output=analysis_projection ;;
@@ -767,6 +771,70 @@ test_analysis_operations() {
   echo 'run audit pins projection/render purpose, scope, accounting and delegated outputs: OK'
 }
 
+test_singlecell_bulk_entrypoint() {
+  local run_root="${SCRATCH}/_ecoda_runs/audit_bulk11" selection accounting path name saved
+  export AUDIT_FIXTURE_COMMON="${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  export AUDIT_FIXTURE_RUNTIME="${RUNTIME_IDENTITY}"
+  mkdir -p "${run_root}/manifests" "${run_root}/status" "${run_root}/artifacts/singlecell_batch_geometry"
+  make_run_identities "${run_root}" "${SOURCE_MANIFEST}" "${RUNTIME_IDENTITY}"
+  printf 'STAGE=stage5\nRUN_ID=audit_bulk11\nSTATE=OK\nPURPOSE=singlecell_batch_main_bulk\n' > "${run_root}/metadata"
+  printf 'STATE=OK\nRUN_ID=audit_bulk11\n' > "${run_root}/status/terminal"
+  printf 'singlecell-batch-main-bulk\n' > "${run_root}/manifests/operation"
+  selection="${run_root}/manifests/selection.tsv"
+  cat > "${selection}" <<'ROWS'
+1	Alzheimer	unc_raw	128
+2	Alzheimer	cor_harmony	128
+3	Breast_cancer	cor_harmony	64
+4	Covid19_PBMC	unc_raw	64
+5	Covid19_PBMC	cor_harmony	64
+6	Joanito	unc_raw	64
+7	Joanito	cor_harmony	64
+8	Lupus_PBMC	unc_raw	64
+9	Lupus_PBMC	cor_harmony	64
+10	Stephenson	unc_raw	64
+11	Stephenson	cor_harmony	64
+ROWS
+  cp "${selection}" "${run_root}/manifests/expected.tsv"
+  printf 'ARRAY\t765431\nARRAY\t765432\nWATCHDOG\t765433\n' > "${run_root}/manifests/scheduler_ids.tsv"
+  accounting="${run_root}/manifests/scheduler_accounting.tsv"
+  printf '765431|COMPLETED|0:0\n765432|COMPLETED|0:0\n765433|COMPLETED|0:0\n' > "${accounting}"
+  for name in operation selection.tsv scheduler_ids.tsv scheduler_accounting.tsv;do ecoda_write_checksum "${run_root}/manifests/${name}" >/dev/null;done
+  for name in operation selection.tsv;do ecoda_write_artifact_record "${run_root}/manifests/${name}" singlecell_bulk_scope audit_bulk11 >/dev/null;done
+  ecoda_write_artifact_record "${run_root}/manifests/scheduler_ids.tsv" singlecell_bulk_submission audit_bulk11 >/dev/null
+  path="${run_root}/artifacts/singlecell_batch_geometry/result.txt";printf 'finite fixture\n' > "${path}"
+  ecoda_write_checksum "${path}" >/dev/null;ecoda_artifact_owner_acquire "${path}" stage5 audit_bulk11 0 0 0 >/dev/null
+  ecoda_write_artifact_record "${path}" singlecell_batch_geometry audit_bulk11 >/dev/null;ecoda_artifact_owner_set_state "${path}" OK test >/dev/null
+  # Real CLI imports the ORIGINAL frozen Stage5 helper, whose selection is3col.
+  # The new auditor lives outside that producer tree, matching validator recovery.
+  [[ "${ROOT}/src/utils/bash/ecoda_run_audit.sh" != "${SOURCE_TREE}/src/utils/bash/ecoda_run_audit.sh" ]]
+  grep -q 'stage5) columns=3' "${SOURCE_TREE}/src/utils/bash/ecoda_run_audit_stage5.sh"
+  run_audit "${run_root}" stage5 "${selection}" 0 --scheduler-accounting "${accounting}"
+  grep -q '^operation-validator:singlecell_batch_geometry$' "${VALIDATOR_LOG}"
+  saved="${TMP_DIR}/bulk-metadata.saved";cp "${run_root}/metadata" "${saved}"
+  for purpose in unknown analysis_metadata_projection;do
+    sed "s/^PURPOSE=.*/PURPOSE=${purpose}/" "${saved}" > "${run_root}/metadata"
+    run_audit "${run_root}" stage5 "${selection}" 1 --scheduler-accounting "${accounting}"
+  done
+  cp "${saved}" "${run_root}/metadata";printf 'PURPOSE=singlecell_batch_main_bulk\n' >> "${run_root}/metadata"
+  run_audit "${run_root}" stage5 "${selection}" 1 --scheduler-accounting "${accounting}"
+  cp "${saved}" "${run_root}/metadata"
+  chmod u+w "${selection}" "${selection}.md5";cut -f1-3 "${run_root}/manifests/expected.tsv" > "${selection}";ecoda_write_checksum "${selection}" >/dev/null
+  run_audit "${run_root}" stage5 "${selection}" 1 --scheduler-accounting "${accounting}"
+  head -10 "${run_root}/manifests/expected.tsv" > "${selection}";ecoda_write_checksum "${selection}" >/dev/null
+  run_audit "${run_root}" stage5 "${selection}" 1 --scheduler-accounting "${accounting}"
+  cp "${run_root}/manifests/expected.tsv" "${selection}";ecoda_write_checksum "${selection}" >/dev/null
+  printf 'singlecell-batch-main-foreign\n' > "${run_root}/manifests/operation.new"
+  chmod u+w "${run_root}/manifests/operation";mv "${run_root}/manifests/operation.new" "${run_root}/manifests/operation";ecoda_write_checksum "${run_root}/manifests/operation" >/dev/null
+  run_audit "${run_root}" stage5 "${selection}" 1 --scheduler-accounting "${accounting}"
+  echo 'run audit real entrypoint: original3col policy/newfixed11x4/unknown-and-schema failures: OK'
+}
+
+if [[ "${1:-}" == --singlecell-bulk-only ]];then
+  test_singlecell_bulk_entrypoint
+  test_analysis_operations projection
+  exit 0
+fi
+test_singlecell_bulk_entrypoint
 test_analysis_operations
 [[ "${ECODA_ANALYSIS_AUDIT_ONLY:-0}" != 1 ]] || exit 0
 

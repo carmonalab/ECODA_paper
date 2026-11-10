@@ -2,7 +2,7 @@
 
 ## Current authority — Q14–15 supersede the earlier expanded draft
 
-**IMPLEMENTING_MAIN12,2026-11-10.** The approved timing pilot and Alzheimer header-memory check passed; the measured costs support proceeding. Q15 reduces the initial scope to **12 main figures and12uniqueUMAP fits**: one2×4PCA and one2×5UMAP per cohort, comparing actual production UNC PCA with COR Harmony. Use broad annotations for five cohorts, source `louvain` for Lupus, and each row's own cached Leiden2 labels. Matched-HVG, fine/source-named and fixed-anchor variants are **deferred**, not scheduled or scored. The72-figure/18-fit proposal below is retained only as design history and deferred options.
+**COMPUTE_COMPLETE_REVIEW_PENDING,2026-11-10.** The approved timing pilot and Alzheimer header-memory check passed; the measured costs support proceeding. Q15 reduces the initial scope to **12 main figures and12uniqueUMAP fits**: one2×4PCA and one2×5UMAP per cohort, comparing actual production UNC PCA with COR Harmony. Use broad annotations for five cohorts, source `louvain` for Lupus, and each row's own cached Leiden2 labels. Matched-HVG, fine/source-named and fixed-anchor variants are **deferred**, not scheduled or scored. The72-figure/18-fit proposal below is retained only as design history and deferred options.
 
 - First task: Breast UNC, all114,579cells, time UMAP, separate ANN90/50D LISI and rendering individually. No bulk launch until measured costs are reviewed.
 - Alzheimer: inspect selected obs/PC/graph shapes/dtypes and estimate memory including UMAP/ANN overhead before allocation. Load only selected arrays into expression-free AnnData; never load the whole RNA/count matrix or whole parent AnnData.
@@ -158,6 +158,66 @@ The remaining text records the availability audit, scientific contracts and earl
 - Completed application source was owner-coordinated, verified against five
   frozen hashes, committed separatelyeea2862 and pushed. Only unrelated
   untracked workstation files remain outside this task's checkpoint scope.
+
+### Subsequent display checks and HR count table —21:28UTC
+
+- The renderer already uses a label-independent deterministic shuffled draw
+  order shared across panels and both rows. At the user's request, a separate
+  Breast batch-only2×3PNG compared that exact order, an independent shuffle
+  and its reverse. All114579cells/coordinates/colors/within-row limits were
+  fixed; originalorderSHAff48279f matches both actual preview manifests.
+  The broad pattern survives all three orders. This rules against a simple
+  draw-order explanation, not UMAP distortion or full correction quality.
+  The independent50D iLISI improvement supports increased mixing between
+  actual production views; differing HVGs prevent attributing it solely to
+  Harmony. No fitting/scoring/H5 reads were performed for this check.
+- New requested table saved in `plots/batch_effect_corrected/` as
+  `ECODA_authors_HR_cell_type_counts.csv`, readable`.md` and provenance`.json`.
+  Actual validated defaultHR feature counts agree UNC/COR: Alzheimer131,
+  Breast58,Covid54,Joanito12,Kidney76,Lung44,Lupus24,Stephenson50.
+  Root verified all eight real JSON pointers/report hashes and top-level
+  dataset-column authority. No new RDS/H5 reads or jobs were required.
+  CSV SHA6b8801241f8e8563f88a6d56574c122021c47d6848580b04b4d42a7728dbb89d.
+  Main diagnostic broad labels remain separate; Lupus24 means source clusters;
+  Kidney's two evaluation axes share one physical cohort/76HR features.
+- Bounded21:12filesystem progress check (no scheduler query) found10of11bulk
+  row markersOK, plus the reused pilot:11of12representations complete.
+  Only AlzheimerUNC remained. AlzheimerCOR measuredUMAP1561s,ANN318s,LISI41s.
+  Original sole waiter23462 remains active. No completed row is resubmitted;
+  sole terminal accounting/native review and full12PDF/NAS publication wait
+  for the actual terminal event.
+
+### All geometry complete; finalization repair —21:51UTC
+
+- All12representations finished successfully; the original sole waiter23462
+  endedCOMPLETED21:42:45UTC. The last data row was alreadyOK around21:13;
+  an open global monitor had been incorrectly interpreted as continuing fit.
+  A bounded resource diagnostic found the completed row and all payloads.
+  No activeCPU conclusion was drawn from its empty finished-job sstat output.
+- Actual watchdog4677257 was PENDING/PartitionTimeLimit: hardcoded24h exceeded
+  shared-cpuMaxTime12h. Root lowered that SAME pending job to12h, matching
+  existingWATCHDOG_TIME_LIMIT; Slurm accepted it and finalization completed.
+  No cancellation, new scheduler ID, source4d mutation or data recomputation.
+  Original descriptor/repair exit0/partition limits are preserved in the run's
+  local evidence packet. Future controller uses configuredWATCHDOG_TIME_LIMIT;
+  actual native sbatch seam test is red before, green at12h/default and3h override.
+- One terminal collect97de9b05 joins exact11statuses/55native outputs/3IDs.
+  Sole formal inspect passes: all12raw accounting rowsCOMPLETED/0:0, query1;
+  unchanged raw accounting and derived3-root projection bridge pass.
+- Supplemental original4d native audit failed before artifact checks because
+  its sourced Stage5 policy forces a three-column selection before dispatch.
+  Preserve that failed audit. New auditor dispatch accepts fixed11×4 only for
+  unique knownbulk purpose, retaining path/checksum/schema checks and original
+  fixed11 producer validator. Real CLI regression is red before/green after;
+  ordinary projection3 and unknown/schema/owner/accounting negatives pass.
+  New auditorcode43d12831 will be committed/pinned separately, while original
+  producer4d source manifest/runtime/accounting remain immutable audit inputs.
+  No new full-cohort jobs or second accounting/bridge are authorized or needed.
+- Independent metadata science review passes all55native joins, paired IDs,
+ 50D/ANN90/p30, normalization/equal-sample means and100%label coverage. Actual
+  payload total3714959843bytes; Lupus17observed per-cell batches are preserved.
+  Root science/official approval and NAS/local publication await corrected
+  native-auditor PASS. No completed scientific row is selected for rerun.
 
 The availability audit and earlier expanded options below support the approved pilot. They do not enlarge the current12-figure scope.
 

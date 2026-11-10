@@ -2,9 +2,32 @@
 # Native manifests/owners/spool/accounting; all scheduler and numerical effects fake.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-"${ROOT}/.pixi/envs/default/bin/python" -B - "${ROOT}" <<'PY'
+"${ROOT}/.pixi/envs/default/bin/python" -B - "${ROOT}" "${1:-}" <<'PY'
 import hashlib,json,os,pathlib,shutil,subprocess,sys,tempfile
 repo=pathlib.Path(sys.argv[1])
+# Execute the actual watchdog sbatch command with a shell-function stub. Source
+# its real default assignment so the fixture cannot repeat the hardcoded bug.
+bulk=(repo/'src/utils/bash/singlecell_batch_geometry_bulk.sh').read_text()
+submit=next(s for s in bulk.splitlines()if s.startswith('RAW="$(sbatch ')and s.endswith(' --watchdog)"'))
+policy=next(s for s in (repo/'src/slurm_config.sh').read_text().splitlines()if s.startswith('WATCHDOG_TIME_LIMIT='))
+with tempfile.TemporaryDirectory(prefix='ecoda-watchdog-time-')as directory:
+ for override,expected in [(None,'12:00:00'),('03:00:00','03:00:00')]:
+  args=pathlib.Path(directory)/('default'if override is None else'override')
+  env=dict(os.environ,TEST_ARGS=str(args));env.pop('WATCHDOG_TIME_LIMIT',None)
+  if override is not None:env['WATCHDOG_TIME_LIMIT']=override
+  code='set -euo pipefail\n'+policy+'''
+SLURM_PARTITION_BENCHMARK_CPU=shared-cpu
+DEPENDENCIES=100001:100002
+RUN=/fixture/run
+RUNTIME_EXPORT=ECODA_RUNTIME_PROFILE=stage5
+SELF=/fixture/source/singlecell_batch_geometry_bulk.sh
+sbatch(){ printf '%s\\n' "$@" > "$TEST_ARGS";printf '100003;fixture\\n'; }
+'''+submit+'\n'
+  r=subprocess.run(['/bin/bash','-c',code],env=env,capture_output=True,text=True);assert r.returncode==0,r.stderr
+  argv=args.read_text().splitlines();assert argv.count('--time='+expected)==1,(override,expected,argv)
+  assert '--dependency=afterany:100001:100002'in argv and '--cpus-per-task=1'in argv and '--mem=2G'in argv
+ print('PASS actual watchdog sbatch uses configured12h default and explicit3h override',flush=True)
+if sys.argv[2]=='--watchdog-policy-only':raise SystemExit(0)
 with tempfile.TemporaryDirectory(prefix='ecoda-bulk-shell-')as tmp:
  p=pathlib.Path(tmp).resolve();tree=p/'snapshot/tree';u=tree/'src/utils/bash';u.mkdir(parents=True);(tree/'src/notebooks').mkdir()
  for n in ['singlecell_batch_geometry_bulk.sh','ecoda_run_common.sh']:shutil.copy2(repo/'src/utils/bash'/n,u/n)
@@ -12,6 +35,7 @@ with tempfile.TemporaryDirectory(prefix='ecoda-bulk-shell-')as tmp:
  (tree/'src/slurm_config.sh').write_text('''export PROJECT_ROOT="${TEST_TREE}" HPC_SCRATCH_DIR="${TEST_SCRATCH}"
 export ECODA_RUNS_ROOT="${TEST_SCRATCH}/_ecoda_runs" ECODA_OWNERS_ROOT="${TEST_SCRATCH}/_ecoda_owners" PYTHON_BIN="${TEST_PYTHON}"
 SLURM_PARTITION_BENCHMARK_CPU=shared-cpu
+WATCHDOG_TIME_LIMIT="${WATCHDOG_TIME_LIMIT:-12:00:00}"
 ''')
  (u/'ecoda_runtime.sh').write_text('''ecoda_runtime_validate_submission(){ printf 'fixture runtime\n' > "${ECODA_RUN_ROOT}/manifests/runtime.identity"; }
 ecoda_runtime_validate_bound_run(){ test -s "${ECODA_RUN_ROOT}/manifests/runtime.identity"; }
@@ -45,6 +69,7 @@ if mode=='sbatch':
  spool=root/('spool_'+job);shutil=__import__('shutil');shutil.copy2(command[0],spool);command[0]=str(spool)
  if '--watchdog'in command:
   assert any(x.startswith('--dependency=afterany:')for x in flags)
+  assert '--time='+os.environ.get('WATCHDOG_TIME_LIMIT','12:00:00')in flags
   assert sum(1 for x in root.glob('*.state'))==2,'Both independent arrays must be submitted first'
   subprocess.Popen([sys.executable,__file__,'wd',job,'/bin/bash',*command],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
  else:

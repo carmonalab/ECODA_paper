@@ -1106,7 +1106,21 @@ if [[ "${STAGE_ARG}" == stage5 ]]; then
 fi
 _audit_run_metadata || exit 1
 _audit_runtime_identity "${RUNTIME_IDENTITY_ARG}" || exit 1
-_audit_selection || exit 1
+if [[ "${STAGE_ARG}" == stage5 &&
+      "$(_audit_metadata_count "${RUN_ROOT_REAL}/metadata" PURPOSE)" == 1 &&
+      "$(_audit_metadata_value "${RUN_ROOT_REAL}/metadata" PURPOSE)" == singlecell_batch_main_bulk ]]; then
+  # The producer's frozen Stage5 policy predates this operation's four-column
+  # row/dataset/representation/memory schema. Keep that original source pinned;
+  # only this exact purpose uses its own fixed11 selection before delegation.
+  [[ "${SELECTION_ARG}" == "${RUN_ROOT_REAL}/manifests/selection.tsv" ]] || exit 1
+  ecoda_validate_run_owned_path "${SELECTION_ARG}" "${RUN_ROOT_REAL}" || exit 1
+  ecoda_validate_manifest "${SELECTION_ARG}" 4 || exit 1
+  ecoda_validate_checksum "${SELECTION_ARG}" || exit 1
+  AUDIT_SELECTION_ROWS="$(wc -l < "${SELECTION_ARG}" | tr -d '[:space:]')"
+  [[ "${AUDIT_SELECTION_ROWS}" == 11 ]] || { _audit_die 'singlecell bulk selection requires exactly11 rows'; exit 1; }
+else
+  _audit_selection || exit 1
+fi
 _audit_terminal_status || exit 1
 if [[ "${STAGE_ARG}" == stage5 &&
       ( "$(_audit_metadata_count "${RUN_ROOT_REAL}/metadata" PURPOSE)" != 0 ||

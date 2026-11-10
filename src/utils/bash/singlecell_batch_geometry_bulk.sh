@@ -222,7 +222,7 @@ for MEM in 64 128;do
   if [[ "${JOB:-}" =~ ^[1-9][0-9]*$ ]];then DEPENDENCIES="${DEPENDENCIES:+${DEPENDENCIES}:}${JOB}";fi
 done
 [[ -n "${DEPENDENCIES}" ]] || exit 1
-RAW="$(sbatch --parsable --partition="${SLURM_PARTITION_BENCHMARK_CPU}" --dependency="afterany:${DEPENDENCIES}" --ntasks=1 --cpus-per-task=1 --mem=2G --time=24:00:00 --output="${RUN}/logs/watchdog_%j.log" --error="${RUN}/logs/watchdog_%j.err" --export="ALL,${RUNTIME_EXPORT},ECODA_RUN_ROOT=${RUN}" "${SELF}" --watchdog)"
+RAW="$(sbatch --parsable --partition="${SLURM_PARTITION_BENCHMARK_CPU}" --dependency="afterany:${DEPENDENCIES}" --ntasks=1 --cpus-per-task=1 --mem=2G --time="${WATCHDOG_TIME_LIMIT}" --output="${RUN}/logs/watchdog_%j.log" --error="${RUN}/logs/watchdog_%j.err" --export="ALL,${RUNTIME_EXPORT},ECODA_RUN_ROOT=${RUN}" "${SELF}" --watchdog)"
 ecoda_atomic_write "${M}/watchdog_submission.txt" "${RAW}\n";WD="${RAW%%;*}";[[ "${WD}" =~ ^[1-9][0-9]*$ ]]
 submission_record WATCHDOG "${WD}" - 0;echo "SINGLECELL_BULK_WATCHDOG_ID=${WD}"
 ecoda_atomic_write "${M}/submission.ready" "STATE=READY\n";publish "${M}/submission.ready" singlecell_bulk_submission
