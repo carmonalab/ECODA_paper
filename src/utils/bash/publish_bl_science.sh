@@ -49,6 +49,11 @@ CONTROL="${ECODA_RUN_ROOT}/manifests/control.json"
 campaign_schema="$("${PYTHON_BIN}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema"])' "${CONTROL}")"
 publication_context=benchmark
 case "${campaign_schema}" in
+  ecoda_remaining97_unc32_publication_control_v1)
+    COPY_PRODUCER=stage5_remaining97_unc32_release_copy; SCOPE_PRODUCER=remaining97_unc32_publication_scope
+    REPORT_PRODUCER=remaining97_unc32_publication; REPORT_NAME=remaining97_unc32_publication.json
+    VALIDATION_MARKER=REMAINING97_UNC32_PUBLICATION_VALIDATED
+    publication_context=batch_effect/uncorrected_final ;;
   ecoda_failed16_unc4_publication_control_v1)
     COPY_PRODUCER=stage5_failed16_unc4_science_release_copy; SCOPE_PRODUCER=failed16_unc4_publication_scope
     REPORT_PRODUCER=failed16_unc4_science_publication; REPORT_NAME=failed16_unc4_science_publication.json

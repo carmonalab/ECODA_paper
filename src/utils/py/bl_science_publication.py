@@ -46,12 +46,15 @@ MAIN_RUNS = dict(benchmark='stage5_main_benchmark_20261109_v2',
 
 
 def analysis_context(control):
-    if control['schema'] == UNC4_SCHEMA:
+    if control['schema'] in {UNC4_SCHEMA, UNC32_SCHEMA}:
         return 'batch_effect/uncorrected_final'
     return control['context'] if control['schema'] in MAIN_SCHEMAS else 'benchmark'
 
 
 def campaign(control):
+    if control['schema'] == UNC32_SCHEMA:
+        return ('stage5_remaining97_unc32_release_copy', 'remaining97_unc32_publication.json',
+                'ecoda_remaining97_unc32_publication_receipt_v1', 'remaining97_unc32_publication')
     if control['schema'] == UNC4_SCHEMA:
         return ('stage5_failed16_unc4_science_release_copy', 'failed16_unc4_science_publication.json',
                 'ecoda_failed16_unc4_science_publication_receipt_v1', 'failed16_unc4_science_publication')
@@ -199,13 +202,15 @@ def verified_scope(args):
     if control.get('schema') == REBOOT_SCHEMA:
         expected_keys.add('incident')
     require(set(control) == expected_keys
-            and control['schema'] in {'ecoda_bl_publication_control_v1', HR_SCHEMA, UNC4_SCHEMA, *MAIN_SCHEMAS}, 'Unknown publication control')
+            and control['schema'] in {'ecoda_bl_publication_control_v1', HR_SCHEMA, UNC4_SCHEMA, UNC32_SCHEMA, *MAIN_SCHEMAS}, 'Unknown publication control')
     run = safe(args.run_root); nas = safe(args.nas_root)
     require(run.is_dir() and run.parent.name == '_ecoda_runs' and control['run_id'] == run.name
             and control['nas_root'] == str(nas) and nas.is_dir()
             and re.fullmatch('[A-Za-z0-9][A-Za-z0-9_-]*', control['release_id']), 'Publication roots differ')
     require(control_path == run / 'manifests/control.json', 'Publication control must be run-owned')
     receipt_path = proof(control['science_receipt']); review = read_json(proof(control['review'])); science = read_json(receipt_path)
+    if control['schema'] == UNC32_SCHEMA:
+        return verified_unc32_scope(control, science, review, run, nas)
     if control['schema'] == UNC4_SCHEMA:
         return verified_unc4_scope(control, science, review, run, nas)
     if control['schema'] in MAIN_SCHEMAS:
@@ -1387,6 +1392,206 @@ def verified_unc4_scope(control, science, review, run, nas):
     return control, science, inventory, run, nas, destination
 
 
+# The current327 controller failed after four successful groups; no worker rerun.
+UNC32_SCHEMA = 'ecoda_remaining97_unc32_publication_control_v1'
+UNC32_SOURCE = '32769f1cde54346e8b003ad096ca9e5b7490a517'
+UNC32_RUN = 'stage5_remaining95_uncorrected_20261109_v1'
+UNC32_CONTEXT = 'batch_effect/uncorrected_final'
+UNC32_SCHEDULERS_SHA256 = '6b01259195133f33b04d56ae795fbd2118bdb133f0de1af78ea147f39fc95a82'
+UNC32_DATASETS = ('Joanito', 'Stephenson', 'Alzheimer', 'Breast_cancer', 'Covid19_PBMC', 'Kidney_KPMP_full', 'Lupus_PBMC', 'Lung')
+UNC32_PINS = dict(scope='b50f171d21874555517a4d02ec8544c84a34079797dfad69eee82edca4665880',
+                  metadata='85eb7307173a334dd36ea9161715c05f85435795aa2882d575a29f466159f8db',
+                  native32='a79dee2144ae1ac30ffc94068c9b8350fe4c546dd5d8712d7cc8b56ac3591e67',
+                  source_manifest='482b6d41df9af4bbd67f6a210037aa0ce494f023051e61f3ba61462cc375a597')
+
+
+def unc32_paths(original):
+    """Exact104: prep caches stay at source; their original timing is retained."""
+    root = original / 'artifacts' / UNC32_CONTEXT
+    result = []
+    for ds in UNC32_DATASETS:
+        stem = ds + '_batch_effect_uncorrected_final'
+        for method in ('pseudobulk', 'composition'):
+            for suffix in ([method, 'metadata'] if method == 'composition' else [method]):
+                result.append(dict(dataset=ds, kind='core', method=method, path=str(root / 'results' / (stem + '_' + suffix + '.rds')), producer='stage5_' + method))
+        for method in ('pilot', 'qot'):
+            path = root / 'embeddings' / (stem + '_hvg2000_highres_' + method + '_dists.feather')
+            result.extend([dict(dataset=ds, kind='core', method=method, path=str(path), producer='stage5_' + method),
+                           dict(dataset=ds, kind='runtime', method=method, path=str(path) + '.runtime.json', producer='stage5_' + method)])
+        for method in ('prepare_pseudobulk', 'pseudobulk', 'composition', 'pilot', 'qot'):
+            result.append(dict(dataset=ds, kind='timing', method=method,
+                path=str(original / 'logs' / ('execution_times_batch_effect_uncorrected_final_' + method + '_' + ds + '.feather')), producer='stage5_execution_log'))
+        result.append(dict(dataset=ds, kind='sample_metadata', method='sample_metadata', path=str(root / 'metadata' / (ds + '_sample_metadata.feather')), producer='stage5_metadata_adopted_copy'))
+    require(len(result) == len({r['path'] for r in result}) == 104, 'Fixed UNC104 scope differs')
+    return result
+
+
+def unc32_accounting(gate, inspected, profile):
+    require(gate['gate_id'] == inspected['gate_id'] == 'ecoda_stage5_remaining97_20261109_v1'
+            and gate['state'] == inspected['state'] == 'FAILED' and inspected['operation'] == 'inspect'
+            and gate['audit_completed'] is True and gate['audit_state'] == 'COMPLETED'
+            and gate['audit'] == inspected['audit'] and gate['audit']['passed'] is True,
+            'Current successful49/141 audit with failed remaining97 wrapper differs')
+    terminal = gate['terminal_status']
+    require(terminal['schema_version'] == '1.0' and terminal['state'] == 'FAILED' and type(terminal['exit_code']) is int
+            and terminal['exit_code'] != 0 and all(terminal[k] == gate[k] for k in ('gate_id', 'exact_command', 'command_digest', 'event_generation'))
+            and gate['command_digest'] == hashlib.sha256(gate['exact_command'].encode()).hexdigest()
+            and gate['profile'] == profile['name']
+            and isinstance(gate['event_generation'], str) and bool(gate['event_generation'])
+            and all(isinstance(terminal.get(k), str) and bool(terminal[k]) for k in ('started_at', 'finished_at')),
+            'Current wrapper failure is not established')
+    ids = gate['scheduler_array_ids'] + gate['scheduler_watchdog_ids']; accounting = inspected['audit']['accounting']
+    template = 'sacct -n -P -X -j {scheduler_ids} --format=JobIDRaw,State,ExitCode'
+    raw = [line.split('|') for line in accounting['stdout'].splitlines()]
+    require(len(ids) == len(set(ids)) == 49 and all(re.fullmatch('[1-9][0-9]*', job) for job in ids)
+            and hashlib.sha256(json.dumps(sorted(ids), separators=(',', ':')).encode()).hexdigest() == UNC32_SCHEDULERS_SHA256
+            and accounting['scheduler_ids'] == ids and profile['policy']['accounting_command'] == template
+            and accounting['command'] == template.replace('{scheduler_ids}', ','.join(ids))
+            and accounting['query_count'] == 1 and accounting['attempted'] is True and accounting['actual_exit'] == 0
+            and len(raw) == len({r[0] for r in raw}) == 141 and accounting['stdout'].endswith('\n')
+            and all(len(r) == 3 and re.fullmatch('[1-9][0-9]*', r[0]) and r[1:] == ['COMPLETED', '0:0'] for r in raw)
+            and set(ids) <= {r[0] for r in raw}
+            and accounting['rows'] == [dict(line=i, job_id=r[0], state=r[1], exit_code=r[2]) for i, r in enumerate(raw, 1)],
+            'Current sole49-root/141-row successful accounting differs; wrapper remains FAILED')
+    return accounting
+
+
+def unc32_qualification(qualified, expected, science):
+    require(qualified['schema'] == 'ecoda_remaining97_unc32_science_validation_v1'
+            and qualified['run_id'] == UNC32_RUN and qualified['source_commit'] == UNC32_SOURCE
+            and qualified['status'] == 'VALIDATED_CURRENT_UNC32_NO_PUBLICATION'
+            and qualified['native32_sha256'] == UNC32_PINS['native32'] and qualified['new_model_fit'] is False
+            and qualified['evidence'] and qualified['preparation_lineage'] == science['preparation_lineage'],
+            'Current scientific qualification/source/preparation evidence missing')
+    for item in qualified['evidence']:
+        proof(item)
+    for item in qualified['preparation_lineage']:
+        proof(item)
+    by_path = {r['path']: r for r in qualified['rows']}
+    require(len(by_path) == len(qualified['rows']) == 104 and set(by_path) == {r['path'] for r in expected}, 'Current science qualification is not exact104')
+    for item in expected:
+        row = by_path[item['path']]
+        require(row['kind'] == item['kind'] and row['dataset'] == item['dataset'] and row['method'] == item['method']
+                and all(row[k] is True for k in ('schema_valid', 'current_input_valid', 'sample_order_valid', 'timing_valid')),
+                'Current artifact lacks schema/input/order/cost qualification')
+        if item['kind'] == 'core':
+            geometry_valid = row.get('geometry_disposition') == 'NOT_APPLICABLE_SAMPLE_METADATA' if item['path'].endswith('_metadata.rds') else row.get('geometry_valid') is True
+            require(row['named_labels_valid'] is True and geometry_valid
+                    and row['scoring_disposition'] in {'UNKNOWN_STORED_POLICY_REQUIRES_DISTANCE_RESCORE', 'EXPLICIT_CURRENT_POLICY'},
+                    'Current core lacks named geometry/label/policy qualification')
+        if item['kind'] == 'sample_metadata':
+            require(row['original_export_lineage_verified'] is True, 'Adopted metadata must retain originalv1 EXPORTED lineage')
+    return by_path
+
+
+def verified_unc32_scope(control, science, review, run, nas):
+    original = safe(science['original_run_root']); root = original / 'artifacts' / UNC32_CONTEXT
+    require(original.parent == run.parent and original.name == UNC32_RUN and original != run
+            and science['schema'] == 'ecoda_remaining97_unc32_science_receipt_v1' and science['status'] == 'NOOP_VALIDATED'
+            and science['science_validated'] is True and science['publication_completed'] is False
+            and science['source_commit'] == UNC32_SOURCE and science['original_gate_status'] == 'FAILED'
+            and science['worker_exit_not_established'] is True and science['preparation_lineage'], 'Wrong current UNC32 science receipt')
+    require(review['status'] == 'APPROVED_SCIENTIFIC_ARTIFACT_REUSE' and review['receipt_sha256'] == control['science_receipt']['sha256']
+            and review['qualification_sha256'] == science['qualification']['sha256'] and review['datasets'] == 8
+            and review['physical_rows'] == 32 and review['payloads'] == 104 and review['original_gate_status'] == 'FAILED'
+            and review['publication_completed'] is False and review['selected_writers_quiescent'] is True
+            and review['metadata_sha256'] == UNC32_PINS['metadata'] and review['native32_sha256'] == UNC32_PINS['native32'],
+            'Review does not approve fixed UNC32/104 publication')
+    data = {}
+    for key in ('scope', 'metadata', 'native32'):
+        sha = UNC32_PINS[key]
+        require(science[key]['sha256'] == sha, 'Current fixed UNC proof pin differs: ' + key)
+        data[key] = read_json(proof(science[key]))
+    scope, observed, native = (data[k] for k in ('scope', 'metadata', 'native32'))
+    require(scope['source_commit'] == observed['source_commit'] == native['source_commit'] == UNC32_SOURCE
+            and observed['issues'] == observed['changes'] == []
+            and native['status'] == 'EXACT32_RDS_NATIVE_DIAGNOSTIC_PASSED_NO_REUSE_APPROVAL'
+            and native['run_id'] == original.name and native['original_owners_and_statuses_unchanged'] is True,
+            'Actual current source/metadata/native32 diagnostic differs')
+    for snap in observed['files']:
+        if original.name not in snap['path']:
+            continue
+        p = safe(snap['path'], snap['exists'])
+        require((p.exists() and all(getattr(p.stat(), k) == v for k, v in snap.get('stat', {}).items())
+                 and ('sha256' not in snap or digest(p) == snap['sha256'])) if snap['exists'] else not p.exists(),
+                'Current selected source/status/family-owner fact changed: ' + str(p))
+    for path, snap in native['metadata'].items():
+        p = safe(path)
+        require(digest(p) == snap['sha256'] and all(getattr(p.stat(), k) == v for k, v in snap['stat'].items()), 'Current native proof changed: ' + path)
+    source_path = original / 'manifests/source.manifest'; source = fields(source_path)
+    require(digest(source_path) == scope['source_manifest_sha256'] == UNC32_PINS['source_manifest']
+            and source['SOURCE_COMMIT'] == UNC32_SOURCE and source['SOURCE_ROOT'] == scope['source_root']
+            and source['AUX_ROOT'] == source['SOURCE_ROOT'] + '/aux'
+            and digest(original / 'manifests/runtime.identity') == scope['runtime_identity_sha256']
+            and digest(source['SOURCE_ROOT'] + '/datasets.json') == scope['config_sha256'], 'Current source/runtime/config differs')
+    runtime = fields(original / 'manifests/runtime.identity')
+    require(digest(runtime['RUNTIME_MANIFEST']) == runtime['RUNTIME_MANIFEST_SHA256']
+            and fields(runtime['RUNTIME_MANIFEST'])['IMAGE_SHA256'] == runtime['RUNTIME_IMAGE_SHA256']
+            and safe(runtime['RUNTIME_IMAGE']).stat().st_size == int(runtime['RUNTIME_IMAGE_SIZE']), 'Current original runtime manifest/image metadata differs')
+    for item in native['inputs']:
+        p = safe(item['path']); require(all(getattr(p.stat(), k) == v for k, v in item['stat'].items()), 'Current input stat changed; no H5 content hash is claimed')
+    gate = read_json(proof(science['gate_manifest'])); inspected = read_json(proof(science['inspect'])); profile_path = proof(science['profile'])
+    require(gate['profile_digest'] == digest(profile_path), 'Current profile digest differs')
+    require(unc32_accounting(gate, inspected, read_json(profile_path)) == science['original_accounting'], 'Current original accounting differs')
+    argv = shlex.split(gate['exact_command'])
+    require(cli_value(argv, '--source-root') == source['SOURCE_ROOT'] and cli_value(argv, '--run-id') == 'stage5_remaining95_20261109_v1', 'Current original campaign command differs')
+    # Native32 proves all four watchdogs/aggregate and exact selected source binding,
+    # including8 prep caches that are validated but deliberately not copied.
+    require(len(native['artifacts']) == 32 and len(native['inputs']) == 8 and len(native['commands']) == 6, 'Current native32 scope differs')
+    context = next(c for c in scope['contexts'] if c['context'] == UNC32_CONTEXT)
+    require(context['run_root'] == str(original) and context['run_id'] == original.name
+            and [r[0] for r in context['input_references']] == list(UNC32_DATASETS), 'Current original input scope differs')
+    receipt = proof(scope['strict32_receipt'])
+    require(scope['strict32_receipt'] in science['preparation_lineage'], 'Original strict32 preparation/adoption receipt must be preserved')
+    adoption = read_json(receipt)
+    require(adoption['state'] == 'APPROVED_COPY_ONLY' and adoption['evidence'], 'Original strict32 approval/evidence missing')
+    proof(adoption['reuse_review'])
+    for item in adoption['evidence']:
+        proof(item)
+        require(item in science['preparation_lineage'], 'Preserve exact original preparation/export/writer evidence')
+    require(len(context['adopted_source_rows']) == 8, 'Original eight metadata export witnesses missing')
+    for index, item in enumerate(context['adopted_source_rows'], 1):
+        path = safe(item['source']); status = fields(proof(item['status']))
+        require(item['dataset'] == UNC32_DATASETS[index-1] and digest(path, 'md5') == item['md5']
+                and path.stat().st_size == item['size'] and digest(str(path) + '.md5') == item['sidecar_sha256']
+                and fields(str(path) + '.md5') == dict(PATH=str(path), MD5=item['md5'], SIZE=str(item['size']))
+                and status['STATE'] == 'OK' and status['STATUS'] == 'EXPORTED' and status['TASK_ID'] == str(index)
+                and status['RUN_ID'] == 'stage5_main_uncorrected_20261109_v1' and status['OUTPUT_FILE'] == str(path)
+                and status['INPUT_FILE'] == context['input_references'][index-1][2], 'Originalv1 metadata export/adopted byte lineage differs')
+    expected = unc32_paths(original)
+    declared = [r for r in scope['artifacts'] if r['context'] == UNC32_CONTEXT and r['kind'] != 'preparation']
+    keys = ('dataset', 'kind', 'method', 'path', 'producer')
+    require([{k: r[k] for k in keys} for r in sorted(declared, key=lambda r:r['path'])] == sorted(expected, key=lambda r:r['path']), 'Fixed104 differs from production-expanded scope')
+    qualified = unc32_qualification(read_json(proof(science['qualification'])), expected, science)
+    observed_rows = {r['payload']['path']: r for r in observed['rows']}
+    inventory = []
+    for item in expected:
+        path = safe(item['path']); previous = observed_rows[str(path)]; payload = previous['payload']
+        require(payload['exists'] is True and all(getattr(path.stat(), k) == v for k, v in payload['stat'].items()), 'Current published artifact stat changed')
+        for key in ('sidecar', 'record', 'owner'):
+            snap = previous[key]; p = safe(snap['path'], snap['exists'])
+            require((digest(p) == snap['sha256'] and all(getattr(p.stat(), k) == v for k, v in snap.get('stat', {}).items()) if snap['exists'] else not p.exists()), 'Current artifact proof/owner changed')
+        current = record(path, original, item['producer'])
+        if previous['owner']['exists']:
+            owner(path, original, {'OK', 'FAIL', 'ACTIVE'})
+        require(qualified[str(path)]['md5'] == current['md5'], 'Qualified bytes differ from exact PUBLISHED payload')
+        if item['kind'] == 'sample_metadata':
+            exported = next(r for r in context['adopted_source_rows'] if r['dataset'] == item['dataset'])
+            require(current['md5'] == exported['md5'] and current['size'] == str(exported['size']), 'Current metadata is not the originalv1 byte-copy')
+        if item['kind'] == 'runtime':
+            runtime = read_json(path); core = Path(runtime['artifact_path'])
+            require(str(core) in qualified and runtime['artifact_md5'] == qualified[str(core)]['md5']
+                    and set(runtime) == {'schema_version', 'artifact_path', 'artifact_md5', 'dataset', 'method', 'time_secs', 'mem_GB'}
+                    and runtime['schema_version'] == 1 and runtime['dataset'] == item['dataset'] and runtime['method'] == {'pilot':'PILOT_hvg2000_highres', 'qot':'QOT_hvg2000_highres'}[item['method']]
+                    and type(runtime['time_secs']) in (int, float) and math.isfinite(runtime['time_secs']) and runtime['time_secs'] >= 0,
+                    'Current runtime/core original-fit identity differs')
+        relative = str(path.relative_to(root)) if root in path.parents else 'timing_sources/' + path.name
+        inventory.append(dict(dataset=item['dataset'], kind=item['kind'], source=str(path), relative=relative,
+                              md5=current['md5'], size=current['size'], original_producer=item['producer']))
+    destination = safe(str(nas / 'releases' / control['release_id'] / run.name / UNC32_CONTEXT), False)
+    return control, science, inventory, run, nas, destination
+
+
 def verified_hr22_scope(control, science, review, receipt_path, run, nas):
     from benchmark_request_scope import AUTHOR_HR
     require(review['status'] == 'APPROVED_SCIENTIFIC_ARTIFACT_REUSE'
@@ -1508,6 +1713,10 @@ def copy_payload(args):
             allowed = {root / 'artifacts/batch_effect/uncorrected_final/embeddings' /
                        f'{ds}_batch_effect_uncorrected_final_hvg2000_highres_mrvi_dists.feather.runtime.json'
                        for root in (selected_run, selected_run.parent / UNC4_RUN) for ds in UNC4_DATASETS}
+        elif control['schema'] == UNC32_SCHEMA:
+            original = selected_run.parent / UNC32_RUN
+            paths = [Path(r['path']) for r in unc32_paths(original) if r['kind'] == 'runtime']
+            allowed = set(paths) | {selected_run / 'artifacts' / UNC32_CONTEXT / p.relative_to(original / 'artifacts' / UNC32_CONTEXT) for p in paths}
         elif control['schema'] == REBOOT_SCHEMA:
             science = read_json(proof(control['science_receipt'])); validation = read_json(proof(science['scientific_validation']))
             catalog = read_json(proof(science['catalog'])); context = control['context']
@@ -1621,6 +1830,14 @@ def main():
                           required_sample_metadata_sources=[] if control['context'] == 'benchmark' else sorted({
                               str(Path(science['original_run_root']) / 'artifacts' / control['context'] / 'metadata' / (row['dataset'] + '_sample_metadata.feather'))
                               for row in inventory}))
+        if control['schema'] == UNC32_SCHEMA:
+            result.update(worker_exit_not_established=True, completion_criterion='VALIDATED_PUBLISHED_ARTIFACTS',
+                          publication_scope='CURRENT_UNCORRECTED32_METHODS_AND_ADOPTED_METADATA', sample_metadata_published=True,
+                          physical_rows=32, core_artifacts=40, runtime_jsons=16, timing_feathers=40, sample_metadata_feathers=8,
+                          preparation_caches_copied=False, preparation_lineage=science['preparation_lineage'],
+                          runtime_companions=audit54_runtime_lineage(inventory, mappings),
+                          runtime_companion_policy='BYTE_IDENTICAL_ORIGINAL_FIT_EVIDENCE_NOT_REBASED; VALIDATE_ORIGINAL_PRODUCER_PATH_AND_CHECKED_COPY_LINEAGE',
+                          scoring_policy='UNKNOWN_STORED_POLICY_REQUIRES_LATER_DISTANCE_ONLY_FIVE_METRIC_EVALUATION')
         if control['schema'] == UNC4_SCHEMA:
             result.update(worker_exit_not_established=True, completion_criterion='VALIDATED_PUBLISHED_ARTIFACTS', publication_scope='FOUR_MRVI_FITS_ONLY', sample_metadata_published=False,
                           runtime_companion_policy='BYTE_IDENTICAL_ORIGINAL_FIT_EVIDENCE_NOT_REBASED',
@@ -1645,7 +1862,7 @@ def main():
             require(completed.tzinfo is not None and completed <= datetime.datetime.now(datetime.timezone.utc), 'Invalid completion timestamp')
             record(Path(args.report), run, report_producer); owner(Path(args.report), run, {'OK'})
             require(fields(run / 'status/terminal')['STATE'] == 'NOOP_VALIDATED', 'Publication run is not terminal validated')
-            print('FAILED16_UNC4_PUBLICATION_CONTRACT_OK' if control['schema'] == UNC4_SCHEMA else 'MAIN_V2_SCIENCE_PUBLICATION_CONTRACT_OK' if control['schema'] in MAIN_SCHEMAS else 'BL_PUBLICATION_CONTRACT_OK'); return
+            print('REMAINING97_UNC32_PUBLICATION_CONTRACT_OK' if control['schema'] == UNC32_SCHEMA else 'FAILED16_UNC4_PUBLICATION_CONTRACT_OK' if control['schema'] == UNC4_SCHEMA else 'MAIN_V2_SCIENCE_PUBLICATION_CONTRACT_OK' if control['schema'] in MAIN_SCHEMAS else 'BL_PUBLICATION_CONTRACT_OK'); return
         write_receipt(args.report, result)
     except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
         parser.exit(1, f'ERROR: {error}\n')
