@@ -74,11 +74,12 @@ decisions have been applied to existing artifacts.
   supplement now has50 correct standard errors and passed final visual QA.
   PCApolishv2 is complete/reviewed/visually approved;13maintained PDF/PNG files
   and six bounded CSVs are published locally. No raw RNA was transferred.
-- **Current compute:** corrected final projection gate
-  `ecoda_stage5_p6_analysis_projection_20261110_v2` isRUNNING with one official
-  waiter (19206). It uses the reviewed v3controlb2b589… with284 exact Arrow ID
-  contracts. First projectionv1 failed on intake metadata, remains failed, and
-  triggers no method refit; all underlying scientific results remain reusable.
+- **Current validation:** corrected final projection gate
+  `ecoda_stage5_p6_analysis_projection_20261110_v2` finishedCOMPLETED0 at07:20:49UTC;
+  its sole waiter and terminal inspection confirm scalar4666721COMPLETED0.
+  The pinned run audit is in progress before reviewer approval and transfer.
+  It uses the reviewed v3controlb2b589… with284 exact Arrow ID contracts.
+  First projectionv1 remains failed; all scientific method results are reused.
 - **Remaining P6:** validate/mirror the thin1100-row projection, evaluate
   five-metric benchmark/batch tables including both Kidney axes, refresh and
   review the remaining maintained figures/reports, then verify the finite
@@ -4759,3 +4760,23 @@ and input-only review, not a success dependency on the failed97 gate.
 - Local depth QA caught a preexisting summarise-shadowing bug producing50NA standard errors. One-line fix computesSE before replacingvalue; committed/pushed b7a26f6 with focused actual-chunk regression, leaving all94add/22del foreign notebook changes unstaged. Independent checks match550datasetmeans/50finiteSE to baseR sd/sqrt11; refreshed depthPDF passes final visual/numericQA(587e4e5e…). Resident validated1991draws were reused without resampling/rescoring.
 - PCAreader source-policy strings differ because count/PCA andmetric releases describe different purposes. All34raw artifactMD5s/current inputMD5s match. Reviewede017d72 now derives exact parentMD5+origin from checked local projection proofs and requires both for cross-purpose reuse, with explicit PCA-purpose policy and currentinput/required-new checks. Focused negative tests reject falselegacy-to-new promotion, badhash/input/origin/proof; same-purpose compatibility remains. No result/RNA body is read by this metadata join. Driver v4 preserves the foreign notebook layout and resident depth results.
 - Approved next gate`ecoda_stage5_p6_analysis_projection_20261110_v2` / run`stage5_p6_analysis_projection_20261110_v2`: unchangedbe1951/c870/runtime8fcd, corrected v3controlb2b589…,1100same rows/selectionb6eba1f8, one1CPU64G2h scalar, existingproject_analysis_release.sh --operationprojection/ecoda-benchmark. Scoped preflight and ROOT launch review passed; last successful same-group PCApolish is reviewed, no failed formal dependencies. Recovery performs projection serialization/validation only, reusing all completed method outputs. Exact spec/command/review in`.gate/p6_analysis_projection1100_v2_20261110_v1/ready_v1`; one waiter/sole inspect/bridge/pinned audit/reviewer required before thin mirror/local benchmark+batch execution.
+
+### Projection terminal pass and MDS display review —2026-11-10
+
+- Projectionv2 finishedCOMPLETED0 at07:20:49UTC. Its single waiter completed;
+  sole inspection at07:23 confirms4666721COMPLETED0 with exactly one accounting
+  query. The existing bridge preserves that raw accounting; pinnedbe1951
+  run-scoped audit is running before ROOT review and finite local transfer.
+  No method, preprocessing or RNA fit was repeated.
+- Reviewed/pushed documentation checkpointb9684ae records P0–P5 completion
+  and remaining P6 work inREADME,NOTES,onboardingREADME and this plan.
+- Pre-execution figure QA found incorrect clinical-response wording only in
+  Bassez supplementary MDS. Minimal maintained chunk14 fix uses the existing
+  Expander/Non-expander display helper and Clonal expansion legend. The focused
+  actual-chunk fixture and independent review preserve distances, source labels,
+  coordinates, scores, main12 supplementary normalization and intentional
+  extended21 Figure2B pool (which includes frequency). No new scoring/model run.
+  Frozen driver v5 changes only chunks5(comment)/14(display); reverse-patch
+  comparison reconstructs exact v4 bytes and preserves all foreign notebook
+  changes and resident depth/SE results. NotebookSHAe2755f0a…, testSHAb87945c1…;
+  packet`.gate/benchmark_figure_execution_20261110_v5`.

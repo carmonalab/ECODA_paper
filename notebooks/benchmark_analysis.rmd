@@ -256,8 +256,8 @@ if (analysis_scope == "preprint") {
 df_benchmark <- df_benchmark[df_benchmark$method %in% analysis_methods, ]
 benchmark_main_normalization_methods <- methods_in_scope(benchmark_main_method_keys)
 benchmark_extended_normalization_methods <- methods_in_scope(benchmark_extended_method_keys)
-# MDS panels use Figure 2A's exact normalization pool, including its saved NULL
-# baseline even when that baseline is not drawn in the MDS panel.
+# Supplementary MDS panels use Figure 2A's main-method pool, including NULL.
+# Figure 2B uses the documented extended pool because it also displays frequency.
 
 hitme_flagged_ds <- names(datasets)[vapply(names(datasets), function(k) "hitme" %in% flag_status_for(k), logical(1))]
 scatomic_flagged_ds <- names(datasets)[vapply(names(datasets), function(k) "scatomic" %in% flag_status_for(k), logical(1))]
@@ -733,7 +733,7 @@ for (ds in names(result_list[["bmark"]])) {
   })))
   
   if (ds == "Bassez") {
-    all_possible_labels <- c("Responders", "Non-responders")
+    all_possible_labels <- levels(benchmark_pca_display_labels(c("E", "NE"), ds))
   }
   
   for (m in names(methods)) {
@@ -741,10 +741,7 @@ for (ds in names(result_list[["bmark"]])) {
     labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
     
     if (ds == "Bassez") {
-      labels <- as.character(labels)
-      labels[labels == "E"] <- "Responders"
-      labels[labels == "NE"] <- "Non-responders"
-      labels <- factor(labels, levels = c("Responders", "Non-responders"))
+      labels <- benchmark_pca_display_labels(labels, ds)
     }
     
     labels <- factor(labels, levels = sort(all_possible_labels))
@@ -757,6 +754,8 @@ for (ds in names(result_list[["bmark"]])) {
       title = methods[[m]],
       separation_score = benchmark_normalized_mean(df_benchmark, ds, m, benchmark_main_normalization_methods)
     )
+    if (ds == "Bassez") plot_list[[m]] <- plot_list[[m]] +
+      labs(color = "Clonal expansion", shape = "Clonal expansion")
   }
   
   wrap_plots(plot_list) +
