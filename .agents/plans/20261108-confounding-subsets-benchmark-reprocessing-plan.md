@@ -3,6 +3,16 @@
 Status: **IMPLEMENTING. User confirmed shared understanding and authorized implementation, checkpoint/push, documentation harmonization and parallel work.**
 Created: 2026-11-08, Europe/Zurich. Owner: the orchestrator of this chat.
 
+**Current ownership boundary —2026-11-10:** the user explicitly narrowed this
+chat to finishing Gong/any remaining HPC work and finalizing processed data.
+Downstream analysis/plots are assigned to chat
+`01a1c565-ebcf-7931-8ce7-8a858b2eb79e`. This orchestrator retains Gong terminal
+review, exact33 data admission/thin projection/access-control preparation and
+data NAS backup/release; further metric appending, rendering, workbook refresh,
+layout changes and downstream figure QA belong to that external assignment.
+The previously agreed scientific reporting contract remains valid. Do not
+duplicate its work or treat its pending P6 work as an HPC processing failure.
+
 ## 1. Roles, authority, and update contract
 
 **You are an orchestrator, implementor, or reviewer. Your assignment must name
@@ -83,9 +93,11 @@ decisions have been applied to existing artifacts.
   plotting chunks ran once; resident results are reused for affected-chunk QA
   fixes. All125batch PDFs and53derived outputs plus53sidecars now pass numeric
   and visual QA, with both Kidney axes and the two corrected Harmony arms retained.
-- **Remaining P6:** restore omitted valid PILOT-GM parameter
-  coverage identified by the user, refresh its screen/workbook, then verify the
-  finite derived-output/final-figure NAS backup. Existing fits remain outside
+- **Remaining data handoff:** finish Gong and admit/project/mirror the exact33
+  supplemental GM results, then verify processed-data NAS backup. External chat
+  `01a1c565-ebcf-7931-8ce7-8a858b2eb79e` owns the subsequent33-result metric
+  append, screen/workbook refresh, further analysis/plots and final figure QA/
+  archival. Existing fits remain outside
   recomputation unless exact additional missing/current-input-invalid rows are
   established. This checkpoint does not claim all publication figures are final.
 - **Current supplemental compute:** Step3 GM parameter gate completed0 at
@@ -634,7 +646,7 @@ statuses, scientific output roots and one synchronization owner per root.
 | P3: source reconciliation | DONE | Selected Bamboo sources/runtime/NAS verified; Bassez unchanged-input proof and current cohort identities reviewed before targeted reruns |
 | P4: changed inputs | DONE | All16 batch derivatives and53-sample Stephenson input individually reviewed; Bassez metadata repair and Stephenson dual annotation validated/synchronized/approved |
 | P5: method waves | IN_PROGRESS | Original selections reviewed and NAS-published; user-identified missing GM parameter coverage reopens only the explicitly verified missing/current-input-invalid settings, with all completed outputs reused |
-| P6: evaluation/reporting | IN_PROGRESS | Complete five-metric scores, score both Kidney axes, refresh all affected maintained reports/figures from approved results, verify plots and document limitations/provenance |
+| P6: evaluation/reporting | IN_PROGRESS | Core915/five-metric results and both Kidney-axis batch reports already reviewed; user transferred remaining33-result append/plot/workbook changes and further downstream analysis to chat01a1c565-ebcf-7931-8ce7-8a858b2eb79e. This chat finishes its data/control handoff only |
 
 ### P0: first implementation action, before harmonization or pipeline changes
 
@@ -5022,3 +5034,38 @@ and input-only review, not a success dependency on the failed97 gate.
   excludes the command-file newline (fileSHA34c72462… includes it). Manifest
   .gate/ecoda_stage5_p6_gong_pilotgm1_20261110_v1.json isRUNNING and exactly one
   unbounded waiter68872 is armed. No actual scheduler ID is yet asserted.
+
+- Gong startup verified10:42:44UTC from run-owned files only: native input
+  preflight4667036 isOK; method array4667042/watchdog4667043 emitted and the
+  actual parameter matrix contains exactly the one approved GongHR3000 row.
+  Aggregate/retry IDs remain to be collected at terminal completion. No
+  scheduler query or extra fit was issued by this startup check.
+
+### User narrowed scope; downstream ownership handed off —12:25UTC
+
+- User: "just take care of the remaining gong (and others, if any) hpc jobs,
+  to finalize the data processing"; downstream analysis/plots now belong to
+  chat01a1c565-ebcf-7931-8ce7-8a858b2eb79e. A directly authorized coordination
+  message supplies exact approved inputs, controls, current scopes and prepared
+  append/QA packets. This chat will not score the new33 or rerender27/51.
+- Core processing is complete/reviewed/NAS-published. GongHR3000 remains the
+  only model fit; one waiter68872 remains armed. 12:22filesystem check shows
+  current896291-cell input startup, no failure/terminal marker, quiet stdout.
+  Existing reviewed Gong default timing13990.63seconds (~3h53m) explains a
+  plausible long tail; historical hardware does not establish a precise ETA.
+- Existing root R48284/PID77311 contains915scored entries/4575canonical cells
+  (coreMD5c4521b59b7a16f2ac1a3f28a9177dc90), with append/QA definitions loaded
+  and .gm33_qa_baseline captured. No new33 scoring or append has occurred.
+  Batch R25407/PID87913 retains the reviewed reports. Preserve both sessions;
+  coordinate before any new writer or closure. Foreign notebook94add/22del
+  hunks remain owned by chat01a1c093-4a2f-7e90-81d2-cc472ebbc728 and unstaged.
+- Data handoff must distinguish future benchmark1133 control (old local1100
+  parentfa146125… preserved plus33 additions) from the final152-row batch
+  majority control e75b1036df9d80d21cd633058957f55f. RawA1100/1133 retains the
+  historical Lupus UNC first-row metadata and must not replace that batch child.
+- Local final-figure backup proposals batch266/PCA19 and the postGM33 QA packet
+  remain available to the downstream owner; no figure staging/NAS copy was
+  performed. This chat's remaining archive scope is validated processed data
+  and its provenance/control chain. A native two-sibling core/release backup
+  option is under review to overlap immutable22510-file core IO with Gong;
+  no such copy has yet been launched or represented as complete.
