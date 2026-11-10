@@ -532,6 +532,12 @@ _audit_analysis_release() {
   case "${purpose}" in
     analysis_metadata_projection) expected_operation=projection ;;
     analysis_pca_render) expected_operation=render-pca ;;
+    singlecell_breast_unc_pilot)
+      expected_operation=singlecell-breast-unc-pilot
+      scope_producer=singlecell_pilot_scope
+      submission_producer=singlecell_pilot_submission
+      validator_name=singlecell_batch_geometry.sh
+      ;;
     saved_cluster_counts_screen)
       expected_operation=saved-clusters
       scope_producer=saved_cluster_scope
