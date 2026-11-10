@@ -216,6 +216,42 @@ validate_benchmark_pca_tables <- function(tables,bounds) {
   invisible(TRUE)
 }
 
+benchmark_pca_reference <- function(hr, metadata, contract=NULL) {
+  valid_ids<-function(x)!is.null(x)&&length(x)>0L&&!anyNA(x)&&all(nzchar(x))&&!anyDuplicated(x)
+  ids<-unname(names(metadata$cells_per_sample))
+  if(!valid_ids(ids)||!valid_ids(names(metadata$labels))||!valid_ids(names(hr$labels))||
+     !setequal(names(metadata$labels),ids)||!setequal(names(hr$labels),ids)||
+     anyNA(metadata$labels)||anyNA(hr$labels)||any(!nzchar(as.character(metadata$labels)))||any(!nzchar(as.character(hr$labels)))||
+     !identical(as.character(metadata$labels[ids]),as.character(hr$labels[ids]))||
+     !identical(as.integer(metadata$n_samples),as.integer(length(ids))))
+    stop("PCA reference/metadata sample identity mismatch")
+  counts<-as.matrix(hr$counts)
+  if(!is.numeric(counts)||!valid_ids(rownames(counts))||!valid_ids(colnames(counts))||
+     !setequal(rownames(counts),ids)||any(!is.finite(counts)))stop("Invalid PCA author count axes")
+  counts<-counts[ids,,drop=FALSE]-.5
+  totals<-as.numeric(metadata$cells_per_sample[ids]);annotated<-rowSums(counts)
+  keep<-colSums(counts)>0
+  invalid<-tolower(trimws(colnames(counts)))%in%c("","na","nan","none","<na>","unknown","n/a","null","unassigned")
+  if(any(counts<0)||any(counts!=floor(counts))||any(annotated<=0)||
+     length(totals)!=length(ids)||any(!is.finite(totals))||any(totals<=0)||any(totals!=floor(totals))||
+     any(annotated>totals)||length(metadata$n_cells)!=1L||!is.finite(metadata$n_cells)||
+     sum(totals)!=metadata$n_cells||!any(keep)||any(invalid&keep)||
+     length(metadata$n_cell_types_high_res)!=1L||!is.finite(metadata$n_cell_types_high_res)||
+     metadata$n_cell_types_high_res<sum(keep))stop("PCA author counts disagree with current metadata")
+  shape<-c(n_samples=length(ids),n_cell_types=sum(keep),total_cells=sum(totals),annotated_cells=sum(annotated))
+  # Missing author annotations are recorded coverage, not missing samples. A
+  # partial table needs the exact reviewed count contract, never a guessed total.
+  if(is.null(contract)) {
+    if(any(annotated!=totals)||metadata$n_cell_types_high_res!=sum(keep))stop("Partial PCA annotation coverage requires its reviewed count contract")
+  } else if(!identical(as.character(contract$sample_ids),ids)||
+            !identical(as.numeric(unlist(contract[names(shape)])),as.numeric(shape)))
+    stop("PCA reviewed count contract mismatch")
+  list(ids=ids,labels=hr$labels[ids],counts=counts[,keep,drop=FALSE],
+    coverage=list(n_samples=length(ids),n_cells=sum(totals),n_cell_types=sum(keep),
+      annotated_cells=sum(annotated),unannotated_cells=sum(totals)-sum(annotated),
+      recorded_cell_types=metadata$n_cell_types_high_res,empty_categories=colnames(counts)[!keep]))
+}
+
 render_benchmark_pca_release <- function(control,output_root,datasets,control_md5) {
   selected<-benchmark_pca_render_scope(control,datasets)
   if(.analysis_exists(output_root)||!grepl("^/",output_root))stop("PCA render root is create-only")
@@ -233,22 +269,17 @@ render_benchmark_pca_release <- function(control,output_root,datasets,control_md
     rows<-load_analysis_release(selected$ledger[take,,drop=FALSE],selected$expected_scope[take,,drop=FALSE])
     methods<-vapply(rows,function(x)x$source$method_key,character(1));names(rows)<-methods
     hr<-rows$ECODA_authors_HR$result;metadata<-rows$`__dataset_metadata__`$result
-    ids<-names(hr$labels)
-    if(is.null(ids)||anyDuplicated(ids)||anyNA(hr$labels)||
-       !identical(as.character(metadata$labels[ids]),as.character(hr$labels))||
-       !setequal(names(metadata$labels),ids)||!identical(as.integer(metadata$n_samples),as.integer(length(ids))))
-      stop("PCA reference/metadata sample identity mismatch: ",dataset)
-    counts<-as.matrix(hr$counts)-.5
-    if(!identical(rownames(counts),ids)||any(!is.finite(counts))||any(counts<0)||any(counts!=floor(counts))||
-       sum(counts)!=metadata$n_cells||ncol(counts)!=metadata$n_cell_types_high_res||
-       !identical(as.numeric(rowSums(counts)),as.numeric(metadata$cells_per_sample[ids])))
-      stop("PCA author counts disagree with current metadata: ",dataset)
-    coverage[[dataset]]<-list(n_samples=length(ids),n_cells=metadata$n_cells,n_cell_types=ncol(counts))
+    reference<-benchmark_pca_reference(hr,metadata,control$cohort_contract[[dataset]])
+    ids<-reference$ids;counts<-reference$counts;hr$labels<-reference$labels
+    coverage[[dataset]]<-reference$coverage
     bundles<-list()
     for(method in setdiff(methods,"__dataset_metadata__")) {
       item<-rows[[method]];bundle<-item$result;x<-as.matrix(bundle$feat_mat)
-      if(!is.numeric(x)||!identical(rownames(x),ids)||!ncol(x)||any(!is.finite(x))||
-         (nrow(x)==ncol(x)&&identical(colnames(x),ids))||
+      if(!is.numeric(x)||is.null(rownames(x))||anyNA(rownames(x))||anyDuplicated(rownames(x))||
+         !setequal(rownames(x),ids)||!ncol(x)||is.null(colnames(x))||anyNA(colnames(x))||
+         any(!nzchar(colnames(x)))||anyDuplicated(colnames(x))||any(!is.finite(x))||
+         (nrow(x)==ncol(x)&&setequal(colnames(x),ids))||
+         is.null(names(bundle$labels))||anyDuplicated(names(bundle$labels))||!setequal(names(bundle$labels),ids)||
          !identical(as.character(bundle$labels[ids]),as.character(hr$labels)))
         stop("A genuine, sample-aligned feature matrix is required for PCA: ",dataset,"/",method)
       calculated<-NULL;scorer<-function(distance,labels){calculated<<-calc_sep_score(distance,labels,parallel=1L);calculated}
@@ -257,6 +288,10 @@ render_benchmark_pca_release <- function(control,output_root,datasets,control_md
       five<-setNames(as.list(evaluated$scores$value),evaluated$scores$metric)
       bundle$scores<-utils::modifyList(if(is.null(bundle$scores))list() else bundle$scores,
         if(is.null(calculated))five else utils::modifyList(calculated,five))
+      # Display views align by names after scoring the unchanged source geometry.
+      bundle$feat_mat<-x[ids,,drop=FALSE];bundle$labels<-bundle$labels[ids]
+      bundle$dist_mat<-stats::as.dist(as.matrix(evaluation_distance(bundle$dist_mat))[ids,ids,drop=FALSE])
+      if(!is.null(bundle$counts))bundle$counts<-bundle$counts[ids,,drop=FALSE]
       bundles[[method]]<-bundle
     }
     panels<-lapply(c("Pseudobulk_hvg2000","ECODA_authors_HR"),function(method) {
@@ -295,7 +330,7 @@ render_benchmark_pca_release <- function(control,output_root,datasets,control_md
     for(item in rows)source_rows[[length(source_rows)+1L]]<-data.frame(dataset=dataset,method_key=item$source$method_key,
       artifact_path=item$source$artifact_path,artifact_md5=item$source$md5,receipt_path=item$source$receipt_path,
       receipt_md5=item$source$receipt_md5,origin=item$receipt$origin,input_md5=item$identity$input_md5,source_policy=item$identity$source_policy)
-    rm(rows,bundles,panels,paired,hr,metadata,counts);invisible(gc(FALSE))
+    rm(rows,bundles,panels,paired,hr,metadata,counts,reference,x,bundle,item,evaluated);invisible(gc(FALSE))
   }
   filenames<-benchmark_pca_render_files(names(datasets));paths<-file.path(output_root,filenames)
   report<-list(schema="ecoda_saved_pca_render_v1",control_md5=control_md5,datasets=names(datasets),
