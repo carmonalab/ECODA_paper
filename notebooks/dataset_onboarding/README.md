@@ -22,8 +22,8 @@ not a production job manifest.
   onboarding evidence and notes. They do not override `datasets.json`.
 - The [active reprocessing plan](../../.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md)
   owns approved decisions, exact raw-ID selection, execution scope, and applied
-  status. The selections below are approved targets; registry edits or valid
-  historical checksums do not establish that existing results already use them.
+  status. Applied progress is summarized in the dated checkpoint below;
+  registry edits or historical checksums alone do not establish release approval.
 - Only benchmark views supply comparative timings and retain their configured
   CPU/GPU model constraints. Both batch views permit any compatible hardware
   model. Batch MrVI defaults to CPU; future GPU work requires explicit
@@ -176,9 +176,9 @@ normalization, HVG selection, embeddings or correction-model covariates.
   and 50,809 missing values were filled from `cellType` across 74,948 cells and
   26 samples, yielding 40 categories. Source inputs and protected counts,
   embeddings and other metadata are unchanged. The approved HR-dependent
-  benchmark methods have not yet been recomputed.
-- Recompute the whole-sample blacklist pseudobulk variant across all 11
-  benchmark datasets. The chosen exclusion source is the unchanged frozen
+  method work is complete, with selected releases reviewed and NAS-validated.
+- The whole-sample blacklist pseudobulk variant is complete across all 11
+  benchmark datasets. The exclusion source is the unchanged frozen
   human aux groups G1/S, G2/M, Mito, Ribo, TCR. Filter before fitting and select
   2,000 eligible genes afterward. Add no sex/chromosome mask or exemption.
 
@@ -192,6 +192,11 @@ MDS means use the corresponding pool. Preserve stored primary NULL labels,
 while Kidney tissue NULL records seed 124. Batch grids contain 360 uncorrected
 or 405 corrected values (nine evaluation entries, five metrics).
 
-The reporting code preserves publication filenames and numbering. No current
-production figure refresh is claimed. Stage 3 and BL v2 progress, subsequent
-method runs and release approval are tracked in the active plan.
+Operational checkpoint (**2026-11-10**): P0–P5 processing and selected method
+releases are complete, scientifically reviewed and NAS-validated; no method
+GPU work remains queued. Saved-label and zero-imputation screens, PCA rendering
+and cell-depth diagnostics are complete and reviewed. P6 thin projection,
+reporting, remaining figure QA and final backup are in progress; not every
+publication figure is yet claimed regenerated. Filenames and numbering are
+preserved. The [active plan](../../.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md)
+owns exact execution/release status and preserved failed incidents.

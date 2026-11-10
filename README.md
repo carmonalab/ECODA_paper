@@ -99,11 +99,17 @@ is partly confounded with suspension; its NULL uses the recorded seed 124.
 
 Bassez's metadata-only HR repair is complete (74,948 cells, 26 samples, 50,809
 fills, 40 categories), with source inputs and protected data unchanged. Its
-approved HR-dependent benchmark reruns remain pending. Publication filenames
-and numbering are preserved; implemented reporting code does not establish
-that current production figures have been regenerated. The plan tracks Stage 3,
-BL v2 and subsequent release status. The frozen auxiliary sources are unchanged;
-no sex-gene mask or chromosome annotation was added.
+approved HR-dependent method work is complete. As of **2026-11-10**, P0–P5
+processing and selected method releases are complete, scientifically reviewed
+and NAS-validated; no method GPU work remains queued. Saved-label and
+zero-imputation screens, PCA rendering and cell-depth diagnostics are complete
+and reviewed. P6 thin projection, reporting, remaining figure QA and final
+backup are in progress; this does not claim every publication figure has been
+regenerated. Publication filenames and numbering are preserved. The
+[active plan](.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md)
+owns the exact run and release ledger, including preserved failed incidents.
+The frozen auxiliary sources are unchanged; no sex-gene mask or chromosome
+annotation was added.
 
 ### scECODA example data
 

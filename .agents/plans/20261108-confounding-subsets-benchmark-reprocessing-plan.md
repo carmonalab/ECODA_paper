@@ -69,19 +69,21 @@ decisions have been applied to existing artifacts.
   publications. All original97 recovery workers succeeded; no benchmark GPU
   job remains pending. Failed historical controllers/gates remain failed;
   selected outputs were independently requalified and published.
-- **Derived screens reviewed:** Saved22v3 and zeroimp11v2 are complete and
-  reviewer-approved; completed checkpoints were reused. PCA34 rendering is
-  complete/reviewed, with21finished payloads/checksums mirrored locally and
-  visual QA in progress. No raw RNA matrices were copied locally.
-- **Current compute:** cell-depth11 gate
-  `ecoda_stage5_p6_cell_depth_20261110_v1` isRUNNING with one official waiter;
-  exact scope and terminal obligations are recorded at the end of this plan.
-- **Remaining P6:** seal the actual1100-row admitted release, consolidate
-  reviewed benchmark-only timings, produce the thin local projection, evaluate
-  all five metrics including separate Kidney condition/tissue axes, refresh
-  maintained figures/reports, perform visual/scientific QA and verify the final
-  finite derived-output backup. Parallel agents prepare those independent
-  reporting tasks. No final figures or overall completion are claimed yet.
+- **Derived screens reviewed:** Saved22v3, zeroimp11v2 and cell-depth11 are
+  complete/reviewer-approved. All1991depth draws were validated; its five-metric
+  supplement now has50 correct standard errors and passed final visual QA.
+  PCApolishv2 is complete/reviewed/visually approved;13maintained PDF/PNG files
+  and six bounded CSVs are published locally. No raw RNA was transferred.
+- **Current compute:** corrected final projection gate
+  `ecoda_stage5_p6_analysis_projection_20261110_v2` isRUNNING with one official
+  waiter (19206). It uses the reviewed v3controlb2b589… with284 exact Arrow ID
+  contracts. First projectionv1 failed on intake metadata, remains failed, and
+  triggers no method refit; all underlying scientific results remain reusable.
+- **Remaining P6:** validate/mirror the thin1100-row projection, evaluate
+  five-metric benchmark/batch tables including both Kidney axes, refresh and
+  review the remaining maintained figures/reports, then verify the finite
+  derived-output and final-figure NAS backup. Dedicated benchmark and batch R
+  sessions are ready; resident depth data/plots are reused during iteration.
 - Detailed immutable evidence, recovery history and current launch identities
   are retained in the dated ledger below. The following Nov9 checkpoint is
   superseded history and does not describe the current queue.
@@ -4754,6 +4756,6 @@ and input-only review, not a success dependency on the failed97 gate.
 
 - All284 Feather ID contracts are now evidence-bound:268method files use`__index_level_0__`;16sample-metadata files use`Sample`. Actual98schema-only captureSHA`97a2fe039a963780189a0096612b4f1e1a8304e0286b6b5e64bc5bdf9fedff03` complements186existing footer witnesses. The two Lung metadata schemas contain bothSample andrawsample; pinned native exporter explicitly designatesSample. New intake corrects103blank+165wrong nonblank fields (140legacy+25native) and leaves every other1100ledger field/current input/source byte/key/origin/require-new flag unchanged. Sealer rejects missing/wrong/extra ID contracts before outputs. ROOT reviewSHA`69860b2301f7ccfa6d2d712f409211c26deded438dd4e173cac401c93eecc6e3`; v3controlMD5`b2b589e665ff351891446d51925f7239`. Failedv1/controlv2 remain unchanged.
 - PCApolishv2 finished4666711COMPLETED0 (05:14:30–05:16:38UTC), then one waiter/sole inspect/bridge/pinned5aeeaudit/reviewer phase passed. ROOT scientific reviewSHA`fa3cf060655e50c6dc9f7fc2eb5244e53bda7708baa3efb77b74903bc7d8332d`. Final independent12PDF visualQA passed (f553f918…); all34scientific sources/coverage/origins unchanged and sixCSV files byte-identical tov1. Published finite21outputs+21proofs to`data/derived/benchmark_pca_render_20261110_v2`, renderMD5`8a1c7e8496e46788f653530509471c70`;13maintained PDF/PNG plot files refreshed. No raw RNA transfer.
-- Local depth QA caught a preexisting summarise-shadowing bug producing50NA standard errors. One-line fix computesSE before replacingvalue; committed/pushedeb7a26f6 with focused actual-chunk regression, leaving all94add/22del foreign notebook changes unstaged. Independent checks match550datasetmeans/50finiteSE to baseR sd/sqrt11; refreshed depthPDF passes final visual/numericQA(587e4e5e…). Resident validated1991draws were reused without resampling/rescoring.
+- Local depth QA caught a preexisting summarise-shadowing bug producing50NA standard errors. One-line fix computesSE before replacingvalue; committed/pushed b7a26f6 with focused actual-chunk regression, leaving all94add/22del foreign notebook changes unstaged. Independent checks match550datasetmeans/50finiteSE to baseR sd/sqrt11; refreshed depthPDF passes final visual/numericQA(587e4e5e…). Resident validated1991draws were reused without resampling/rescoring.
 - PCAreader source-policy strings differ because count/PCA andmetric releases describe different purposes. All34raw artifactMD5s/current inputMD5s match. Reviewede017d72 now derives exact parentMD5+origin from checked local projection proofs and requires both for cross-purpose reuse, with explicit PCA-purpose policy and currentinput/required-new checks. Focused negative tests reject falselegacy-to-new promotion, badhash/input/origin/proof; same-purpose compatibility remains. No result/RNA body is read by this metadata join. Driver v4 preserves the foreign notebook layout and resident depth results.
 - Approved next gate`ecoda_stage5_p6_analysis_projection_20261110_v2` / run`stage5_p6_analysis_projection_20261110_v2`: unchangedbe1951/c870/runtime8fcd, corrected v3controlb2b589…,1100same rows/selectionb6eba1f8, one1CPU64G2h scalar, existingproject_analysis_release.sh --operationprojection/ecoda-benchmark. Scoped preflight and ROOT launch review passed; last successful same-group PCApolish is reviewed, no failed formal dependencies. Recovery performs projection serialization/validation only, reusing all completed method outputs. Exact spec/command/review in`.gate/p6_analysis_projection1100_v2_20261110_v1/ready_v1`; one waiter/sole inspect/bridge/pinned audit/reviewer required before thin mirror/local benchmark+batch execution.

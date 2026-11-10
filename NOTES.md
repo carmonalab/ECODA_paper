@@ -850,6 +850,14 @@ figure-hierarchy decision is pending.
 
 ## 4. Benchmark regeneration and annotation invariants
 
+Operational checkpoint (**2026-11-10**): P0–P5 processing and selected method
+releases are complete, scientifically reviewed and NAS-validated. No method
+GPU work remains queued. Saved-label and zero-imputation screens, PCA rendering
+and cell-depth diagnostics are complete and reviewed. P6 thin projection,
+reporting, remaining figure QA and final backup are in progress. The
+[active plan](.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md)
+owns the exact run/release ledger and preserved failure history.
+
 - Stage 3 counts observations per raw/staged view before Scanpy's per-cell and
   per-gene filters. Samples with fewer than 500 observations are removed;
   exactly 500 are retained. The authoritative raw/view audit identifies
@@ -861,8 +869,9 @@ figure-hierarchy decision is pending.
   The 2026-11-08 source audit found 50,809 missing HR labels; the accepted
   metadata-only derivative now fills all of them in 74,948 cells/26 samples,
   with 40 resulting categories and unchanged source/protected data. The
-  approved HR-dependent benchmark reruns remain pending. This is an annotation
-  contract change, not a biological-label substitute. The dual HiTME/scATOMIC
+  approved HR-dependent method work is complete, with selected releases
+  scientifically reviewed and NAS-validated. This is an annotation contract
+  change, not a biological-label substitute. The dual HiTME/scATOMIC
   annotation requirement continues to apply after any Stage 3 input changes.
 - scPoli's label encoder can receive mixed strings and `NaN` values and fail
   under NumPy 2.x. PILOT's cost matrix can treat `NaN` as a pseudo-cell type
