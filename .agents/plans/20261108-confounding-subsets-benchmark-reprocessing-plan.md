@@ -88,12 +88,14 @@ decisions have been applied to existing artifacts.
   finite derived-output/final-figure NAS backup. Existing fits remain outside
   recomputation unless exact additional missing/current-input-invalid rows are
   established. This checkpoint does not claim all publication figures are final.
-- **Current supplemental compute:** Step3 GM parameter gate isRUNNING (launched
-  08:49:43UTC), one native three-task array4666814 with watchdog4666817 after
-  successful input preflight4666813. Exact3emitted rows and all3workers' current
-  input/startup are verified without scheduler polling. One official waiter15975
-  remains armed. Next same-group work is27legacy compatibility checks, then the
-  missing GongHR3000 fit; existing valid defaults stay excluded.
+- **Current supplemental compute:** Step3 GM parameter gate completed0 at
+  10:10:22UTC and is scientifically reviewed/NAS-validated/officially approved.
+  All3current53-sample parameter outputs pass; sole accounting covers preflight
+  4666813,array4666814,watchdog4666817,aggregate4666818 with zero retries. Next
+  same-group legacy27 compatibility gate also completed0 at10:26:24UTC,
+  scalar4667030; all27existing results are scientifically approved for reuse.
+  Only the missing GongHR3000 fit isRUNNING, launched10:32:45UTC with solewait
+  68872 armed; existing valid defaults stay excluded.
 - Detailed immutable evidence, recovery history and current launch identities
   are retained in the dated ledger below. The following Nov9 checkpoint is
   superseded history and does not describe the current queue.
@@ -4941,3 +4943,82 @@ and input-only review, not a success dependency on the failed97 gate.
   short legacy27 terminal reviews in the same ecoda-benchmark group. The finite
   legacy27 audit identifies any genuinely invalid existing parameter outputs
   before deciding the exact next compute scope. No default or healthy fit rerun.
+
+### Step3 approved and exact legacy27 launch scope —10:23UTC
+
+- Step3 solewait15975 ended; one firstinspect passed with all6actual accounting
+  rowsCOMPLETED0 across4recorded roots, no OOM retry. Accounting bridge preserves
+  those raw bytes and projects4actual roots without another scheduler query.
+  Source352-configured pinned run audit passed. Sciencev4 validates all3finite
+  symmetric nonnegative zero-diagonal53x53 matrices, exact ordered current
+  samples/primary labels and input7d92fb6e…, native proofs/owners/runtime/timing.
+  NAS7payloads+7unaltered birthPATH proofs match, selected files666/directories777,
+  checksum manifest equal/666. ROOT reviewa82cdbaa… and official reviewer phase
+  approve the3new results; five-metric evaluation still awaits the full33intake.
+- Review-command incidents are preserved separately from healthy science:
+  initial native audit invocations omitted required configuration; v3 sources
+  immutable slurm_config and passes. Sciencev1 was never executed; v2 confused
+  the optional remote_exit_code path with terminal_status.exit_code; v3 found
+  a helper previously executed inline and never staged. V4 reuses that exact
+  accepted9558-byte helper in one fresh metadata path and passes. No accounting
+  repeat, method rerun or scientific-source change occurred.
+- Approved next gate ecoda_stage5_p6_legacy_pilotgm27_20261110_v1 / run
+  stage5_p6_legacy_pilotgm27_20261110_v1, exact immutable wrapper and staged
+  request in .gate/p6_pilotgm27_audit_inputs_20261110_v1/root_execution_v1.
+  Snapshotf5d8ba97f99983b7cf445c6c3e36a400fcd3e404, source manifest
+  1e96999891cc9a15d45783f5bef4d3ecf87aa6d891d6bfba90895df52be1633f;
+  requestSHA3f2256219225400831ff218df3c64887421be0da6f4dc5244fad150ba5709d20;
+  command-bodySHAb22fa23d475c6be6036fe2f05d07be3390d9a6f9403af9d4f52a6e1c8bd65b4e.
+  Exactly27logical GM parameter rows/28physical files including one existing
+  merged timing,10current input witnesses,0author pairs. One scalar CPU/64G/1h
+  audit job; no model fitting/scoring/RNA access. Metadata20staging and read-only
+  preflight already passed; native executor rechecks immutable identities.
+  Use the same ecoda-benchmark group, no failed formal dependency. Launch once,
+  arm exactly one wait, extract actual scalar ID before sole inspect, source
+  snapshot config for pinned audit, then review actual per-row compatibility.
+  Valid legacy results retain honest legacy provenance; only genuinely invalid
+  settings may add targeted compute to the subsequent Gong wave.
+
+- Legacy27 launched exactly once at10:24:03UTC after prepare and cleanABSENT
+  reconciliation. Root launchreviewaecc6407… binds the20staged metadata files,
+  preflight370e1948…, exact27/28scope and reviewed Step3 predecessor. Durable
+  manifest .gate/ecoda_stage5_p6_legacy_pilotgm27_20261110_v1.json; exactly one
+  unbounded waiter45814 is armed. Extract its actual emitted scalar ID after
+  terminal completion before the sole accounting inspection; no scheduler
+  polling or model recomputation is introduced.
+
+### Legacy27 approved; only GongHR3000 remains a fit —10:31UTC
+
+- Legacy27 finishedCOMPLETED0 at10:26:24UTC, actual scalar4667030; solewait45814
+  ended and the one accounting query passed. Accounting bridge and sourcef5
+  config-initialized native audit/legacy validator pass. Actual175882-byte
+  reportSHA9e765945cbf103c55ebc3dec0d05ea632fd351a36b177f328d68d01d13f36925
+  has27compatible named-distance rows across10cohorts,28physical files,0author
+  pairs and zero fits/scores. All sample orders and full current universes match;
+  GongHR1000 retains its actualsampleID field. Report proof/PUBLISHED record/
+  globalOK owner and all captured source/runtime/control metadata are stable.
+  ROOT review2b2a9f51… and official reviewer phase approve all27aslegacy_reuse.
+  Historical fit revision/runtime remain unproven; stored score policy remains
+  unknown and distance rescoring is mandatory. Four exact parameter timings
+  are valid;23missing costs stay unknown and do not justify a refit.
+- Approved next gate ecoda_stage5_p6_gong_pilotgm1_20261110_v1 / run
+  stage5_p6_gong_pilotgm1_20261110_v1: exactly one
+  Gongsharma_cmv_young_males benchmark pilotgm hvg3000_highres request, no force,
+  no default or other setting rerun. Same352snapshot/aaaeasource manifest/a134
+  archive/8fcdruntime; current180-sample896291-cell inputa4c9be5d…/23281664099bytes.
+  Existing two-control staging/schema-only preflight passed; cached PCA3000
+  float32[896291,50]. Explicit selectionSHA9b2f0de45b545d497193141a9ec5ccea2ed7ff221e9e5b1bce816cb17d111f8a,
+  inputcontrolSHAb904956748ca2904bd88af64c1a0f19922d241656a736ea4ab172ff4b6cd15fa.
+  Wrapper/launchreview/spec: .gate/p6_gong_pilotgm1_20261110_v1/source_bound_v1.
+  Keep benchmarkEPYC-7742/16CPU, excluded cpu046,cpu051,cpu052. Static4initial
+  roots/4units: preflight, one method task, watchdog, aggregate. Sameecoda-benchmark
+  group after both preceding official reviews; no failed formal dependency.
+  Launch exactly once/one wait, collect every actual ID including retries before
+  sole inspect, then source-configured pinned audit/scientific/NAS review.
+
+- Gong1 launched exactly once10:32:45UTC after prepare/cleanABSENT reconcile.
+  Root launchreviewf38eaf6c…; command digest
+  03b596478b202fe38e7f81ebf39feb865e40c2c33b1c1b2373f6088171205c6c
+  excludes the command-file newline (fileSHA34c72462… includes it). Manifest
+  .gate/ecoda_stage5_p6_gong_pilotgm1_20261110_v1.json isRUNNING and exactly one
+  unbounded waiter68872 is armed. No actual scheduler ID is yet asserted.
