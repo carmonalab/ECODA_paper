@@ -63,6 +63,19 @@ decisions have been applied to existing artifacts.
 
 ## Live checkpoint — 2026-11-09 UTC, benchmark recovery OK; both batch contexts RUNNING
 
+- **Latest native check23:44 UTC:** benchmark remains terminal OK;
+  allfour uncorrected method groups are OK and final validation/sync is in
+  progress. Corrected MrVI, PILOT and QOT are OK; corrected preparation,
+  GloScope, pseudobulk and composition are unfinished. No new FAIL marker.
+  The single global97 waiter is still active; do not start a second waiter
+  or claim global terminal approval. Evidence: `method_status.observed.v5.json`.
+- **Completed scientific diagnostics:** old8 Glo postchecks, old24 benchmark
+  RDS checks, old26 Python-result checks and their26 selected-cost checks all
+  passed. Current benchmark23-core science/timing checks also passed. Stored
+  scoring policy is unknown for many ordinary bundles: reuse their validated
+  features/distances and rescore evaluations with the canonical five metrics;
+  do not refit models or silently approve old scalar scores.
+
 - **23:10 UTC milestone:** benchmark child reports native terminal OK at
   23:06:37 UTC: all17 selected physical jobs passed allnine watchdog groups,
   validation and synchronization. The global97 gate remains RUNNING until
@@ -4433,3 +4446,142 @@ Both batch children and the global97 gate continue; one official waiter
 remains armed. Independent read-only audits for old24 benchmark RDS, old26
 Feathers, current23 benchmark payloads and P6 finite evidence are being
 prepared in parallel; valid completed fits stay outside recomputation.
+
+### Scientific diagnostics completed; reporting prerequisites —2026-11-10 00:05 UTC
+
+Actual successful observations (all read-only, no H5AD body/normalization,
+model fitting or score calculation):
+
+- Eight old uncorrected GloScope postchecks:
+  `.gate/old_main_present56_audit_20261109_v1/unc8_science_v1/postcheck_v3.observed.v1.json`,
+  SHA`29649a1ccd69d554975c3db0f2e031bb8c8348fc85a2e3faf61b20e50b4024d5`.
+  The original check falsely compared attributes on row-ID vectors. Its
+  narrow corrected comparison strips only those attributes and preserves
+  exact ID values/order, label values, geometry and costs. All8 pass; original
+  blocked evidence and every source result remain unchanged.
+- Old24 benchmark RDS diagnostics (11 cohort groups):
+  `benchmark24_science_v1/science.observed.v5.json`, SHA
+  `9f7bf631efa0f612789d7d97893007e7a14fd18348b873922b71befae6b4e4f5`.
+  Native contracts, labels/geometry, HR/NULL identity, preparation provenance
+  and selected R costs passed. All11 transformation-v2 screens retain120
+  validated draws and their explicit five-metric policy. Ordinary bundles
+  retain unknown-policy/distance-rescore dispositions. All7 Stephenson scITD
+  bundles retain39 samples, with the same14 documented drops; validate their
+  order against the filtered53-source order, never assert full53 order.
+- Old26 Python Feathers plus13 metadata witnesses:
+  `feather26_science_v1/science.observed.v2.json`, SHA
+  `481874931ba67639dee2e38f59018fc5a4e7c154066c09e1162ef056ba2817a0`.
+  Exact sample/shape/corrected-runtime contracts and all153 proof/owner
+  snapshots passed. Separate timing-only audit
+  `timing26_science_v1/timing.observed.v1.json`, SHA
+  `0fb28d5fcd6ad2af70f8b15f941d02ea6b049c4de799194dfcd7ff4b5a388d1a`,
+  validates all26 selected Python costs against runtime output identities
+  and exact unique timing rows; no missing-memory comparison in actual data.
+- Current benchmark17 physical jobs expand to23 core outputs,22 runtimes and
+  17 timing files. Byte/proof observation v3 SHA
+  `e17c9a9c935c9c51113168b1647c0a3622c5baf3b0013942a377e599b0792e4a`;
+  scientific observation SHA
+  `3de3d180148ecc5f5ad59346ae5f5d4db0a73d76810e8af6e0a68992cd4c6d88`
+  at `.gate/remaining97_benchmark17_science_20261109_v1/science.observed.v1.json`.
+  All23 core contracts/current53-and26-sample truths/runtime-cost checks pass.
+  Initial metadata observers incorrectly assumed a nonexistent input-TSV
+  sidecar and unique aggregate keys. Actual native contracts use the binding's
+  SHA for that TSV and repeated ordered SCHEDULER_ID records. Both narrow
+  observer fixes passed real native-emitter fixtures; failed observations
+  remain preserved. No methods were rerun for these checker defects.
+
+Shared ROOT read-only permission for the remaining old50 core artifacts and
+13 metadata witnesses was sealed/staged as
+`old-main-emitted73-review-v1/read_authorization.old50.json`, SHA
+`7e9bb7820addbe9b04bee2c445dee4e32dd69f14ef0b638c41fde2df63bb948d`.
+It binds exact reader bodies24/26, all153 original proofs, actual sole
+accounting and scoped preservation/quiescence. It grants diagnostic reads
+only; scientific/publication approvals are separate operator decisions.
+
+The successful audits now support a54-row publication candidate
+(34benchmark/12uncorrected/8corrected), excluding the two old zero-imputation
+summaries. This is147 payloads (56core/37runtime/54timing). Current publisher
+contracts need a narrowly reviewed typed adapter for truthful8ad diagnostic
+coverage and exact runtime companions; do not invent9ca validator invocations
+or pretend the two excluded summaries were not read. DOCS owns only that
+publisher/test repair and metadata candidates. Existing publication modes
+stay unchanged; new execution requires a future committed snapshot. Copied
+runtime bytes retain original fit evidence with explicit lineage, not a new
+fit identity. Test actual P6 consumption before claiming usability.
+
+Reporting prerequisite decisions:
+
+- Saved res50/Harmony2 obs-only screen controller is independently accepted
+  and checkpointed/pushed in `38a2a9c` (wrapper, focused fixture and only its
+  six-line generic audit case). One1CPU/64G/2h job, exact11 current benchmark
+  inputs to22 compact results; no RNA/obsm/PCA/Harmony/Leiden/model refit.
+  Its new11-input review remains ROOT-sealing pending; do not substitute the
+  separate10-input legacy review. The shared working-tree zeroimp audit case
+  was deliberately excluded from that commit for the next logical package.
+- Legacy209 compatibility request/control/staging packet is prepared under
+  `.gate/p6_legacy209_audit_inputs_20261109_v2`, source6032f5e/c69359fe,
+  actual existing1CPU/64G/1h wrapper. It remains unlaunched until current97
+  terminal inspection/review. No stale required-new fallback is permitted.
+- **Zero-imputation evidence gap:** all9 historical NAS summaries already
+  contain five finite metric names, but conflict with scratch bytes and lack
+  established producer/runtime/current-input/policy/draw provenance. The two
+  new9ca Step/Bassez summaries also omit labels/distances needed to establish
+  full-universe/current-policy compatibility. Schema presence alone is not
+  scientific approval. The smallest consistent resolution is a new counts-only
+  evaluation screen for **all11 cohorts**, using22 approved HR+metadata parent
+  rows, the existing43-setting recipe and canonical five-metric policy.
+  This recalculates only small sample-by-cell-type transforms/evaluations;
+  all model fits and RNA preprocessing remain reused. Retain actual per-PASS
+  named labels/distances/fingerprints, explicit failed-or-dropped setting
+  records, full sample retention and a complete43-setting status denominator.
+  The earlier9-only design is archived unlaunched. Nine legacy count parents
+  first need legacy209 approval; current Step/Bassez parents need their
+  reviewed fresh published/owned count artifacts. No ACTIVE/FAIL owner bypass.
+  BENCHMARK agent owns the new R/Bash runners/tests; BATCH alone owns the
+  coordinated generic audit case. No launch until code review, committed
+  immutable source, parent contracts and explicit11/22 scope are ready.
+- Cell-depth11 and PCA34 RAW-parent proposals remain finite, unapproved and
+  source-bound under `.gate/p6_prerequisites_20261110_v1`. No parent approval,
+  scoring completion or figure refresh is implied by preparing these controls.
+
+### Recovery wave terminal; all workers succeeded —2026-11-10 00:38 UTC
+
+The sole official waiter returned global`ecoda_stage5_remaining97_20261109_v1`
+FAILED, exit1, at00:30:20 UTC. Fresh native terminal/ledger/log facts are
+`.gate/remaining97_node_recovery_20261109_v1/terminal.observed.v1.json`:
+benchmark17 physical jobs/nine groups finishedOK23:06:37; corrected48 physical
+jobs/seven groups finishedOK00:30:19, including GloScope and NAS synchronization;
+uncorrected32 physical method jobs/four groups all passed but its controller
+failed23:51:21 at final RDS validation before publication. All20 watchdogs are
+OK with RETRY_INDEX0 and no emitted retry manifests. The one terminal inspect
+`.gate/ecoda_stage5_remaining97_20261109_v1.inspect.json` covered all49 initial
+scheduler roots and141 raw accounting rows, allCOMPLETED0:0, with no missing,
+failed or malformed rows. The global gate remains FAILED/release-ineligible
+because the wrapper actually exited1; do not approve it or repeat accounting.
+
+The uncorrected controller omits`--analysis-variant final` on its native RDS
+validator under a derivative binding. The actual native tiny fixture reproduces
+its explicit-final-context error and passes with that flag. BENCHMARK owns the
+minimal dispatcher/test fix, retained failure diagnostics and a guarded
+read-only check of all32 actual final RDS files (eight reused preparation caches,
+eight pseudobulk results, eight composition results and eight metadata RDS).
+No worker rerun is selected for this controller failure. A new validation and
+publication recovery must preserve all original statuses/owners/results.
+
+Zero-imputation counts-only screen implementation and focused tests were
+independently accepted and pushed in`136b944` (five-file logical package,
+including its generic audit case). Scope remains all11 cohorts/22 approved
+HR+metadata parents/43settings each; no model or RNA refits. Parents and new
+immutable source identity must be bound before launch. Saved22 was separately
+checkpointed in`38a2a9c`. Neither screen is claimed to have run yet.
+
+BATCH's frozen current-batch metadata-only collector covers272 exact paths:
+120method cores,16preparation caches,16sample metadata,32runtime companions
+and88timing files. Actual capture`remaining97_batch_science_20261110_v1/metadata.observed.v1.json`
+contains1563 bounded facts, no issues and no changes. Root will separately
+review scientific-read permission. DOCS is finishing the54-row old-output
+publication adapter. Its focused actual P6 reader/projector fixture confirms
+byte-identical original-fit runtime evidence can be used through checked copy
+lineage without pretending a new fit took place. Legacy209 evidence-audit
+staging/launch preparation proceeds in parallel using the existing603 snapshot
+and input-only review, not a success dependency on the failed97 gate.
