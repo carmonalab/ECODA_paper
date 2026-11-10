@@ -13,7 +13,7 @@ plot_pca <- function(
   mod_score = TRUE,
   sil_score = FALSE,
   anosim_score = TRUE,
-  digits = 3,
+  digits = 2,
   pointsize = 3,
   labelsize = 4,
   coord_equal = TRUE,
@@ -76,8 +76,8 @@ plot_pca <- function(
       plotly::add_paths(data = m, x = ~PC1, y = ~PC2, z = ~PC3, opacity = 0.2)
   } else {
     eig.val <- factoextra::get_eig(res.pca)
-    pc1_var <- round(eig.val[1, 2], 1)
-    pc2_var <- round(eig.val[2, 2], 1)
+    pc1_var <- signif(eig.val[1, 2], 2L)
+    pc2_var <- signif(eig.val[2, 2], 2L)
     p <- factoextra::fviz_pca(
       res.pca,
       axes = axes,
@@ -173,7 +173,7 @@ plot_mds <- function(
   mod_score = TRUE,
   sil_score = FALSE,
   anosim_score = TRUE,
-  digits = 3,
+  digits = 2,
   pointsize = 3,
   labelsize = 4,
   coord_equal = TRUE,
@@ -233,7 +233,7 @@ plot_mds <- function(
   }
 
   eig <- mds_res$eig
-  perc_var <- round(100 * eig / sum(eig[eig > 0]), 1)
+  perc_var <- signif(100 * eig / sum(eig[eig > 0]), 2L)
   lab_x <- paste0("MDS dim", axes[1], " (", perc_var[axes[1]], "%)")
   lab_y <- paste0("MDS dim", axes[2], " (", perc_var[axes[2]], "%)")
 

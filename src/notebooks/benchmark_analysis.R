@@ -160,6 +160,30 @@ read_benchmark_execution_times <- function(control) {
 
 # Finished RNA PCA figures are rendered on HPC from reviewed result features.
 # Their local counterpart reads only this finite figure/summary manifest.
+benchmark_pca_presentation <- function(plot) {
+  percent <- function(label) {
+    match <- regexpr("[0-9]+(?:\\.[0-9]+)?(?=%)", label, perl=TRUE)
+    if (match[1] < 0L) stop("Missing PCA variance axis label")
+    regmatches(label, match) <- format(signif(as.numeric(regmatches(label, match)), 2L),
+      trim=TRUE, scientific=FALSE)
+    label
+  }
+  plot <- plot + ggplot2::labs(x=percent(plot$labels$x), y=percent(plot$labels$y))
+  for (i in seq_along(plot$layers)) if (inherits(plot$layers[[i]]$geom, "GeomTextRepel")) {
+    # Rebuild the native text layer; feature/sample coordinates and arrows stay exact.
+    layer <- plot$layers[[i]]; data <- layer$data
+    data$name <- vapply(as.character(data$name), function(label)
+      paste(strwrap(label, width=22L), collapse="\n"), character(1))
+    params <- utils::modifyList(c(layer$geom_params, layer$aes_params), list(size=3,
+      box.padding=grid::unit(0.4, "lines"), point.padding=grid::unit(0.2, "lines"),
+      force=3, force_pull=0.3, max.time=2, max.iter=20000, min.segment.length=0, seed=123))
+    plot$layers[[i]] <- do.call(ggrepel::geom_text_repel,
+      c(list(data=data, mapping=layer$mapping, inherit.aes=layer$inherit.aes,
+        show.legend=layer$show.legend), params))
+  }
+  plot
+}
+
 benchmark_pca_render_scope <- function(control, datasets) {
   selected <- names(datasets)
   if (length(selected) != 11L || anyDuplicated(selected) || !"Bassez" %in% selected || any(grepl("_debug$", selected)))
@@ -301,7 +325,7 @@ render_benchmark_pca_release <- function(control,output_root,datasets,control_md
         title=if(method=="ECODA_authors_HR")"Cell type composition (ECODA)" else "Pseudobulk")
       if(dataset=="Bassez")p<-p+ggplot2::labs(color="Clonal expansion",shape="Clonal expansion")
       if(dataset=="Zhang")p<-p+ggplot2::labs(color="Tissue",shape="Tissue")
-      p
+      benchmark_pca_presentation(p)
     })
     paired<-patchwork::wrap_plots(panels,nrow=1,guides="collect")
     publish(function(path)ggplot2::ggsave(path,paired,width=8,height=3.5),paste0("benchmark_pca_",dataset,".pdf"))
@@ -319,10 +343,10 @@ render_benchmark_pca_release <- function(control,output_root,datasets,control_md
       validate_benchmark_pca_tables(tables,bounds)
       for(name in names(tables))publish(function(path)utils::write.csv(tables[[name]],path,row.names=FALSE),paste0("Bassez_",name,".csv"))
       panels<-lapply(c("ECODA_authors_HR","Pseudobulk_hvg2000"),function(method)
-        plot_pca(bundles[[method]]$feat_mat,benchmark_pca_display_labels(hr$labels,dataset),scale.=FALSE,
+        benchmark_pca_presentation(plot_pca(bundles[[method]]$feat_mat,benchmark_pca_display_labels(hr$labels,dataset),scale.=FALSE,
           n_ct_show=7,invisible="quali",repel=TRUE,coord_equal=FALSE,title=if(method=="ECODA_authors_HR")"ECODA authors HR" else "Pseudobulk HVG2000",
           cluster_score=FALSE,mod_score=FALSE,sil_score=FALSE,anosim_score=FALSE) +
-          ggplot2::labs(color="Clonal expansion",shape="Clonal expansion"))
+          ggplot2::labs(color="Clonal expansion",shape="Clonal expansion")))
       paired<-patchwork::wrap_plots(panels,nrow=1,guides="collect")+patchwork::plot_annotation(title="Bassez: centered, unscaled feature PCA",
         subtitle="E/NE denotes expansion, not clinical response; arrows selected without labels")
       for(ext in c("pdf","png"))publish(function(path)ggplot2::ggsave(path,paired,width=12,height=6,dpi=300),paste0("Bassez_feature_PCA_ECODA_HR_PB2000.",ext))

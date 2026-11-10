@@ -61,7 +61,32 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09 UTC, benchmark recovery OK; both batch contexts RUNNING
+## Live checkpoint —2026-11-10 UTC, method processing complete; reporting in progress
+
+- **P0–P5 complete:** all11 benchmark BL results, targeted Bassez HR results,
+  Stephenson53-sample benchmark results, and eight filtered cohorts in both
+  batch contexts have reviewed scientific artifacts and validated NAS
+  publications. All original97 recovery workers succeeded; no benchmark GPU
+  job remains pending. Failed historical controllers/gates remain failed;
+  selected outputs were independently requalified and published.
+- **Derived screens reviewed:** Saved22v3 and zeroimp11v2 are complete and
+  reviewer-approved; completed checkpoints were reused. PCA34 rendering is
+  complete/reviewed, with21finished payloads/checksums mirrored locally and
+  visual QA in progress. No raw RNA matrices were copied locally.
+- **Current compute:** cell-depth11 gate
+  `ecoda_stage5_p6_cell_depth_20261110_v1` isRUNNING with one official waiter;
+  exact scope and terminal obligations are recorded at the end of this plan.
+- **Remaining P6:** seal the actual1100-row admitted release, consolidate
+  reviewed benchmark-only timings, produce the thin local projection, evaluate
+  all five metrics including separate Kidney condition/tissue axes, refresh
+  maintained figures/reports, perform visual/scientific QA and verify the final
+  finite derived-output backup. Parallel agents prepare those independent
+  reporting tasks. No final figures or overall completion are claimed yet.
+- Detailed immutable evidence, recovery history and current launch identities
+  are retained in the dated ledger below. The following Nov9 checkpoint is
+  superseded history and does not describe the current queue.
+
+## Superseded live checkpoint — 2026-11-09 UTC, benchmark recovery OK; both batch contexts RUNNING
 
 - **Latest native check23:44 UTC:** benchmark remains terminal OK;
   allfour uncorrected method groups are OK and final validation/sync is in
@@ -591,10 +616,10 @@ statuses, scientific output roots and one synchronization owner per root.
 |---|---|---|
 | P0: safety checkpoint | DONE | Six logical commits pushed to origin/master; remote head verified as `6a1726d4a79f74998c54e968bb045b452b9c93bd` |
 | P1: documentation | DONE | NOTES, onboarding README, both AGENTS guides, Bamboo durable-skill examples and historical-plan pointer harmonized; scoped whitespace and skill validation passed; Git publication recorded below |
-| P2: scoped contracts | IN_PROGRESS | Cohort/BL core, derivative roots and two corrected Harmony arms committed; exact rerun selectors, failure isolation, Bassez Stage 2 wrapper and gate evidence integration continue |
-| P3: source reconciliation | IN_PROGRESS | Orchestrator handles bounded read-only Bamboo source/runtime/NAS preflight; targeted Bassez scope is already user-approved, subject to unchanged-input proof |
+| P2: scoped contracts | DONE | Reviewed/pushed cohort/BL contracts, separate corrected Harmony arms, exact selectors, failure isolation and durable artifact/evidence integration |
+| P3: source reconciliation | DONE | Selected Bamboo sources/runtime/NAS verified; Bassez unchanged-input proof and current cohort identities reviewed before targeted reruns |
 | P4: changed inputs | DONE | All16 batch derivatives and53-sample Stephenson input individually reviewed; Bassez metadata repair and Stephenson dual annotation validated/synchronized/approved |
-| P5: method waves | IN_PROGRESS | Run three independent concurrent contexts with exact deduplicated scope, durable evidence, focused recovery and root-specific sync |
+| P5: method waves | DONE | All selected benchmark/batch method outputs scientifically reviewed and NAS-published; failed historical gates preserved, completed outputs reused through scoped recovery |
 | P6: evaluation/reporting | IN_PROGRESS | Complete five-metric scores, score both Kidney axes, refresh all affected maintained reports/figures from approved results, verify plots and document limitations/provenance |
 
 ### P0: first implementation action, before harmonization or pipeline changes
@@ -4704,3 +4729,11 @@ and input-only review, not a success dependency on the failed97 gate.
 - Approved next gate`ecoda_stage5_p6_cell_depth_20261110_v1`, run`stage5_p6_cell_depth_20261110_v1`: existing f752snapshot/source5c78, wrapper`src/utils/bash/cell_depth_screen.sh`, existing count22control e14f1b40ba776731c86f2e1c421e8b64. Eleven explicit cohorts/181schedule entries each=1991draws, five metrics, one1CPU64G2h scalar, six owned diagnostic payloads. Exact command/preflight/ROOT launch review in`.gate/p6_prerequisites_20261110_v1/f752_ready_v1/depth11`. Sameecoda-benchmark group, prior PCAreviewpassed, no failed formal dependency; one waiter/sole inspect/bridge/pinned audit/reviewer required. No H5AD expression or model fitting. Final1100-row metadata sealing and local figure preparation proceed independently while this diagnostic runs.
 - Cell-depth durable launch isRUNNING; exactly one unbounded official waiter is armed. No queue/accounting polling is used. Final release metadata work and local figure QA continue in parallel.
 - Maintained contingency notebook repaired and independently reviewed: eight enabled cohorts/nine biological axes from approved projected metadata; Kidney condition/tissue remain separate through summary aggregation. Temporal COVID figures use the same validated HR/PB distance submatrices for MDS, with explicit unavailable-bin plots/statuses/NA statistics when required. No local pseudobulk features, historical fallback, new model fits or publication-file deletion. Focused actual-summary and metadata/distance/bin fixtures passed; final notebookSHA`d4b54be47bb6fdd976ff256d89a34e7f4d35414ad2d7ddf8145b0adbd4fea0b2`, testSHA`3938194655bdebcbc9c6ff11c2e019deef77352ada2824c539a59fef36e1159c`. Source is ready for later approved thin-control figure execution; this checkpoint does not claim figures have run.
+
+### Final intake sealed and display fixes accepted —2026-11-10
+
+- ROOT timing reviewSHA`160549fb4aeb248543078ccfd84d81d3a2ca1d44303fb623b93ef62691ef2bb1` and metadata-only emission passed:893ordinary+4distinct shared=897rows,77documented aliases,107unknown RAM values retained. TableMD5`4fc97ec1db16498a097f68d03904c901`. Actual146.694-second cellSubType charge belongs toBassez, correcting the earlier preread proposal; three identical Stephenson generic376.382 observations collapse to one, with distinct CT606.336/569.123 charges retained. No invented hardware/schema2 provenance or batch timings.
+- ROOT admitted all1100 exact intake rows (948benchmark/72UNC/80COR;777legacy+323new;294required-new), reviewSHA`1576c72ee5ca94e272fe32bb08c3ffaf8b5df86528749fa1923ffa0321035027`. Eighteen source evidence references matched their exact hashes. Per-key Bassez unaffected reuse flags remain unchanged; all11BL rows require new results. Sealer now carries63 exact nonempty scITD-only drop permissions (56legacy+7Stephenson with14IDs each); all other rows have empty permissions. Focused metadata fixtures reject extra/reordered/non-scITD permissions. Sealed controlMD5`5c579ccc737e2807d8326973c4a0105f`,SHA`26ad46c198c594f52101f78c71cfd7dcdb5acf08f1e06a17189542e9dedffae4`; no result RDS deserialization, models, scores or H5AD reads during sealing.
+- Final projection preflight passed forbe1951/c870/runtime8fcd/control5c57/fresh roots/NAS; exact1100scope/commandSHA`55ccf6de1951a0346dc1983db6f257c7aca42fe14b07e452966f9829aa096cc9` is frozen in`.gate/p6_analysis_projection1100_20261110_v1/ready_v1`. Launch still awaits preceding cell-depth terminal review. No raw RNA will be transferred locally.
+- PCA scientific validation and all12finished PDF checks passed, but publication QA found crowded loading labels and three-significant-digit variance axes. Independently reviewed synthetic presentation fix: rendererhelperSHA`2b51b64acefa74e3c460904b6ec3b7f7bf2015abb28c0283f0b45ffc4dd73864`, fixtureSHA`bdfb3045d464b23fbbb9306fa83dd4b549b7d120230db8a3a8049d136b6ac6df`; label wrapping/native repel layer rebuilt without modifying selected labels/point/arrow geometry. Shared plottingSHA`8dace0e120c766951e9fff4b4c0f8158a6c29e665ce93c9bc75feb320186f2d4` changes five display lines only (two-decimal subtitles and two-significant-digit PCA/MDS variance axes), with coordinate/input invariance checked. Existing finished PCAv1 remains immutable; a separate render-only refresh will apply the style fix, without RNA/model refits.
+- Cell-depth job4666686 finishedCOMPLETED0 at04:54:23UTC (started04:41:08); official waiter completed and native11cohort validation passed. Sole terminal inspection and pinned audit/reviewer phase are in progress. Dedicated local benchmark R4.5.2 session48284 is initialized with absolute Pixi Python/one-thread settings and a temporary PDF device; no release scoring or publication plotting has run yet. Foreign notebook/layout changes remain preserved and outside these commits.
