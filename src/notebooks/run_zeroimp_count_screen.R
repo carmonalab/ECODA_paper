@@ -122,6 +122,77 @@ zeroimp_validate_package <- function(package,input,source,run_id,config_md5,runn
   }
   invisible(TRUE)
 }
+zeroimp_reuse_plan <- function(control) {
+  refs <- control$zeroimp_checkpoint_reuse
+  if(is.null(refs))return(NULL)
+  zeroimp_need(identical(refs$schema,"ecoda_zeroimp_checkpoint_reuse_v1")&&identical(sort(names(refs)),sort(c("schema","review","science","inventory"))),"Unknown zeroimp checkpoint reuse schema")
+  checked <- function(ref) {
+    zeroimp_need(is.list(ref)&&identical(sort(names(ref)),c("path","sha256"))&&grepl("^[a-f0-9]{64}$",ref$sha256),"Invalid checkpoint evidence reference")
+    zeroimp_need(is.character(ref$path)&&length(ref$path)==1L&&grepl("\\.json$",ref$path)&&file.exists(ref$path)&&!dir.exists(ref$path)&&file.info(ref$path)$size<8*1024^2,"Checkpoint evidence must be bounded JSON metadata")
+    path <- .ecoda_validate_local_file(ref$path,"checkpoint metadata")$PATH
+    zeroimp_need(file.info(path)$size<8*1024^2&&identical(digest::digest(file=path,algo="sha256"),ref$sha256),"Checkpoint evidence changed")
+    jsonlite::fromJSON(path,simplifyVector=FALSE)
+  }
+  review<-checked(refs$review);science<-checked(refs$science);inventory<-checked(refs$inventory)
+  datasets<-zeroimp_datasets()[1:4];old_run<-"stage5_p6_zeroimp11_20261110_v1"
+  zeroimp_need(identical(review$schema,"ecoda_zeroimp_checkpoint4_root_reuse_review_v1")&&identical(review$status,"APPROVED_FIXED_FOUR_TYPED_CHECKPOINT_REUSE")&&isTRUE(review$review_complete)&&isTRUE(review$typed_checkpoint_science_validated)&&isTRUE(review$reuse_without_imputation_or_scoring)&&identical(review$generic_failed_input_bypass_authorized,FALSE)&&identical(review$original_gate_approved,FALSE)&&identical(review$original_gate_state,"FAILED")&&identical(review$original_stage5_owners,"FAIL_PRESERVED")&&identical(review$original_published_records,"ABSENT_NOT_FABRICATED")&&identical(review$original_run_id,old_run)&&identical(review$original_source_commit,"3736052f4451ca4dda80684a4af840dac5f37f4b")&&identical(review$original_control_md5,"e14f1b40ba776731c86f2e1c421e8b64")&&identical(unlist(review$datasets,use.names=FALSE),datasets)&&review$recipes_each==43L&&identical(review$science_report_sha256,refs$science$sha256)&&identical(review$byte_inventory_sha256,refs$inventory$sha256),"Only ROOT-reviewed original four zeroimp checkpoints may be reused")
+  zeroimp_need(identical(science$schema,"ecoda_zeroimp_checkpoint4_science_observation_v1")&&identical(science$status,"VALIDATED_CHECKPOINTS_PENDING_ROOT_REUSE_REVIEW")&&identical(names(science$results4),datasets)&&isTRUE(science$unpublished_checkpoint_records_absent)&&identical(science$scientific_reuse_approved,FALSE)&&identical(inventory$schema,"ecoda_zeroimp11_partial_byte_inventory_v1"),"Checkpoint scientific evidence differs")
+  files<-Filter(function(x)isTRUE(x$exists),inventory$rows)
+  zeroimp_need(identical(review$new_model_fits,FALSE)&&identical(science$original_source_commit,review$original_source_commit)&&identical(science$original_gate,"FAILED_PRESERVED")&&identical(science$original_owners,"FAIL_PRESERVED")&&science$model_fits==0&&science$score_calculations==0&&science$H5AD_reads==0,"Checkpoint review cannot promote the original gate or claim new computation")
+  zeroimp_need(length(inventory$rows)==22L&&length(files)==8L,"Exactly eight original checkpoint files in the eleven-cohort inventory are required")
+  old_root<-dirname(dirname(dirname(files[[1]]$path)))
+  # path is <run>/artifacts/zeroimp_count_screen/analysis/<file>.
+  old_root<-dirname(old_root)
+  zeroimp_need(identical(basename(old_root),old_run)&&identical(basename(dirname(old_root)),"_ecoda_runs"),"Wrong checkpoint producer namespace")
+  for(ds in datasets) {
+    result<-science$results4[[ds]]
+    zeroimp_need(identical(result$run_id,old_run)&&identical(result$release_md5,review$original_control_md5)&&isTRUE(result$full_PASS_geometry_and_five_validated)&&length(result$recipes43)==43L,"Incomplete validated checkpoint cohort")
+    for(ext in c("rds","csv"))zeroimp_need(sum(vapply(files,function(x)identical(x$path,file.path(old_root,"artifacts/zeroimp_count_screen/analysis",paste0(ds,"_zeroimp_counts.",ext))),logical(1)))==1L,"Missing/duplicate checkpoint bytepair")
+  }
+  list(refs=refs,datasets=datasets,run_root=old_root,files=files,science=science)
+}
+zeroimp_check_reuse <- function(reuse) {
+  if(is.null(reuse))return(invisible(TRUE))
+  for(x in reuse$science$checked_before_after) {
+    zeroimp_need(!grepl("\\.(h5ad|h5|sif)$",x$path,ignore.case=TRUE),"Checkpoint evidence cannot read RNA/runtime images")
+    path<-.ecoda_validate_local_file(x$path,"checkpoint source/proof/owner")$PATH
+    zeroimp_need(identical(digest::digest(file=path,algo="sha256"),x$sha256),"Checkpoint source/proof/owner changed since scientific review")
+  }
+  for(x in reuse$files) {
+    proof<-.ecoda_validate_output_sidecar(x$path)
+    zeroimp_need(identical(proof$MD5,x$md5)&&as.numeric(proof$SIZE)==x$stat$st_size,"Checkpoint byte identity differs")
+    key<-substr(digest::digest(x$path,algo="sha256",serialize=FALSE),1,32)
+    record<-file.path(reuse$run_root,"manifests/artifacts",paste0(key,".record"))
+    zeroimp_need(!file.exists(record)&&!.ecoda_is_symlink(record),"Unexpected checkpoint producer record")
+  }
+  invisible(TRUE)
+}
+zeroimp_produce_package <- function(input,source,ds,rds,csv,identity,reuse=NULL,run_fun=zeroimp_run_cohort) {
+  reused<-!is.null(reuse)&&ds%in%reuse$datasets
+  if(reused) {
+    zeroimp_check_reuse(reuse)
+    paths<-setNames(vapply(c("rds","csv"),function(ext)file.path(reuse$run_root,"artifacts/zeroimp_count_screen/analysis",paste0(ds,"_zeroimp_counts.",ext)),character(1)),c("rds","csv"))
+    original<-reuse$science$results4[[ds]];package<-readRDS(paths[["rds"]])
+    identity$run_id<-original$run_id;identity$runner_md5<-original$runner_md5;identity$release_md5<-original$release_md5
+  } else {
+    package<-run_fun(input);package$schema<-zeroimp_policy()$schema;package$dataset<-ds;package$source<-source
+    for(k in names(identity))package[[k]]<-identity[[k]]
+    package$origin<-"new_counts_only_refresh_from_reviewed_parents";package$parent_origin<-"retained in checked release receipts; not promoted to new model outputs"
+  }
+  zeroimp_validate_package(package,input,source,identity$run_id,identity$config_md5,identity$runner_md5,identity$release_md5)
+  if(reused) {
+    zeroimp_need(identical(package$csv_md5,.ecoda_md5(paths[["csv"]])),"Reused checkpoint CSV identity differs")
+    for(ext in c("rds","csv")) {
+      target<-if(ext=="rds")rds else csv;temporary<-paste0(target,".tmp.",Sys.getpid())
+      zeroimp_need(!file.exists(target)&&!.ecoda_is_symlink(target),"Checkpoint copy destination exists")
+      on.exit(unlink(temporary),add=TRUE)
+      zeroimp_need(file.copy(paths[[ext]],temporary,overwrite=FALSE)&&identical(.ecoda_md5(temporary),.ecoda_md5(paths[[ext]]))&&file.link(temporary,target),"Create-only checkpoint copy failed")
+      unlink(temporary)
+      .ecoda_write_text_atomic(paste0(target,".md5"),c(paste0("MD5=",.ecoda_md5(target)),paste0("SIZE=",file.info(target)$size),paste0("PATH=",target)))
+    }
+  } else {.ecoda_save_csv(package$results,csv);package$csv_md5<-.ecoda_md5(csv);.ecoda_save_rds(package,rds)}
+  invisible(package)
+}
 zeroimp_main <- function(args=commandArgs(TRUE)) {
   zeroimp_need(identical(as.character(getRversion()),"4.5.2"),"Configured R4.5.2 required")
   zeroimp_need(length(args)%%2L==0L,"Arguments require values")
@@ -133,6 +204,8 @@ zeroimp_main <- function(args=commandArgs(TRUE)) {
   zeroimp_need(identical(Sys.getenv("ECODA_SOURCE_SNAPSHOT_REQUIRED"),"1") && identical(Sys.getenv("ECODA_SOURCE_ROOT"),project) && identical(Sys.getenv("ECODA_RUN_ID"),a$run_id),"Immutable run-bound zeroimp executor required")
   source(file.path(project,"src/utils/analysis_release.R"));source(file.path(project,"src/5_run_benchmark_methods/run_local_ecoda_derived.R"));source(file.path(project,"src/5_run_benchmark_methods/benchmark_pipeline.R"))
   control <- zeroimp_control(a$analysis_release,a$analysis_release_md5,a$config_path,a$datasets)
+  reuse<-zeroimp_reuse_plan(control$control)
+  if(!is.null(reuse))zeroimp_need(identical(control$selected,zeroimp_datasets()),"Checkpoint recovery retains the complete eleven-cohort denominator")
   if(!is.null(a$bind)) {
     paths <- c(a$analysis_release,control$control$parent_inventory$path,control$control$legacy_parent_inventory$path);hashes <- c(a$analysis_release_md5,control$control$parent_inventory$md5,control$control$legacy_parent_inventory$md5)
     for(ds in control$selected) {
@@ -142,10 +215,12 @@ zeroimp_main <- function(args=commandArgs(TRUE)) {
         receipt <- readRDS(.analysis_checked_file(rows$receipt_path[i],rows$receipt_md5[i]));paths <- c(paths,receipt$evidence_path);hashes <- c(hashes,receipt$evidence_md5)
       }
     }
+    if(!is.null(reuse))for(ref in reuse$refs[c("review","science","inventory")]) {paths<-c(paths,ref$path);hashes<-c(hashes,.ecoda_md5(ref$path))}
     inventory <- unique(data.frame(path=paths,md5=hashes));zeroimp_need(!anyDuplicated(inventory$path),"Conflicting input identities")
     for(i in seq_len(nrow(inventory))).analysis_checked_file(inventory$path[i],inventory$md5[i])
     write.table(inventory,file.path(a$bind,"inputs.tsv"),sep="\t",quote=FALSE,row.names=FALSE,col.names=FALSE)
     write.table(data.frame(control$selected,"benchmark_analysis","zeroimp_count_screen"),file.path(a$bind,"selection.tsv"),sep="\t",quote=FALSE,row.names=FALSE,col.names=FALSE)
+    .ecoda_write_json_atomic(list(schema="ecoda_zeroimp_checkpoint_reuse_binding_v1",reuse=if(is.null(reuse))NULL else reuse$refs),file.path(a$bind,"checkpoint_reuse.json"))
     return(invisible(NULL))
   }
   output <- a$produce %||% a$validate
@@ -157,6 +232,7 @@ zeroimp_main <- function(args=commandArgs(TRUE)) {
     options(mc.cores=1L)
   }
   runner_md5 <- .ecoda_md5(file.path(project,"src/notebooks/run_zeroimp_count_screen.R"));config_md5 <- .ecoda_md5(a$config_path)
+  zeroimp_check_reuse(reuse)
   for(ds in control$selected) {
     parent <- zeroimp_input(a$analysis_release,a$analysis_release_md5,ds,control$raw);input <- parent$input;source <- c(list(dataset=ds),parent$config)
     parent_rows <- control$control$ledger[control$control$ledger$dataset==ds,,drop=FALSE]
@@ -168,23 +244,24 @@ zeroimp_main <- function(args=commandArgs(TRUE)) {
     })
     rds <- file.path(output,paste0(ds,"_zeroimp_counts.rds"));csv <- file.path(output,paste0(ds,"_zeroimp_counts.csv"))
     if(!is.null(a$produce)) {
-      package <- zeroimp_run_cohort(input);package$schema <- zeroimp_policy()$schema;package$dataset <- ds;package$run_id <- a$run_id;package$source <- source;package$config_md5 <- config_md5;package$runner_md5 <- runner_md5;package$release_md5 <- a$analysis_release_md5
-      package$origin <- "new_counts_only_refresh_from_reviewed_parents";package$parent_origin <- "retained in checked release receipts; not promoted to new model outputs"
-      zeroimp_validate_package(package,input,source,a$run_id,config_md5,runner_md5,a$analysis_release_md5)
-      .ecoda_save_csv(package$results,csv);package$csv_md5 <- .ecoda_md5(csv);.ecoda_save_rds(package,rds)
+      package<-zeroimp_produce_package(input,source,ds,rds,csv,list(run_id=a$run_id,config_md5=config_md5,runner_md5=runner_md5,release_md5=a$analysis_release_md5),reuse)
     } else {
       .ecoda_validate_output_sidecar(rds);.ecoda_validate_output_sidecar(csv);package <- readRDS(rds)
-      zeroimp_validate_package(package,input,source,a$run_id,config_md5,runner_md5,a$analysis_release_md5)
+      original<-if(!is.null(reuse)&&ds%in%reuse$datasets)reuse$science$results4[[ds]] else NULL
+      zeroimp_validate_package(package,input,source,if(is.null(original))a$run_id else original$run_id,config_md5,if(is.null(original))runner_md5 else original$runner_md5,if(is.null(original))a$analysis_release_md5 else original$release_md5)
       zeroimp_need(identical(package$csv_md5,.ecoda_md5(csv)) && isTRUE(all.equal(read.csv(csv,check.names=FALSE,colClasses=c(setting="character",status="character",reason="character",scoring_sample_ids="character",dropped_sample_ids="character")),package$results,check.attributes=FALSE,tolerance=1e-10)),"Zeroimp CSV/RDS differs")
     }
     rm(input,parent,package);gc()
   }
+  zeroimp_check_reuse(reuse)
   if(!is.null(a$produce)) {
-    .ecoda_write_json_atomic(list(schema="ecoda_zeroimp_counts_manifest_v1",run_id=a$run_id,datasets=control$selected,recipe_menu=zeroimp_menu(),scoring_policy=zeroimp_policy()$scoring_policy,source_manifest_md5=.ecoda_md5(Sys.getenv("ECODA_SOURCE_MANIFEST")),release_md5=a$analysis_release_md5,legacy_source9ca_comparability=zeroimp_policy()$legacy_source9ca_comparability),file.path(output,"screen_manifest.json"))
+    .ecoda_write_json_atomic(list(schema="ecoda_zeroimp_counts_manifest_v1",run_id=a$run_id,datasets=control$selected,recipe_menu=zeroimp_menu(),scoring_policy=zeroimp_policy()$scoring_policy,source_manifest_md5=.ecoda_md5(Sys.getenv("ECODA_SOURCE_MANIFEST")),release_md5=a$analysis_release_md5,legacy_source9ca_comparability=zeroimp_policy()$legacy_source9ca_comparability,checkpoint_reuse=if(is.null(reuse))NULL else list(refs=reuse$refs,datasets=reuse$datasets,action="BYTE_IDENTICAL_COPY_NO_IMPUTATION_OR_SCORING",original_embedded_identity_preserved=TRUE)),file.path(output,"screen_manifest.json"))
     .ecoda_write_json_atomic(list(state="OK",run_id=a$run_id,cohorts=length(control$selected),settings_per_cohort=43L),file.path(output,"status.json"))
   }
   manifest <- jsonlite::fromJSON(file.path(output,"screen_manifest.json"),simplifyVector=FALSE)
   status <- jsonlite::fromJSON(file.path(output,"status.json"),simplifyVector=FALSE)
+  lineage<-manifest$checkpoint_reuse
+  zeroimp_need(if(is.null(reuse))is.null(lineage) else is.list(lineage)&&identical(lineage$refs,reuse$refs)&&identical(unlist(lineage$datasets,use.names=FALSE),reuse$datasets)&&identical(lineage$action,"BYTE_IDENTICAL_COPY_NO_IMPUTATION_OR_SCORING")&&isTRUE(lineage$original_embedded_identity_preserved),"Checkpoint copy lineage differs")
   zeroimp_need(identical(manifest$schema,"ecoda_zeroimp_counts_manifest_v1") && identical(manifest$run_id,a$run_id) && identical(unlist(manifest$datasets,use.names=FALSE),control$selected) && identical(unlist(manifest$recipe_menu,use.names=FALSE),zeroimp_menu()) && identical(manifest$scoring_policy,zeroimp_policy()$scoring_policy) && identical(manifest$release_md5,a$analysis_release_md5) && identical(manifest$source_manifest_md5,.ecoda_md5(Sys.getenv("ECODA_SOURCE_MANIFEST"))) && identical(manifest$legacy_source9ca_comparability,zeroimp_policy()$legacy_source9ca_comparability) && identical(status$state,"OK") && identical(status$run_id,a$run_id) && status$cohorts==length(control$selected) && status$settings_per_cohort==43L,"Zeroimp manifest/status/complete recipe denominator differs")
   invisible(NULL)
 }

@@ -53,7 +53,7 @@ export ECODA_RUN_ROOT ECODA_RUN_ID
 MANIFESTS="${RUN}/manifests"
 OUTPUT="${RUN}/artifacts/zeroimp_count_screen/analysis"
 STATUS="${RUN}/status/zeroimp_count_screen.status"
-SCOPE_FILES=(source.manifest runtime.identity operation selection.tsv analysis_release.rds inputs.tsv screen_identity.json)
+SCOPE_FILES=(source.manifest runtime.identity operation selection.tsv analysis_release.rds inputs.tsv checkpoint_reuse.json screen_identity.json)
 OUTPUT_FILES=()
 
 if [[ "${MODE}" == controller ]]; then
@@ -68,7 +68,7 @@ if [[ "${MODE}" == controller ]]; then
   "${PYTHON_BIN}" - "${RUN}" "${PURPOSE}" "${CONTROL_MD5}" "${DATASETS_JSON_FILE}" <<'PY'
 import hashlib,json,pathlib,sys
 run=pathlib.Path(sys.argv[1]);m=run/'manifests'
-names=['source.manifest','runtime.identity','operation','selection.tsv','analysis_release.rds','inputs.tsv']
+names=['source.manifest','runtime.identity','operation','selection.tsv','analysis_release.rds','inputs.tsv','checkpoint_reuse.json']
 identity={'schema':1,'purpose':sys.argv[2],'run_id':run.name,'control_md5':sys.argv[3],
           'config_path':sys.argv[4],'config_sha256':hashlib.sha256(pathlib.Path(sys.argv[4]).read_bytes()).hexdigest(),
           'identities':{n:hashlib.sha256((m/n).read_bytes()).hexdigest() for n in names}}
@@ -100,7 +100,7 @@ validate_scope() {
   "${PYTHON_BIN}" - "${RUN}" "${PURPOSE}" "${HPC_SCRATCH_DIR}" "${DATASETS_JSON_FILE}" <<'PY' || return 1
 import hashlib,json,pathlib,re,sys
 run=pathlib.Path(sys.argv[1]);m=run/'manifests';x=json.loads((m/'screen_identity.json').read_text())
-expected={'source.manifest','runtime.identity','operation','selection.tsv','analysis_release.rds','inputs.tsv'}
+expected={'source.manifest','runtime.identity','operation','selection.tsv','analysis_release.rds','inputs.tsv','checkpoint_reuse.json'}
 if x['schema']!=1 or x['purpose']!=sys.argv[2] or x['run_id']!=run.name or set(x['identities'])!=expected or x['config_path']!=sys.argv[4]: raise SystemExit('ERROR: zeroimp count-screen identity differs')
 if hashlib.sha256(pathlib.Path(sys.argv[4]).read_bytes()).hexdigest()!=x['config_sha256']: raise SystemExit('ERROR: config changed')
 for n,sha in x['identities'].items():
