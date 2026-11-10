@@ -66,13 +66,14 @@ metadata() {
 import hashlib,json,os,pathlib,re,sys,tempfile
 mode,root,project,refs,refs_sha,review_path,review_sha,datasets=sys.argv[1:]
 root=pathlib.Path(root);m=root/'manifests';project=pathlib.Path(project)
+observed_stats={}
 def need(ok,text):
     if not ok:raise SystemExit('ERROR: '+text)
 def digest(raw):return hashlib.sha256(raw).hexdigest()
 def regular(path):
     p=pathlib.Path(path);need(p.is_absolute() and p.is_file() and not p.is_symlink() and p.resolve()==p,'noncanonical metadata/input');return p
 def small(path):
-    p=regular(path);need(p.suffix.lower() not in ('.h5','.h5ad','.rds','.sif') and p.stat().st_size<=2*1024*1024,'bounded metadata only');return p.read_bytes()
+    p=regular(path);stat(p);need(p.suffix.lower() not in ('.h5','.h5ad','.rds','.sif') and p.stat().st_size<=2*1024*1024,'bounded metadata only');raw=p.read_bytes();stat(p);return raw
 def read_ref(ref):
     need(set(ref)=={'path','sha256'} and re.fullmatch('[a-f0-9]{64}',ref['sha256']),'invalid evidence ref')
     raw=small(ref['path']);need(digest(raw)==ref['sha256'],'evidence changed');return raw
@@ -86,7 +87,23 @@ def fields(raw):
     pairs=[line.split('=',1) for line in raw.decode().splitlines()]
     need(pairs and all(len(r)==2 for r in pairs) and len({r[0] for r in pairs})==len(pairs),'duplicate/malformed native fields');return dict(pairs)
 def stat(path):
-    s=regular(path).stat();return {k:getattr(s,k) for k in ('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns','st_mode')}
+    p=regular(path);s=p.stat();value={k:getattr(s,k) for k in ('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns','st_mode')}
+    prior=observed_stats.setdefault(str(p),value);diff={k:dict(expected=prior[k],actual=value[k]) for k in value if prior[k]!=value[k]}
+    need(not diff,'in-process stat changed path='+str(p)+' fields='+json.dumps(diff,sort_keys=True));return value
+def selected_beegfs(path):
+    scratch=root.parent.parent;p=pathlib.Path(path);need(p.is_relative_to(scratch),'selected path escapes scratch: '+str(p))
+    mounts=[]
+    for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines():
+        fields=line.split();separator=fields.index('-');point=pathlib.Path(fields[4].replace('\\040',' '))
+        mounts.append((point,fields[separator+1]))
+    def covering(p):return max((r for r in mounts if p==r[0] or r[0] in p.parents),key=lambda r:len(str(r[0])))
+    mount=covering(p);need(mount==covering(scratch) and mount[1]=='beegfs','selected path is not on expected BeeGFS mount: '+str(p))
+def portable_stat(actual,expected,path):
+    # Device numbers are kernel-local. Keep full facts and strict in-process
+    # checks, but compare content witnesses portably across login/worker nodes.
+    selected_beegfs(path)
+    diff={k:dict(expected=expected.get(k),actual=actual.get(k)) for k in set(actual)|set(expected) if k!='st_dev' and actual.get(k)!=expected.get(k)}
+    need(set(actual)==set(expected)=={'st_dev','st_ino','st_size','st_mode','st_mtime_ns','st_ctime_ns'} and all(type(v) is int for v in expected.values()) and not diff,'selected stat changed path='+str(path)+' fields='+json.dumps(diff,sort_keys=True));return True
 if mode=='bind':
     raw=small(refs);need(digest(raw)==refs_sha,'input references SHA differs');put('input_references.tsv',raw)
     raw=small(review_path);need(digest(raw)==review_sha,'input review SHA differs');put('input_review.json',raw)
@@ -133,7 +150,7 @@ for ds,view,path,md5,size,proof in rows:
          and label['label_column']==entry['columns']['label'],'top-level column authority differs')
     need(pathlib.Path(path).name==entry['views'][view]['output_file_name'] and label['view']==view and label['path']==path
          and label['expected_source_md5']==md5 and str(label['size'])==size,'current input identity differs')
-    need(stat(path)==label['stat_before']==label['stat_after'] and stat(path)['st_size']==int(size),'current input stat changed; no H5AD hash attempted')
+    need(label['stat_before']==label['stat_after'] and portable_stat(stat(path),label['stat_after'],path) and stat(path)['st_size']==int(size),'current input stat changed; no H5AD hash attempted')
     need(label['source_identity_order_matches_observed'] is True and label['n_samples']==len(label['sample_ids'])
          and len(set(label['sample_ids']))==label['n_samples'] and (ds!='Stephenson' or label['n_samples']==53), 'current sample identity differs')
     need(label['proof']['path']==proof and fields(read_ref({k:label['proof'][k] for k in ('path','sha256')}))==dict(PATH=path,MD5=md5,SIZE=size),'input checksum proof differs')
@@ -149,7 +166,7 @@ for ds,view,path,md5,size,proof in rows:
          'prior fullhash published/native task proof differs')
     # The historical observation stores record stats; proof/status bytes are
     # SHA-bound above and their current stats are frozen in this run's scope.
-    need(stat(record['path'])==record['stat'],'native record stat changed')
+    need(portable_stat(stat(record['path']),record['stat'],record['path']),'native record stat changed')
     need(stat(path)['st_mtime_ns']<=record['stat']['st_mtime_ns'] and stat(path)['st_ctime_ns']<=record['stat']['st_mtime_ns'],'source postdates fullhash record')
     paths.extend([path,proof,record['path'],status['path']])
 selection=''.join(ds+'\tbenchmark_analysis\t'+method+'\n' for analysis,method in [('res50','ECODA_seuratres_50'),('harmony','ECODA_seuratres_2_harmony')] for ds in selected).encode()
@@ -168,7 +185,9 @@ else:
          and identity['config_sha256']==digest(small(project/'datasets.json')) and small(m/'selection.tsv')==selection
          and small(m/'outputs.tsv')==outputs and small(m/'inputs.tsv')==inputs,'frozen scope differs')
     for name,sha in identity['metadata_sha256'].items():need(digest(small(m/name))==sha,'run-owned metadata changed')
-    need(identity['input_stats']=={p:stat(p) for p in paths},'input/evidence changed across saved-label analysis')
+    need(set(identity['input_stats'])==set(paths),'selected stat inventory differs')
+    for p in paths:portable_stat(stat(p),identity['input_stats'][p],p)
+for path in list(observed_stats):stat(path)
 PY
 }
 if [[ "${MODE}" == controller ]]; then

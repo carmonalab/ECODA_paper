@@ -5,11 +5,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # Execute the actual production stat helper/check without filesystem mutation.
 "${ROOT}/.pixi/envs/default/bin/python" - "${ROOT}/src/utils/bash/legacy_analysis_audit.sh" <<'PY_STAT'
-import ast,pathlib,sys
+import ast,json,pathlib,sys
 source=pathlib.Path(sys.argv[1]).read_text().split("<<'PY'\n",1)[1].split('\nPY\n}',1)[0];tree=ast.parse(source)
-ns=dict(stopped=True,review={'reviewed_device_transition':{'old_dev':66,'new_dev':68,'reason':'OBSERVED_LOGIN_REBOOT_REMOUNT','paths':['/selected/input']}})
+ns=dict(json=json,selected_beegfs=lambda path:None,stopped=True,review={'reviewed_device_transition':{'old_dev':66,'new_dev':68,'reason':'OBSERVED_LOGIN_REBOOT_REMOUNT','paths':['/selected/input']}})
 for node in tree.body:
- if isinstance(node,ast.FunctionDef) and node.name in ('need','current_witness_stat'):
+ if isinstance(node,ast.FunctionDef) and node.name in ('need','current_witness_stat','portable_stat'):
   exec(compile(ast.Module(body=[node],type_ignores=[]),'<actual-stat-helper>','exec'),ns)
 # Actual e8cf historical STOP snapshot has no terminal_status field.
 condition=next(n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='need' and len(n.args)>1 and isinstance(n.args[1],ast.Constant) and n.args[1].value=='historical stopped parent identity differs')
@@ -39,17 +39,27 @@ def run(current):
 run(expected)
 for key in expected:
  changed=dict(expected);changed[key]+=1
+ if key=='dev':run(changed);continue
  try:run(changed)
  except SystemExit:pass
  else:raise AssertionError('stat drift accepted: '+key)
 ns['stopped']=False;assert ns['current_witness_stat'](prior,'/foreign')==prior
-print('PASS actual stat boundary: explicit66→68 only; all other fields/path/terminal strict')
+print('PASS actual stat boundary: reviewed historical66→68 facts retained; portabledev/all other fields/terminal strict')
 PY_STAT
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/ecoda-legacy-audit.XXXXXX")"; TMP="$(cd "${TMP}" && pwd -P)"
 trap 'chmod -R u+w "${TMP}"; rm -rf "${TMP}"' EXIT
 TREE="${TMP}/snapshot/tree"; SCRATCH="${TMP}/scratch"; INPUTS="${SCRATCH}/_ecoda_inputs/audit"
 mkdir -p "${TREE}/src/utils/bash" "${TREE}/src/notebooks" "${INPUTS}" "${TMP}/bin"
 cp "${ROOT}/src/utils/bash/legacy_analysis_audit.sh" "${ROOT}/src/utils/bash/ecoda_run_common.sh" "${TREE}/src/utils/bash/"
+# Only the test-owned copy simulates the selected BeeGFS mount on macOS.
+"${ROOT}/.pixi/envs/default/bin/python" - "${TREE}/src/utils/bash/legacy_analysis_audit.sh" "${SCRATCH}" <<'PY_MOUNT'
+import pathlib,sys
+p=pathlib.Path(sys.argv[1]);text=p.read_text().replace("pathlib.Path('/proc/self/mountinfo').read_text()",repr('10 1 0:68 / '+sys.argv[2]+' rw - beegfs beegfs_nodev rw\n'))
+# The fixture worker simulates a different kernel's device number; every
+# inode, byte, mode and timestamp remains the same real temporary file.
+text=text.replace('s.st_dev',"s.st_dev+(1000 if os.environ.get('LEGACY_TEST_PINNED_WORKER')=='1' else 0)")
+p.write_text(text)
+PY_MOUNT
 cp "${ROOT}/src/notebooks/audit_legacy_analysis_inputs.R" "${TREE}/src/notebooks/"
 cp "${ROOT}/datasets.json" "${TREE}/datasets.json"
 printf 'immutable fixture source\n' > "${TREE}/source.manifest"
@@ -94,7 +104,7 @@ SH
 for name in sbatch Rscript; do chmod +x "${TMP}/bin/${name}"; done
 for name in sacct squeue rsync; do printf '#!/bin/bash\necho forbidden >> "%s"\nexit 99\n' "${TMP}/forbidden" > "${TMP}/bin/${name}"; chmod +x "${TMP}/bin/${name}"; done
 # Read exact historical producer blobs; never execute them in the fixture.
-OLD_SOURCE="${TMP}/native-9ca"
+OLD_SOURCE="${SCRATCH}/_ecoda_source_snapshots/native-9ca/tree"
 mkdir -p "${OLD_SOURCE}/src/utils/bash"
 for name in h5ad_preflight_worker.sh ecoda_run_common.sh; do
   git -C "${ROOT}" show "9ca2453eea7320a721ef6dfd458f9db108abecac:src/utils/bash/${name}" > "${OLD_SOURCE}/src/utils/bash/${name}"

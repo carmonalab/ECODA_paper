@@ -64,13 +64,14 @@ metadata() {
   "${PYTHON_BIN}" - "$1" "${RUN}" "${PROJECT_ROOT}" "${CONTROL}" "${CONTROL_SHA}" <<'PY'
 import csv,hashlib,io,json,os,pathlib,re,sys,tempfile
 mode,root,project,request,request_sha=sys.argv[1:];root=pathlib.Path(root);m=root/'manifests';project=pathlib.Path(project)
+observed_stats={}
 def need(ok,message):
     if not ok: raise SystemExit('ERROR: '+message)
 def sha(data): return hashlib.sha256(data).hexdigest()
 def regular(name):
     p=pathlib.Path(name);need(not any(c in str(p) for c in '\t\r\n') and p.is_absolute() and p.is_file() and not p.is_symlink() and p.resolve()==p,'noncanonical file: '+str(p));return p
 def small(name):
-    p=regular(name);need(p.stat().st_size<=16*1024*1024,'oversized metadata: '+str(p));return p.read_bytes()
+    p=regular(name);stat(p);need(p.stat().st_size<=16*1024*1024,'oversized metadata: '+str(p));raw=p.read_bytes();stat(p);return raw
 def ref(value):
     need(isinstance(value,dict) and set(value)=={'path','sha256'} and re.fullmatch('[a-f0-9]{64}',value['sha256']),'invalid explicit SHA reference')
     data=small(value['path']);need(sha(data)==value['sha256'],'metadata SHA mismatch: '+value['path']);return data
@@ -83,7 +84,23 @@ def put(name,data):
 def js(data): return json.loads(data)
 def table(name): return list(csv.DictReader(io.StringIO(small(m/name).decode()),delimiter='\t'))
 def stat(name):
-    s=regular(name).stat();return dict(dev=s.st_dev,ino=s.st_ino,size=s.st_size,mode=s.st_mode&0o7777,mtime_ns=s.st_mtime_ns,ctime_ns=s.st_ctime_ns)
+    p=regular(name);s=p.stat();value=dict(dev=s.st_dev,ino=s.st_ino,size=s.st_size,mode=s.st_mode&0o7777,mtime_ns=s.st_mtime_ns,ctime_ns=s.st_ctime_ns)
+    prior=observed_stats.setdefault(str(p),value);diff={k:dict(expected=prior[k],actual=value[k]) for k in value if prior[k]!=value[k]}
+    need(not diff,'in-process stat changed path='+str(p)+' fields='+json.dumps(diff,sort_keys=True));return value
+def selected_beegfs(path):
+    scratch=root.parent.parent;p=pathlib.Path(path);need(p.is_relative_to(scratch),'selected path escapes scratch: '+str(p))
+    mounts=[]
+    for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines():
+        fields=line.split();separator=fields.index('-');point=pathlib.Path(fields[4].replace('\\040',' '))
+        mounts.append((point,fields[separator+1]))
+    def covering(p):return max((r for r in mounts if p==r[0] or r[0] in p.parents),key=lambda r:len(str(r[0])))
+    mount=covering(p);need(mount==covering(scratch) and mount[1]=='beegfs','selected path is not on expected BeeGFS mount: '+str(p))
+def portable_stat(actual,expected,path):
+    # st_dev identifies a mount in one kernel, not file content across nodes.
+    # Preserve it in recorded facts and enforce it within each invocation.
+    selected_beegfs(path)
+    diff={k:dict(expected=expected.get(k),actual=actual.get(k)) for k in set(actual)|set(expected) if k!='dev' and actual.get(k)!=expected.get(k)}
+    need(set(actual)==set(expected)=={'dev','ino','size','mode','mtime_ns','ctime_ns'} and all(type(v) is int for v in expected.values()) and not diff,'selected stat changed path='+str(path)+' fields='+json.dumps(diff,sort_keys=True));return True
 def fields(data):
     lines=data.decode().splitlines();pairs=[x.split('=',1) for x in lines]
     need(all(len(x)==2 for x in pairs) and len({x[0] for x in pairs})==len(pairs),'duplicate/malformed evidence fields');return dict(pairs)
@@ -188,9 +205,9 @@ for r in w['rows']:
     if not stopped:
         need(account.get(r['fullhash_array_id'])==['COMPLETED','0:0'],'selected full-hash array did not succeed')
         need(r['fullhash_array_id'] in gate['scheduler_array_ids'],'unrecorded full-hash array')
-    current=stat(r['current_input_path']);need(current==current_witness_stat(r['current_stat'],r['current_input_path']) and current['size']==int(r['current_input_size']),'current input changed since observation')
+    current=stat(r['current_input_path']);need(portable_stat(current,current_witness_stat(r['current_stat'],r['current_input_path']),r['current_input_path']) and current['size']==int(r['current_input_size']),'current input changed since observation')
     for key in ('proof','record','status','log'):
-        v=r[key];data=small(v['path']);need(sha(data)==v['sha256'] and data.decode()==v['text'] and stat(v['path'])==current_witness_stat(v['stat'],v['path']),'preflight evidence changed: '+key);metadata_paths.append(v['path'])
+        v=r[key];data=small(v['path']);need(sha(data)==v['sha256'] and data.decode()==v['text'] and portable_stat(stat(v['path']),current_witness_stat(v['stat'],v['path']),v['path']),'preflight evidence changed: '+key);metadata_paths.append(v['path'])
     expected_record=parent/'manifests/artifacts'/(sha(r['current_input_path'].encode())[:32]+'.record')
     need(r['record']['path']==str(expected_record),'noncanonical preflight record')
     need(fields(small(expected_record))==dict(PATH=r['current_input_path'],SIZE=str(r['current_input_size']),MD5=r['current_input_md5'],RUN_ID=w['parent_run_id'],PRODUCER='stage5_preflight',STATE='PUBLISHED'),'wrong full-hash record')
@@ -214,7 +231,7 @@ if stopped:
         need(label['stat_before']==label['stat_after'] and compact_stat(label['stat_after'])==current_witness_stat(r['current_stat'],r['current_input_path']),'label/input stat witness differs')
         for lk,wk in [('preflight_record','record'),('preflight_status','status'),('proof','proof')]:
             need(label[lk]['path']==r[wk]['path'] and label[lk]['sha256']==r[wk]['sha256'],'label witness native proof differs')
-        need(compact_stat(label['preflight_record']['stat'])==stat(r['record']['path']),'current label record stat differs')
+        need(portable_stat(stat(r['record']['path']),compact_stat(label['preflight_record']['stat']),r['record']['path']),'current label record stat differs')
 encoded_basis=(json.dumps(basis,sort_keys=True)+'\n').encode()
 if mode=='bind': put('input_basis.json',encoded_basis)
 else: need(small(m/'input_basis.json')==encoded_basis,'input content basis changed')
@@ -229,7 +246,8 @@ else:
     identity=js(small(m/'scope.json'));need(identity['run_id']==root.name and identity['purpose']=='legacy_analysis_compatibility_audit' and identity['config_sha256']==sha(small(project/'datasets.json')),'scope/source config changed')
     need(small(m/'selection.tsv')==selection and small(m/'inputs.tsv')==(''.join(p+'\n' for p in paths)).encode(),'selection/input inventory changed')
     for n,h in identity['metadata_sha256'].items(): need(sha(small(m/n))==h,'frozen metadata changed: '+n)
-    need(identity['input_stats']=={p:stat(p) for p in paths},'selected input/evidence stat changed during audit')
+    need(set(identity['input_stats'])==set(paths),'selected stat inventory differs')
+    for p in paths:portable_stat(stat(p),identity['input_stats'][p],p)
 if mode=='report':
     x=js(small(root/'artifacts/evidence/legacy_analysis_compatibility.json'))
     need(x['schema']=='ecoda_legacy_analysis_compatibility_v1' and x['physical_files']==106 and x['logical_rows']==209 and len(x['rows'])==209 and len(x['author_hr_pairs'])==9 and len(x['cohorts'])==10,'report scope differs')
@@ -240,6 +258,7 @@ if mode=='report':
         p=pathlib.Path(name) if name.startswith('/') else m/name;digest='-md5' if key in ('source-identity','runtime-identity','config') else '-sha256'
         need(v['--'+key]==str(p) and v['--'+key+digest]==(hashlib.md5(small(p)).hexdigest() if digest=='-md5' else sha(small(p))),'worker identity differs: '+key)
     need(x['compatible'] is True and x['status']=='COMPATIBILITY_EVIDENCE_COMPLETE_PENDING_REVIEW','compatibility mismatches require separate review')
+for path in list(observed_stats):stat(path)
 PY
 }
 input_scope_files() {

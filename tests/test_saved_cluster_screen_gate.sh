@@ -7,6 +7,11 @@ trap 'chmod -R u+w "${TMP}"; rm -rf "${TMP}"' EXIT
 TREE="${TMP}/snapshot/tree";SCRATCH="${TMP}/scratch"
 mkdir -p "${TREE}" "${SCRATCH}/_ecoda_inputs/fixture" "${TMP}/bin" "${TMP}/nas"
 cp -R "${ROOT}/src" "${TREE}/src"
+# Only this fixture copy supplies mountinfo; production has no bypass flag.
+"${ROOT}/.pixi/envs/default/bin/python" - "${TREE}/src/utils/bash/saved_cluster_screen.sh" "${SCRATCH}" <<'PY_MOUNT'
+import pathlib,sys
+p=pathlib.Path(sys.argv[1]);p.write_text(p.read_text().replace("pathlib.Path('/proc/self/mountinfo').read_text()",repr('10 1 0:68 / '+sys.argv[2]+' rw - beegfs beegfs_nodev rw\n')))
+PY_MOUNT
 cp "${ROOT}/datasets.json" "${TREE}/datasets.json"
 printf 'immutable source fixture\n' > "${TREE}/source.manifest"
 export TEST_TREE="${TREE}" TEST_SCRATCH="${SCRATCH}" TEST_TMP="${TMP}" TEST_NAS="${TMP}/nas"
