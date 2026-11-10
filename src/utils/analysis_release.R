@@ -322,13 +322,14 @@ analysis_projection_ct_methods <- function() c("ECODA_authors_HR", "ECODA_author
     return(clean(value))
   }
   distance <- as.matrix(value$dist_mat)
-  ids <- rownames(distance)
+  # Incidental names on an ID vector are not sample identity; preserve value objects.
+  ids <- unname(rownames(distance))
   if (!is.numeric(distance) || !length(ids) || anyNA(ids) || any(!nzchar(trimws(ids))) || anyDuplicated(ids) ||
-      !identical(colnames(distance), ids) || any(!is.finite(distance)) ||
+      !identical(unname(colnames(distance)), ids) || any(!is.finite(distance)) ||
       any(distance < 0) || any(abs(distance - t(distance)) > 1e-10) || any(abs(diag(distance)) > 1e-10))
     stop("Projection requires finite named symmetric distances")
   if (grepl("(^|_)NULL($|_)", key) && is.null(value$labels)) stop("NULL projections require actual stored labels")
-  if (!is.null(value$labels) && (is.null(names(value$labels)) || !identical(names(value$labels), ids) ||
+  if (!is.null(value$labels) && (is.null(names(value$labels)) || !identical(unname(names(value$labels)), ids) ||
       anyNA(value$labels) || any(!nzchar(trimws(as.character(value$labels))))))
     stop("Stored labels must retain exact distance sample order")
   fields <- c("dist_mat", "labels", "scores", "exec_time", "time_secs", "mem_GB", "timing_schema", "timing_id",
@@ -351,7 +352,7 @@ analysis_projection_ct_methods <- function() c("ECODA_authors_HR", "ECODA_author
     if (!is.null(categories)) thin$cell_type_names <- categories
   }
   if (item$source$view == "benchmark_analysis" && key %in% analysis_projection_ct_methods()) {
-    if (is.null(value$feat_mat) || !identical(rownames(value$feat_mat), ids) ||
+    if (is.null(value$feat_mat) || !identical(unname(rownames(value$feat_mat)), ids) ||
         any(!is.finite(as.matrix(value$feat_mat)))) stop("Invalid whitelisted CT feature matrix")
     thin$feat_mat <- value$feat_mat
     if (!is.null(value$counts)) {

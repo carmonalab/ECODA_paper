@@ -18,6 +18,29 @@ bundle <- function(features) list(feat_mat = features, dist_mat = dist(features)
 author <- bundle(ct); null <- author; null$labels <- labels[c(1,5,2,6,3,7,4,8)]; names(null$labels) <- ids
 pb <- bundle(rna)
 scitd <- pb; scitd$feat_mat <- rna[-8,,drop=FALSE]; scitd$dist_mat <- dist(scitd$feat_mat); scitd$labels <- labels[-8]
+# Real legacy Glo IDs may carry incidental vector names through matrix dimnames.
+# Validate an unname()d view only; retain source distance/labels/fingerprints.
+named_pb<-pb;attr(named_pb$dist_mat,"Labels")<-setNames(ids,paste0("incidental",seq_along(ids)))
+stopifnot(!identical(names(named_pb$labels),rownames(as.matrix(named_pb$dist_mat))))
+item<-list(result=named_pb,source=list(method_key="GloScope_hvg2000_pcadims30",view="benchmark_analysis"))
+original_fp<-c(distance=.analysis_fingerprint(named_pb$dist_mat),labels=.analysis_fingerprint(named_pb$labels))
+thin_named<-.analysis_thin_result(item)
+stopifnot(identical(thin_named$dist_mat,named_pb$dist_mat),identical(thin_named$labels,named_pb$labels),
+ identical(original_fp,c(distance=.analysis_fingerprint(thin_named$dist_mat),labels=.analysis_fingerprint(thin_named$labels))))
+named_ct<-author;dimnames(named_ct$feat_mat)[[1]]<-setNames(ids,paste0("featureAttr",seq_along(ids)))
+stopifnot(!identical(rownames(named_ct$feat_mat),rownames(as.matrix(named_ct$dist_mat))))
+# Kim's already-reviewed count rows may have their own exact name order.
+named_ct$counts<-named_ct$counts[rev(ids),,drop=FALSE]
+item_ct<-list(result=named_ct,source=list(method_key="ECODA_authors_HR",view="benchmark_analysis"))
+thin_ct<-.analysis_thin_result(item_ct)
+stopifnot(identical(thin_ct$feat_mat,named_ct$feat_mat),identical(thin_ct$counts,named_ct$counts),
+ identical(thin_ct$labels,named_ct$labels),identical(thin_ct$dist_mat,named_ct$dist_mat))
+bad<-item;attr(bad$result$dist_mat,"Labels")<-rev(ids);fail(.analysis_thin_result(bad))
+bad<-item;names(bad$result$labels)<-rev(ids);fail(.analysis_thin_result(bad))
+bad<-item;attr(bad$result$dist_mat,"Labels")<-c("wrong_sample",ids[-1]);fail(.analysis_thin_result(bad))
+bad<-item;bad$result$labels[1]<-NA;fail(.analysis_thin_result(bad))
+bad<-item_ct;rownames(bad$result$feat_mat)<-rev(ids);fail(.analysis_thin_result(bad))
+bad<-item_ct;rownames(bad$result$counts)[1]<-"wrong_sample";fail(.analysis_thin_result(bad))
 metadata <- list(labels=labels,n_samples=8L,n_cells=80L,cells_per_sample=setNames(rep(10,8),ids),n_cell_types_high_res=3L,RNA=rna)
 aggregate <- file.path(root,"source.rds")
 keys <- c("ECODA_authors_HR","ECODA_authors_HR_NULL","Pseudobulk_hvg2000","scITD_hvg2000_factors5","__dataset_metadata__")
