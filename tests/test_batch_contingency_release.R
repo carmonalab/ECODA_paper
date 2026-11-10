@@ -26,6 +26,24 @@ run <- function() {
     list(list(result=list(metadata=metadata),source=list(sample_id_col='Sample',artifact_path='/approved/thin/metadata.feather')))
   }
   info <- e$.read_sample_metadata('Covid19_PBMC');stopifnot(identical(info$sample_ids,ids),identical(info$metadata$raw_sample,metadata$raw_sample),info$source_status=='approved_projected_release')
+  # Fractional stacks may sum to 100+epsilon. Coordinate clipping must retain
+  # every rectangle rather than censor the top segment through scale limits.
+  fractional <- info
+  fractional$metadata <- data.frame(Sample=paste0('f',1:44),severity=c(rep('mild',27),rep('severe',7),rep('control',10)))
+  fractional$metadata[['Sampling day (Days after symptom onset)']] <- c(rep(1:19,length.out=27),1:7,rep('control',10))
+  fractional$sample_ids <- fractional$metadata$Sample
+  day_plot <- e$.covid_sampling_day_plot(fractional,data.frame(covariate=e$.covid_sampling_day_col,candidate_class='technical'))$plot
+  bars <- ggplot_build(day_plot)$data[[1]]
+  stopifnot(nrow(bars)==27L,all(is.finite(bars$ymin)),all(is.finite(bars$ymax)),
+    all(bars$ymin>=-1e-10),all(bars$ymax<=100+1e-10),identical(day_plot$coordinates$limits$y,c(0,100)))
+  warnings <- character()
+  withCallingHandlers(ggplotGrob(day_plot),warning=function(w){warnings<<-c(warnings,conditionMessage(w));invokeRestart('muffleWarning')})
+  stopifnot(!any(grepl('Removed',warnings)),sum(day_plot$data$sample_count)==44L)
+  save_scope <- new.env(parent=e);save_scope$height<-8
+  save_scope$path<-'Covid19_PBMC_extended.pdf';eval(body(e$.save_plot)[[2]],save_scope)
+  stopifnot(save_scope$height==16)
+  save_scope$path<-'Covid19_PBMC.pdf';save_scope$height<-8;eval(body(e$.save_plot)[[2]],save_scope)
+  stopifnot(save_scope$height==8)
   original <- metadata;metadata$Sample[2]<-metadata$Sample[1];fail(e$.read_sample_metadata('Covid19_PBMC'));metadata<-original
   metadata$batch<-NULL;fail(e$.read_sample_metadata('Covid19_PBMC'));metadata<-original
   features <- matrix(seq_len(48),12,dimnames=list(ids,paste0('g',1:4)));distances<-list(ECODA_authors_HR=list(dist_mat=dist(features)),Pseudobulk_hvg2000=list(dist_mat=dist(features*2)))

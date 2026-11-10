@@ -380,6 +380,7 @@ extended_candidates <- function(dataset, label_col = datasets[[dataset]]$label_c
 }
 
 .save_plot <- function(plot, path, width = 14, height = 8) {
+  if (basename(path) == "Covid19_PBMC_extended.pdf") height <- max(height, 16)
   if (basename(path) %in% c("Joanito_extended.pdf", "Alzheimer_extended.pdf", "Lupus_PBMC_extended.pdf"))
     height <- max(height, 12)
   if (basename(path) %in% c("Kidney_KPMP_full_extended.pdf", "Kidney_KPMP_full_tissue_extended.pdf")) {
@@ -446,11 +447,11 @@ extended_candidates <- function(dataset, label_col = datasets[[dataset]]$label_c
       expand = expansion(mult = c(0.08, 0.08))
     ) +
     scale_y_continuous(
-      limits = c(0, 100),
       breaks = c(0, 25, 50, 75, 100),
       labels = function(value) paste0(value, "%"),
       expand = expansion(mult = c(0, 0))
     ) +
+    coord_cartesian(ylim = c(0, 100)) +
     viridis::scale_fill_viridis(
       option = "viridis",
       direction = -1,
