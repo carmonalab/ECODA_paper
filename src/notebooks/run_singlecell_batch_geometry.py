@@ -526,7 +526,7 @@ def render_main(c, output):
             palettes[column] = {label: list(plt.get_cmap("tab10").colors[k]) if len(levels) <= 10 else matplotlib.colors.hsv_to_rgb([int(hashlib.sha256((column + "\0" + label).encode()).hexdigest()[:8], 16) / 2**32, .65, .8]).tolist() for k, label in enumerate(levels)}
         for kind, coords, columns in [("PCA", ["PC1", "PC2"], ["Sample", "author_cell_type", "biological_label", "batch_label"]),
                                       ("UMAP", ["UMAP1", "UMAP2"], ["Sample", "author_cell_type", "leiden2", "biological_label", "batch_label"])]:
-            fig, axes = plt.subplots(2, len(columns), figsize=(5 * len(columns), 16))
+            fig, axes = plt.subplots(2, len(columns), figsize=(5 * len(columns), 24 if dataset == "Joanito" else 16))
             for i, (frame, metrics) in enumerate(zip(frames, summaries)):
                 number = lambda v: "NA (single label)" if v is None else f"{v:.4f}"
                 score = "50D mean iLISI mixing=" + number(metrics["batch"]["scaled_cellwise_mean"]) + "\nmean cLISI preservation=" + number(metrics["cell_type"]["scaled_cellwise_mean"])

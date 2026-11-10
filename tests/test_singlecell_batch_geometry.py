@@ -338,5 +338,31 @@ printf '900001;fixture\\n';exit "${rc}"
         artists = [ax.scatter([0, 1], [0, 1], c=colors) for ax in axes]
         np.testing.assert_array_equal(artists[0].get_facecolors(), artists[1].get_facecolors())
 
+    def test_joanito_large_legend_layout_artist_only(self):
+        import matplotlib.figure
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        # Actual final manifest has 124 Sample and 77 Leiden levels; no source data.
+        n = 124
+        frame = pd.DataFrame(dict(cell_id=[f"c{i:03d}" for i in range(n)], Sample=[f"Sample_{i:03d}" for i in range(n)],
+            author_cell_type=[f"type_{i % 11}" for i in range(n)], biological_label=["Normal" if i % 2 else "Tumor" for i in range(n)],
+            batch_label=["3seq" if i % 2 else "5seq" for i in range(n)], leiden2=[str(i % 77) for i in range(n)],
+            PC1=np.arange(n), PC2=np.arange(n) / 2, UMAP1=np.arange(n) / 3, UMAP2=np.arange(n) / 4))
+        metrics = dict(cells=252519, source_columns={}, batch=dict(scaled_cellwise_mean=.1), cell_type=dict(scaled_cellwise_mean=.9))
+        control = dict(schema="ecoda_singlecell_main_display_control_v1", status="APPROVED_LOCAL_MAIN_DISPLAY_EXTRACTS",
+            rows=[dict(dataset="Joanito", representation=r) for r in p.REPRESENTATIONS])
+        checked = []
+        def check(fig, path, **kwargs):
+            self.assertEqual(fig.get_figheight(), 24)
+            canvas = FigureCanvasAgg(fig); canvas.draw(); renderer = canvas.get_renderer(); width = len(fig.axes) // 2
+            for j in range(width):
+                legend = fig.axes[j].get_legend(); heading = fig.axes[width + j].title
+                self.assertGreater(legend.get_window_extent(renderer).y0, heading.get_window_extent(renderer).y1 + 2)
+            self.assertEqual(len(fig.axes[0].get_legend().get_texts()), 124)
+            if width == 5: self.assertEqual(len(fig.axes[2].get_legend().get_texts()), 77)
+            checked.append(width); Path(path).write_bytes(b"artist-fixture-only-no-PDF")
+        with patch.object(p, "DATASETS", ("Joanito",)), patch.object(p, "load_display", side_effect=lambda row: (frame.copy(), copy.deepcopy(metrics))), patch.object(matplotlib.figure.Figure, "savefig", check), patch.object(p, "ann90", side_effect=AssertionError("No ANN")), patch.object(h5py, "File", side_effect=AssertionError("No H5")):
+            p.render_main(control, self.root / "layout-only")
+        self.assertEqual(checked, [4, 5])
+
 
 if __name__ == "__main__": unittest.main()
