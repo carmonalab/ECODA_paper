@@ -107,6 +107,71 @@ unknown <- pb; unknown$scores$lisi_score <- 4
 stopifnot(.legacy_bundle(unknown, rows[4, ], labels)$score_disposition == "needs_validated_distance_rescore")
 unknown$scoring_policy <- evaluation_scoring_policy(); stopifnot("lisi_score" %in% .legacy_bundle(unknown, rows[4, ], labels)$invalid_core_scores)
 unknown$scores$lisi_score <- NaN; stopifnot(.legacy_bundle(unknown, rows[4, ], labels)$score_disposition == "needs_validated_distance_rescore")
+# The CLI accepts two fixed scopes, never caller-supplied counts or filenames.
+fixed_control <- function(schema, logical, physical) list(schema = schema, total_logical_rows = logical,
+  physical_files = physical, author_hr_metadata_pairs = 9L, scientifically_approved_rows = 0L)
+scope209 <- .legacy_fixed_scope(fixed_control("ecoda_p6_legacy_science_audit_proposal_v4", 209L, 106L))
+scope777 <- .legacy_fixed_scope(fixed_control("ecoda_p6_legacy777_science_audit_v1", 777L, 246L))
+stopifnot(scope209$rows == "rows.209.tsv", scope209$files == "files.106.tsv",
+  scope209$report == "ecoda_legacy_analysis_compatibility_v1", scope777$rows == "rows.777.tsv",
+  scope777$files == "files.246.tsv", scope777$report == "ecoda_legacy777_analysis_compatibility_v1")
+reject(.legacy_fixed_scope(fixed_control("foreign", 777L, 246L)))
+reject(.legacy_fixed_scope(fixed_control("ecoda_p6_legacy777_science_audit_v1", 209L, 106L)))
+reject(.legacy_fixed_scope(fixed_control("ecoda_p6_legacy_science_audit_proposal_v4", 777L, 246L)))
+test_fixed_cli <- function() {
+  original_audit <- audit_legacy_analysis_inputs
+  had_reader <- exists("read_datasets_json", .GlobalEnv, inherits = FALSE)
+  if (had_reader) original_reader <- get("read_datasets_json", .GlobalEnv)
+  on.exit({assign("audit_legacy_analysis_inputs", original_audit, .GlobalEnv)
+    if (had_reader) assign("read_datasets_json", original_reader, .GlobalEnv) else rm("read_datasets_json", envir = .GlobalEnv)})
+  assign("read_datasets_json", function(...) list(), .GlobalEnv)
+  # Existing tiny-H5AD fixtures above exercise the real scientific body. This
+  # spy isolates the actual CLI's checked metadata/finite-scope routing only.
+  seen <- list()
+  assign("audit_legacy_analysis_inputs", function(r, f, p, ...) {
+    seen[[length(seen) + 1L]] <<- c(nrow(r), nrow(f), nrow(p))
+    list(schema = "ecoda_legacy_analysis_compatibility_v1", compatible = TRUE,
+      status = "COMPATIBILITY_EVIDENCE_COMPLETE_PENDING_REVIEW", scientifically_approved_rows = 0L)
+  }, .GlobalEnv)
+  sha <- function(p) digest::digest(file = p, algo = "sha256")
+  json <- function(p, x) {jsonlite::write_json(x, p, auto_unbox = TRUE, null = "null"); p}
+  for (scope in list(scope209, scope777)) {
+    dir <- file.path(root, paste0("cli", scope$logical)); dir.create(dir)
+    r <- data.frame(dataset = rep(paste0("D", 1:10), length.out = scope$logical), kind = "rds_bundle",
+      artifact_path = "/fixture", method_key = as.character(seq_len(scope$logical)), sample_id_col = "", stringsAsFactors = FALSE)
+    f <- data.frame(dataset = c(rep("D1", scope$physical - 1L), "__all__"), artifact_path = "/fixture")
+    p <- data.frame(dataset = paste0("D", 1:9))
+    paths <- file.path(dir, c(scope$rows, scope$files, "author_hr_metadata_pairs.9.tsv"))
+    for (i in 1:3) write.table(list(r, f, p)[[i]], paths[i], sep = "\t", row.names = FALSE, quote = FALSE)
+    config <- json(file.path(dir, "config.json"), list(fixture = TRUE))
+    source_id <- json(file.path(dir, "source.json"), list(fixture = TRUE))
+    runtime_id <- json(file.path(dir, "runtime.json"), list(fixture = TRUE))
+    observation <- json(file.path(dir, "observation.json"), list(status = "OBSERVED_NOT_SCIENTIFICALLY_APPROVED"))
+    headers <- json(file.path(dir, "headers.json"), list(schema = "ecoda_p6_feather_header_observation_v1", rows = list()))
+    zero_schema <- json(file.path(dir, "zero_schema.json"), list(rows = lapply(p$dataset, function(ds) list(dataset = ds))))
+    zero_policy <- json(file.path(dir, "zero_policy.json"), list(source_schema_sha256 = sha(zero_schema), datasets = lapply(p$dataset, function(ds) list(dataset = ds)), scientifically_approved_rows = 0L))
+    schema <- if (scope$logical == 777L) "ecoda_p6_legacy777_science_audit_v1" else "ecoda_p6_legacy_science_audit_proposal_v4"
+    control <- c(fixed_control(schema, scope$logical, scope$physical), list(controls = as.list(setNames(vapply(paths, sha, character(1)), basename(paths))),
+      source_observation = list(sha256 = sha(observation)), feather_header_observation = list(sha256 = sha(headers))))
+    control_path <- json(file.path(dir, "control.json"), control); output <- file.path(dir, "report.json")
+    args <- c("--control", control_path, "--control-sha256", sha(control_path), "--config", config, "--config-md5", md5(config),
+      "--source-identity", source_id, "--source-identity-md5", md5(source_id), "--runtime-identity", runtime_id, "--runtime-identity-md5", md5(runtime_id),
+      "--observation", observation, "--observation-sha256", sha(observation), "--zeroimp-schema", zero_schema, "--zeroimp-schema-sha256", sha(zero_schema),
+      "--zeroimp-policy", zero_policy, "--zeroimp-policy-sha256", sha(zero_policy), "--feather-headers", headers, "--feather-headers-sha256", sha(headers), "--report", output)
+    result <- legacy_analysis_audit_main(args)
+    stopifnot(identical(result$schema, scope$report), identical(jsonlite::read_json(output)$schema, scope$report),
+      identical(tail(seen, 1L)[[1]], c(scope$logical, scope$physical, 9L)))
+    reject(legacy_analysis_audit_main(args))
+    if (scope$logical == 777L) {
+      # A resealed wrong nine-cohort manifest must fail before the body runs.
+      r$dataset <- rep(paste0("D", 1:9), length.out = nrow(r)); write.table(r, paths[1], sep = "\t", row.names = FALSE, quote = FALSE)
+      control$controls[[scope$rows]] <- sha(paths[1]); json(control_path, control)
+      bad <- args; bad[match("--control-sha256", bad) + 1L] <- sha(control_path); bad[match("--report", bad) + 1L] <- file.path(dir, "bad.json")
+      before_seen <- length(seen); reject(legacy_analysis_audit_main(bad)); stopifnot(length(seen) == before_seen)
+    }
+  }
+}
+test_fixed_cli()
 bad_author <- author; bad_author$counts[1,1] <- bad_author$counts[1,1] + 1; reject(.legacy_pair(bad_author, meta, obs, entry, labels))
 bad_author <- author; bad_author$feat_mat[1,1] <- bad_author$feat_mat[1,1] + 1; reject(.legacy_pair(bad_author, meta, obs, entry, labels))
 bad_meta <- meta; bad_meta$n_cells <- 25L; reject(.legacy_pair(author, bad_meta, obs, entry, labels))

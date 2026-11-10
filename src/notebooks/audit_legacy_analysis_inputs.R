@@ -310,6 +310,17 @@ audit_legacy_analysis_inputs <- function(rows, files, pairs, datasets, obs_reade
   .legacy_sha_file(path, sha)
   value
 }
+.legacy_fixed_scope <- function(control) {
+  scope <- switch(control$schema,
+    ecoda_p6_legacy_science_audit_proposal_v4 = list(rows = "rows.209.tsv", files = "files.106.tsv",
+      logical = 209L, physical = 106L, report = "ecoda_legacy_analysis_compatibility_v1"),
+    ecoda_p6_legacy777_science_audit_v1 = list(rows = "rows.777.tsv", files = "files.246.tsv",
+      logical = 777L, physical = 246L, report = "ecoda_legacy777_analysis_compatibility_v1"), NULL)
+  .legacy_need(!is.null(scope) && control$total_logical_rows == scope$logical &&
+    control$physical_files == scope$physical && control$author_hr_metadata_pairs == 9L &&
+    control$scientifically_approved_rows == 0L, "Unexpected finite audit control")
+  scope
+}
 legacy_analysis_audit_main <- function(args = commandArgs(TRUE)) {
   .legacy_need(length(args) %% 2L == 0L && length(args) > 0L, "Expected explicit flag/value arguments")
   opts <- setNames(as.list(args[seq.int(2L, length(args), 2L)]), args[seq.int(1L, length(args), 2L)])
@@ -323,18 +334,20 @@ legacy_analysis_audit_main <- function(args = commandArgs(TRUE)) {
   for (name in c("config", "source-identity", "runtime-identity"))
     .analysis_checked_file(opts[[paste0("--", name)]], opts[[paste0("--", name, "-md5")]])
   control <- .legacy_json_metadata(opts[["--control"]], opts[["--control-sha256"]])
-  .legacy_need(identical(control$schema, "ecoda_p6_legacy_science_audit_proposal_v4") &&
-    control$total_logical_rows == 209L && control$physical_files == 106L && control$author_hr_metadata_pairs == 9L &&
-    control$scientifically_approved_rows == 0L, "Unexpected finite audit control")
+  scope <- .legacy_fixed_scope(control)
   root <- dirname(opts[["--control"]]); frames <- list()
-  for (name in c("rows.209.tsv", "files.106.tsv", "author_hr_metadata_pairs.9.tsv")) {
+  for (name in c(scope$rows, scope$files, "author_hr_metadata_pairs.9.tsv")) {
     path <- file.path(root, name); sha <- control$controls[[name]]
     .legacy_sha_file(path, sha)
     frames[[name]] <- utils::read.delim(path, colClasses = "character", check.names = FALSE, quote = "", comment.char = "", na.strings = NULL)
     .legacy_sha_file(path, sha)
   }
-  .legacy_need(nrow(frames[[1]]) == 209L && nrow(frames[[2]]) == 106L && nrow(frames[[3]]) == 9L,
+  .legacy_need(nrow(frames[[1]]) == scope$logical && nrow(frames[[2]]) == scope$physical && nrow(frames[[3]]) == 9L,
     "Finite manifest row counts differ")
+  if (scope$logical == 777L)
+    .legacy_need(length(unique(frames[[1]]$dataset)) == 10L &&
+      sum(frames[[2]]$dataset == "__all__") == 1L && sum(frames[[2]]$dataset != "__all__") == 245L,
+      "Fixed777 requires ten cohorts and245core plus one timing file")
   .legacy_need(identical(opts[["--observation-sha256"]], control$source_observation$sha256), "Original observation identity differs")
   observation <- .legacy_json_metadata(opts[["--observation"]], opts[["--observation-sha256"]])
   .legacy_need(identical(opts[["--feather-headers-sha256"]], control$feather_header_observation$sha256), "Feather header witness identity differs")
@@ -352,6 +365,7 @@ legacy_analysis_audit_main <- function(args = commandArgs(TRUE)) {
   module_dir <- normalizePath(file.path(Sys.getenv("PROJECT_ROOT", unset = getwd()), "src/utils/py"), mustWork = TRUE)
   result <- audit_legacy_analysis_inputs(frames[[1]], frames[[2]], frames[[3]], datasets,
     function(path, columns) .legacy_read_obs(path, columns, module_dir))
+  result$schema <- scope$report
   result$validation_identities <- opts[setdiff(names(opts), "--report")]
   result$original_observation_status <- observation$status
   result$zero_imputation <- list(schema_evidence = opts[["--zeroimp-schema"]], schema_sha256 = opts[["--zeroimp-schema-sha256"]],

@@ -42,7 +42,7 @@ export ECODA_RUN_ROOT="${RUN}" ECODA_RUNTIME_PROFILE=stage5 RETICULATE_PYTHON="$
 M="${RUN}/manifests"
 REPORT="${RUN}/artifacts/evidence/legacy_analysis_compatibility.json"
 STATUS="${RUN}/status/legacy_analysis_audit.status"
-SCOPE_FILES=(request.json control.json rows.209.tsv files.106.tsv author_hr_metadata_pairs.9.tsv
+SCOPE_FILES=(request.json control.json author_hr_metadata_pairs.9.tsv
   avg_legacy.10.tsv zeroimp_nas_counterparts.9.tsv observation.json zeroimp_schema.json zeroimp_policy.json
   feather_headers.json input_review.json input_witness.json parent_gate.json input_basis.json
   source.manifest runtime.identity operation selection.tsv inputs.tsv scope.json)
@@ -110,26 +110,36 @@ def review_refs(review):
     if review['schema']=='ecoda_p6_preflight_witness_review_v1': return terminal_refs
     need(review['schema']=='ecoda_p6_stopped_parent_input_review_v1','unknown input review schema')
     return stopped_refs+((('reboot_observation','device_transition_observation.json'),) if review.get('reviewed_device_transition') is not None else ())
-if mode=='scope-files':
-    print('\n'.join(name for _,name in review_refs(js(small(m/'input_review.json'))) if name not in ('input_witness.json','parent_gate.json')));sys.exit(0)
 entries=('science_control','observation','zeroimp_schema','zeroimp_policy','feather_headers','input_review')
+def scope_contract(q):
+    need(set(q)=={'schema',*entries},'unknown gate request fields')
+    contracts={
+        'ecoda_legacy_analysis_audit_gate_v1':('ecoda_p6_legacy_science_audit_proposal_v4','rows.209.tsv','files.106.tsv',209,106,'ecoda_legacy_analysis_compatibility_v1'),
+        'ecoda_legacy777_audit_gate_v1':('ecoda_p6_legacy777_science_audit_v1','rows.777.tsv','files.246.tsv',777,246,'ecoda_legacy777_analysis_compatibility_v1'),
+    }
+    need(q['schema'] in contracts,'unknown gate request schema')
+    return dict(zip(('schema','rows','files','logical_count','physical_count','report_schema'),contracts[q['schema']]))
+if mode=='scope-files':
+    contract=scope_contract(js(small(m/'request.json')))
+    print('\n'.join([contract['rows'],contract['files']]+[name for _,name in review_refs(js(small(m/'input_review.json'))) if name not in ('input_witness.json','parent_gate.json')]));sys.exit(0)
 if mode=='bind':
     raw=small(request);need(re.fullmatch('[a-f0-9]{64}',request_sha) and sha(raw)==request_sha,'request SHA mismatch');q=js(raw)
-    need(set(q)=={'schema',*entries} and q['schema']=='ecoda_legacy_analysis_audit_gate_v1','unknown gate request fields')
+    contract=scope_contract(q)
     put('request.json',raw)
     for key in entries: put('control.json' if key=='science_control' else key+'.json',ref(q[key]))
     control=js(small(m/'control.json'))
-    expected={'rows.209.tsv','files.106.tsv','author_hr_metadata_pairs.9.tsv','avg_legacy.10.tsv','zeroimp_nas_counterparts.9.tsv'}
+    expected={contract['rows'],contract['files'],'author_hr_metadata_pairs.9.tsv','avg_legacy.10.tsv','zeroimp_nas_counterparts.9.tsv'}
     need(set(control['controls'])==expected,'unexpected control file union')
     for name in expected: put(name,ref(dict(path=str(pathlib.Path(q['science_control']['path']).parent/name),sha256=control['controls'][name])))
     review=js(small(m/'input_review.json'))
     for key,name in review_refs(review): put(name,ref(review[key]))
 else: q=js(small(m/'request.json'))
-control=js(small(m/'control.json'));rows=table('rows.209.tsv');files=table('files.106.tsv');pairs=table('author_hr_metadata_pairs.9.tsv')
-need(control['schema']=='ecoda_p6_legacy_science_audit_proposal_v4' and control['total_logical_rows']==209 and control['physical_files']==106 and control['author_hr_metadata_pairs']==9 and control['scientifically_approved_rows']==0,'wrong finite science control')
-need((len(rows),len(files),len(pairs))==(209,106,9),'finite manifest counts differ')
+contract=scope_contract(q)
+control=js(small(m/'control.json'));rows=table(contract['rows']);files=table(contract['files']);pairs=table('author_hr_metadata_pairs.9.tsv')
+need(control['schema']==contract['schema'] and control['total_logical_rows']==contract['logical_count'] and control['physical_files']==contract['physical_count'] and control['author_hr_metadata_pairs']==9 and control['scientifically_approved_rows']==0,'wrong finite science control')
+need((len(rows),len(files),len(pairs))==(contract['logical_count'],contract['physical_count'],9),'finite manifest counts differ')
 keys=[(r['dataset'],r['view'],r['method_key']) for r in rows]
-need(len(set(keys))==209 and all(r['view']=='benchmark_analysis' and r['origin']=='legacy_reuse' and r['status']=='BLOCKED_UNTIL_SCIENTIFIC_REVIEW' for r in rows),'logical scope/origin differs')
+need(len(set(keys))==contract['logical_count'] and all(r['view']=='benchmark_analysis' and r['origin']=='legacy_reuse' and r['status']=='BLOCKED_UNTIL_SCIENTIFIC_REVIEW' for r in rows),'logical scope/origin differs')
 need(all(all(v and not any(c in v for c in '\t\r\n') for v in k) for k in keys),'invalid selection token')
 config=js(small(project/'datasets.json'))
 need(all(config.get(r['dataset'],{}).get('use_for_benchmark') is True for r in rows),'disabled/unconfigured cohort')
@@ -137,7 +147,7 @@ inputs={}
 for r in rows:
     v={k:r[k] for k in ('current_input_path','current_input_md5','current_input_size','current_input_proof')}
     need(r['dataset'] not in inputs or inputs[r['dataset']]==v,'conflicting input references');inputs[r['dataset']]=v
-need(len(inputs)==10 and len({r['artifact_path'] for r in files})==106,'input/physical union differs')
+need(len(inputs)==10 and len({r['artifact_path'] for r in files})==contract['physical_count'],'input/physical union differs')
 review=js(small(m/'input_review.json'));w=js(small(m/'input_witness.json'));gate=js(small(m/'parent_gate.json'))
 stopped=review['schema']=='ecoda_p6_stopped_parent_input_review_v1'
 def current_witness_stat(previous,path):
@@ -250,7 +260,7 @@ else:
     for p in paths:portable_stat(stat(p),identity['input_stats'][p],p)
 if mode=='report':
     x=js(small(root/'artifacts/evidence/legacy_analysis_compatibility.json'))
-    need(x['schema']=='ecoda_legacy_analysis_compatibility_v1' and x['physical_files']==106 and x['logical_rows']==209 and len(x['rows'])==209 and len(x['author_hr_pairs'])==9 and len(x['cohorts'])==10,'report scope differs')
+    need(x['schema']==contract['report_schema'] and x['physical_files']==contract['physical_count'] and x['logical_rows']==contract['logical_count'] and len(x['rows'])==contract['logical_count'] and len(x['author_hr_pairs'])==9 and len(x['cohorts'])==10,'report scope differs')
     need(x['scientifically_approved_rows']==0 and x['model_fits']==0 and x['score_calculations']==0 and x['h5ad_expression_values_read'] is False and x['h5ad_content_rehashed_here'] is False and x['prior_validated_content_witness_required'] is True,'report exceeds evidence scope')
     need(set(x['rows'])=={r['dataset']+'/'+r['method_key'] for r in rows},'report omitted selected logical rows')
     v=x['validation_identities'];pairs=(('control','control.json'),('source-identity','source.manifest'),('runtime-identity','runtime.identity'),('config',str(project/'datasets.json')),('observation','observation.json'),('zeroimp-schema','zeroimp_schema.json'),('zeroimp-policy','zeroimp_policy.json'),('feather-headers','feather_headers.json'))

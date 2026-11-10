@@ -204,6 +204,25 @@ bad=copy.deepcopy(r);bad['native_preflight_worker']['sha256']='b'*64;stopped_req
 bad=copy.deepcopy(r);wx=json.loads((p/'witness.json').read_text());wx['rows'][0]['task_id']=2;bad['observation']=save(p/'stopped_task_witness.json',wx);bad['selected_preflight_tasks'][0]['task_id']=2;stopped_request('stopped_task',bad)
 for name,change in [('stopped_labels',lambda row:row['ordered_primary_labels'].reverse()),('stopped_stat',lambda row:row['stat_after'].__setitem__('st_ino',999)),('stopped_label_proof',lambda row:row['proof'].__setitem__('sha256','c'*64))]:
  bad=copy.deepcopy(r);lx=copy.deepcopy(labels);change(lx['rows'][0]);bad['current_labels']=save(p/(name+'_labels.json'),lx);lr=copy.deepcopy(label_review);lr['observation_sha256']=bad['current_labels']['sha256'];bad['current_labels_review']=save(p/(name+'_label_review.json'),lr);stopped_request(name,bad)
+
+# A distinct fixed777 control shares only the already-approved ten input witnesses.
+# Its245core paths plus the existing merged timing1 are explicit, not discovered.
+rows777=[];files246=[]
+for n,ds in enumerate(cohorts):
+ base=next(row for row in rows if row['dataset']==ds);artifacts=[]
+ for j in range(25 if n<5 else 24):
+  f=p/f'777_{ds}_{j}.rds';f.write_text('new fixed777 opaque fixture')
+  artifacts.append(f);files246.append(dict(dataset=ds,artifact_path=str(f),md5=hashlib.md5(f.read_bytes()).hexdigest(),size=str(f.stat().st_size),needed_bundle_keys=''))
+ for j in range(78 if n<7 else 77):
+  f=artifacts[j%len(artifacts)];row=dict(base,method_key=f'M{j}',artifact_path=str(f),md5=hashlib.md5(f.read_bytes()).hexdigest(),size=str(f.stat().st_size));rows777.append(row)
+f=p/'777_merged_timing.feather';f.write_text('opaque merged timing metadata fixture');files246.append(dict(dataset='__all__',artifact_path=str(f),md5=hashlib.md5(f.read_bytes()).hexdigest(),size=str(f.stat().st_size),needed_bundle_keys=''))
+tsv('rows.777.tsv',rows777);tsv('files.246.tsv',files246)
+science777=dict(science,schema='ecoda_p6_legacy777_science_audit_v1',total_logical_rows=777,physical_files=246,controls={name:sha(p/name)for name in ('rows.777.tsv','files.246.tsv','author_hr_metadata_pairs.9.tsv','avg_legacy.10.tsv','zeroimp_nas_counterparts.9.tsv')})
+q777=json.loads((p/'stopped_request.json').read_text());q777['schema']='ecoda_legacy777_audit_gate_v1';q777['science_control']=save(p/'777_control.json',science777);save(p/'777_request.json',q777)
+for name,field,value in [('wrong_count','total_logical_rows',778),('wrong_physical','physical_files',245),('old_schema','schema','ecoda_p6_legacy_science_audit_proposal_v4')]:
+ wrong=dict(science777);wrong[field]=value;q=dict(q777);q['science_control']=save(p/('777_'+name+'_control.json'),wrong);save(p/('777_'+name+'_request.json'),q)
+wrong=dict(science777,controls=dict(science['controls']));q=dict(q777);q['science_control']=save(p/'777_wrong_names_control.json',wrong);save(p/'777_wrong_names_request.json',q)
+q=dict(q777,schema='ecoda_legacy888_audit_gate_v1');save(p/'777_arbitrary_request.json',q)
 PY
 cat > "${TMP}/emit_report.py" <<'PY'
 import csv,hashlib,json,os,pathlib,sys
@@ -211,9 +230,10 @@ assert os.environ.get('LEGACY_TEST_PINNED_WORKER')=='1'
 assert sys.argv[1]=='--vanilla' and sys.argv[2].endswith('/src/notebooks/audit_legacy_analysis_inputs.R')
 a=sys.argv[3:];v=dict(zip(a[::2],a[1::2]));assert len(v)==17 and len(a)==34
 m=pathlib.Path(v['--control']).parent
-rows=list(csv.DictReader((m/'rows.209.tsv').open(),delimiter='\t'))
+control=json.loads((m/'control.json').read_text());new=control['schema']=='ecoda_p6_legacy777_science_audit_v1'
+rows=list(csv.DictReader((m/('rows.777.tsv'if new else'rows.209.tsv')).open(),delimiter='\t'))
 failed=os.environ.get('LEGACY_TEST_FAIL')=='1'
-x=dict(schema='ecoda_legacy_analysis_compatibility_v1',physical_files=106,logical_rows=209,rows={r['dataset']+'/'+r['method_key']:{} for r in rows},author_hr_pairs={str(i):{} for i in range(9)},cohorts={str(i):{} for i in range(10)},scientifically_approved_rows=0,model_fits=0,score_calculations=0,h5ad_expression_values_read=False,h5ad_content_rehashed_here=False,prior_validated_content_witness_required=True,validation_identities={k:w for k,w in v.items() if k!='--report'},compatible=not failed,status='COMPATIBILITY_MISMATCHES' if failed else 'COMPATIBILITY_EVIDENCE_COMPLETE_PENDING_REVIEW')
+x=dict(schema='ecoda_legacy777_analysis_compatibility_v1'if new else'ecoda_legacy_analysis_compatibility_v1',physical_files=246 if new else 106,logical_rows=777 if new else 209,rows={r['dataset']+'/'+r['method_key']:{} for r in rows},author_hr_pairs={str(i):{} for i in range(9)},cohorts={str(i):{} for i in range(10)},scientifically_approved_rows=0,model_fits=0,score_calculations=0,h5ad_expression_values_read=False,h5ad_content_rehashed_here=False,prior_validated_content_witness_required=True,validation_identities={k:w for k,w in v.items() if k!='--report'},compatible=not failed,status='COMPATIBILITY_MISMATCHES' if failed else 'COMPATIBILITY_EVIDENCE_COMPLETE_PENDING_REVIEW')
 with open(v['--report'],'x') as f:json.dump(x,f)
 print('startup noise is a log, never report content')
 sys.exit(1 if failed else 0)
@@ -257,6 +277,17 @@ before="$(ecoda_sha256_file "${stopped_run}/status/terminal")"
 ECODA_RUN_ID=stopped ECODA_RUN_ROOT="${stopped_run}" reject bash "${TREE}/src/utils/bash/legacy_analysis_audit.sh" --validate
 [[ "$(ecoda_sha256_file "${stopped_run}/status/terminal")" == "${before}" ]]
 cp "${TMP}/stopped-terminal.saved" "${stopped_run}/status/terminal"
+invoke fixed777 "${INPUTS}/777_request.json" > "${TMP}/777.log"
+new_run="${SCRATCH}/_ecoda_runs/fixed777"
+[[ "$(wc -l < "${new_run}/manifests/selection.tsv" | tr -d ' ')" == 777 && -f "${new_run}/manifests/rows.777.tsv" && -f "${new_run}/manifests/files.246.tsv" && ! -e "${new_run}/manifests/rows.209.tsv" && ! -e "${new_run}/manifests/files.106.tsv" ]]
+ECODA_RUN_ID=fixed777 ECODA_RUN_ROOT="${new_run}" bash "${TREE}/src/utils/bash/legacy_analysis_audit.sh" --validate > "${TMP}/777-validated.log"
+"${TEST_PYTHON}" - "${new_run}/artifacts/evidence/legacy_analysis_compatibility.json" <<'PY_777'
+import json,sys
+r=json.load(open(sys.argv[1]));assert r['schema']=='ecoda_legacy777_analysis_compatibility_v1' and r['logical_rows']==777 and r['physical_files']==246 and len(r['rows'])==777 and r['scientifically_approved_rows']==0
+PY_777
+for name in wrong_count wrong_physical old_schema wrong_names arbitrary; do
+  reject invoke "fixed777_${name}" "${INPUTS}/777_${name}_request.json"
+done
 for name in pending science exit_claim unknown accounting dependency exit success audited terminal source runtime record proof status producer task labels stat label_proof; do
   reject invoke "stopped_${name}" "${INPUTS}/stopped_${name}_request.json"
 done
@@ -279,5 +310,5 @@ PY
 printf changed >> "${SCRATCH}/Adams/input.h5ad"
 reject invoke changed "${INPUTS}/request.json"
 reject invoke stopped_changed "${INPUTS}/stopped_request.json"
-[[ "$(wc -l < "${SCRATCH}/scheduler.calls" | tr -d ' ')" == 4 && ! -e "${TMP}/forbidden" ]]
-echo 'PASS: exact finite legacy scope, terminal/stopped typed input-content review/stat/label/source witness, pinned CPU job, failed ID/mismatch report preservation, read-only terminal validation and immutable original sources'
+[[ "$(wc -l < "${SCRATCH}/scheduler.calls" | tr -d ' ')" == 5 && ! -e "${TMP}/forbidden" ]]
+echo 'PASS: fixed209+777 finite legacy scopes, typed request/control/count/name/report guards, terminal/stopped typed input-content review/stat/label/source witness, pinned CPU job, failed ID/mismatch report preservation, read-only terminal validation and immutable original sources'
