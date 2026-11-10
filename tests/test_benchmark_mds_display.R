@@ -12,6 +12,15 @@ run<-function(){
   labels<-setNames(factor(rep(if(ds=='Bassez')c('E','NE')else c('a','b'),each=3)),ids)
   e$result_list$bmark[[ds]]<-setNames(lapply(unique(c(benchmark_main_method_keys,'Freq_highres')),function(m)list(dist_mat=d,labels=labels)),unique(c(benchmark_main_method_keys,'Freq_highres')))
  }
+ # Only the display map is overridden: scientific config and named labels stay literal.
+ config_before<-unname(tools::md5sum('datasets.json'))
+ e$dataset_display_map<-c(Adams='Adams (pulmonary fibrosis)',Bassez='Bassez (ICB treatment response)')
+ map_before<-e$dataset_display_map;source_before<-digest::digest(e$result_list)
+ display_expr<-Filter(function(x)identical(paste(deparse(x),collapse=' '),'dataset_display_map[["Bassez"]] <- "Bassez (Clonal expansion)"'),as.list(chunk(1L)))
+ stopifnot(length(display_expr)==1L);eval(display_expr[[1L]],e)
+ stopifnot(identical(e$dataset_display_map[['Bassez']],'Bassez (Clonal expansion)'),
+   identical(e$dataset_display_map['Adams'],map_before['Adams']),identical(source_before,digest::digest(e$result_list)),
+   identical(config_before,unname(tools::md5sum('datasets.json'))))
  before<-digest::digest(e$result_list);saved<-list();calls<-0L
  e$methods_in_scope_named<-function(m)m;e$path_plots<-root;e$df_benchmark<-data.frame()
  e$benchmark_main_normalization_methods<-benchmark_main_method_keys;e$benchmark_extended_normalization_methods<-benchmark_extended_method_keys

@@ -97,6 +97,7 @@ dataset_display_map <- sapply(datasets, `[[`, "display_name")
 if ("Gongsharma_cmv_young_males" %in% names(dataset_display_map)) {
   dataset_display_map["GongSharma"] <- dataset_display_map[["Gongsharma_cmv_young_males"]]
 }
+dataset_display_map[["Bassez"]] <- "Bassez (Clonal expansion)"
 # The internal key stays Gongsharma_cmv_young_males (HPC bundle/feather file
 # names use it); figures display it as GongSharma.
 # Set paths. Default: LOCAL mirror of the NAS benchmark result layout pulled
@@ -399,11 +400,12 @@ p3 <- df_plot %>%
 
 # Raw single-metric panels retain their own units. LISI is already separation.
 extra_metric_plots <- lapply(c("sil_score", "lisi_score"), function(metric) {
-  ggplot(filter(df_plot, score == metric),
+  ggplot(filter(df_plot, score == .env$metric),
          aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
     stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
     stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
     geom_point(aes(shape = dataset, color = dataset), size = pointsize) +
+    scale_shape_manual(values = seq_along(unique(df_plot$dataset))) +
     geom_line(aes(group = dataset, linetype = dataset, color = dataset)) +
     labs(x = "", y = paste("Raw", score_facet_labels[[metric]])) + theme_classic() +
     theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
@@ -922,11 +924,9 @@ my_sample_col <- list(
 ) %>% as.data.frame()
 row.names(my_sample_col) <- colnames(df_heatmap)
 
-pdf(file = file.path(path_plots, paste0("Heatmap_", ds, ".pdf")),
-    width = 6,
-    height = 6)
-pheatmap(
+bassez_heatmap <- pheatmap(
   df_heatmap,
+  silent = TRUE,
   annotation_col = my_sample_col,
   # cluster_rows = FALSE,
   # cluster_cols = FALSE,
@@ -936,7 +936,13 @@ pheatmap(
   cutree_rows = 4,
   cutree_cols = 4
 )
-dev.off()
+grDevices::pdf(file = file.path(path_plots, paste0("Heatmap_", ds, ".pdf")),
+               width = 6, height = 6)
+bassez_heatmap_device <- grDevices::dev.cur()
+tryCatch({
+  grid::grid.newpage()
+  grid::grid.draw(bassez_heatmap$gtable)
+}, finally = grDevices::dev.off(bassez_heatmap_device))
 pheatmap(
   df_heatmap,
   annotation_col = my_sample_col,
@@ -1720,9 +1726,9 @@ supp_fig_2_plot <- df_benchmark %>%
                                       "0_dims"    = "0_embdims")) %>%
            stringr::str_replace("Pseudobulk_(\\d+)_PCA_dims", "Pseudobulk_hvg2000_pcadims\\1") %>%
            stringr::str_replace("(\\d+)_PCA_dims", "pcadims\\1") %>%
-           stringr::str_replace("PILOT_hvg(\\d+)", "PILOT_hvg\\1_HR") %>%
-           stringr::str_replace("QOT_hvg(\\d+)", "QOT_hvg\\1_HR") %>%
-           stringr::str_replace("PILOT-GM-VAE_hvg(\\d+)", "PILOT-GM-VAE_hvg\\1_HR")
+           stringr::str_replace("^PILOT_hvg(\\d+)$", "PILOT_hvg\\1_HR") %>%
+           stringr::str_replace("^QOT_hvg(\\d+)$", "QOT_hvg\\1_HR") %>%
+           stringr::str_replace("^PILOT-GM-VAE_hvg(\\d+)$", "PILOT-GM-VAE_hvg\\1_HR")
   ) %>%
   
   group_by(method) %>%
@@ -3372,13 +3378,11 @@ p1 <- df_normalization %>%
     # angle = 25,
     # aes(label = sprintf("%5.2f", as.numeric(..p.format..))),
     aes(label = after_stat(p.signif)),
-    size = 3,
-    label.y = 0.95
+    size = 3
   ) +
   labs(x = "", y = "Separation score (ANOSIM)") +
   theme_classic2() +
-  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1)) +
-  ylim(c(-0.1, 1))
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 print(p1)
 ggsave(
   file.path(path_plots, "Supp_fig_16A_transformations_anosim.pdf"),
@@ -3463,7 +3467,6 @@ df_normalization %>%
     panel.grid.major = element_blank(),
     panel.grid.minor = element_blank()
   ) +
-  ylim(c(-0.05, 1)) +
   scale_fill_identity() +
   scale_x_discrete(
     labels = c(
@@ -3485,6 +3488,7 @@ ggsave(
 ggplot(df_normalization, aes(x = trans_method, y = value)) +
   geom_boxplot(outlier.shape = NA) +
   geom_point(aes(shape = dataset)) +
+  scale_shape_manual(values = seq_along(unique(df_normalization$dataset))) +
   geom_line(
     aes(group = dataset, linetype = dataset),
     alpha = 1,
@@ -3620,12 +3624,10 @@ p2 <- df_zeroimp %>%
     method = "wilcox.test",
     paired = TRUE,
     # angle = 25,
-    label.y = 0.95,
     size = 3,
     aes(label = after_stat(p.signif))
     # aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
   ) +
-  ylim(c(-0.1, 1)) +
   labs(x = "", y = "Separation score (ANOSIM)") +
   theme_classic2() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
@@ -3662,12 +3664,10 @@ df_zeroimp %>%
     method = "wilcox.test",
     paired = TRUE,
     # angle = 25,
-    label.y = 0.9,
     size = 3,
     aes(label = after_stat(p.signif))
     # aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
   ) +
-  ylim(c(-0.1, 0.9)) +
   labs(x = "", y = "Separation score (Modularity)") +
   theme_classic2() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
@@ -3689,12 +3689,10 @@ df_zeroimp %>%
     method = "wilcox.test",
     paired = TRUE,
     # angle = 25,
-    label.y = 0.9,
     size = 3,
     aes(label = after_stat(p.signif))
     # aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
   ) +
-  ylim(c(-0.1, 0.9)) +
   labs(x = "", y = "Separation score (ARI)") +
   theme_classic2() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
@@ -3714,12 +3712,10 @@ df_zeroimp %>%
     method = "wilcox.test",
     paired = TRUE,
     # angle = 25,
-    label.y = 1.1,
     size = 3,
     aes(label = after_stat(p.signif))
     # aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
   ) +
-  ylim(c(-0.2, 1.2)) +
   labs(x = "", y = "Separation score") +
   theme_classic2() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1)) +
@@ -3757,6 +3753,7 @@ ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_barplot_sepa
 ggplot(df_zeroimp, aes(x = method, y = value)) +
   geom_boxplot(outlier.shape = NA) +
   geom_point(aes(shape=dataset)) + 
+  scale_shape_manual(values = seq_along(unique(df_zeroimp$dataset))) +
   geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
   # geom_point(position = position_jitterdodge()) +
   labs(x = "", y = "Separation score") +
@@ -3867,11 +3864,11 @@ ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_anos
 
 ```{r}
 wrap_plots(list(p1, p2)) +
-  plot_layout(nrow = 1) +
+  plot_layout(nrow = 1, widths = c(1, 3)) +
   plot_annotation(tag_levels = "A") &
   theme(plot.tag = element_text(face = "bold"))
 ggsave(file.path(path_plots, "Supp_fig_16AB_trans_zero_anosim.pdf"),
-       width = 6,
+       width = 10,
        height = 4.5)
 ```
 
