@@ -74,17 +74,20 @@ decisions have been applied to existing artifacts.
   supplement now has50 correct standard errors and passed final visual QA.
   PCApolishv2 is complete/reviewed/visually approved;13maintained PDF/PNG files
   and six bounded CSVs are published locally. No raw RNA was transferred.
-- **Current validation:** corrected final projection gate
-  `ecoda_stage5_p6_analysis_projection_20261110_v2` finishedCOMPLETED0 at07:20:49UTC;
-  its sole waiter and terminal inspection confirm scalar4666721COMPLETED0.
-  The pinned run audit is in progress before reviewer approval and transfer.
-  It uses the reviewed v3controlb2b589… with284 exact Arrow ID contracts.
-  First projectionv1 remains failed; all scientific method results are reused.
-- **Remaining P6:** validate/mirror the thin1100-row projection, evaluate
-  five-metric benchmark/batch tables including both Kidney axes, refresh and
-  review the remaining maintained figures/reports, then verify the finite
-  derived-output and final-figure NAS backup. Dedicated benchmark and batch R
-  sessions are ready; resident depth data/plots are reused during iteration.
+- **Projection released:** corrected final projectionv2 finishedCOMPLETED0 at
+  07:20:49UTC. Sole accounting/pinned run audit/ROOT review9bfdce26 and official
+  reviewer phase passed. Finite11012-file mirror and separate local access
+  controlfa146125… are verified; raw RNA remains onBamboo. Failedv1 is preserved.
+- **Reporting underway:**915 benchmark method rows have their4575 finite core
+  metric cells plus separate modularity diagnostics. All43 maintained base
+  plotting chunks ran once; resident results are reused for affected-chunk QA
+  fixes. Batch UNC reporting is running in its separate resident session, with
+  both Kidney axes and the two corrected Harmony arms retained.
+- **Remaining P6:** finish figure QA, restore omitted valid PILOT-GM parameter
+  coverage identified by the user, complete both batch reports, then verify the
+  finite derived-output/final-figure NAS backup. Existing fits remain outside
+  recomputation unless exact additional missing/current-input-invalid rows are
+  established. This checkpoint does not claim all publication figures are final.
 - Detailed immutable evidence, recovery history and current launch identities
   are retained in the dated ledger below. The following Nov9 checkpoint is
   superseded history and does not describe the current queue.
@@ -622,7 +625,7 @@ statuses, scientific output roots and one synchronization owner per root.
 | P2: scoped contracts | DONE | Reviewed/pushed cohort/BL contracts, separate corrected Harmony arms, exact selectors, failure isolation and durable artifact/evidence integration |
 | P3: source reconciliation | DONE | Selected Bamboo sources/runtime/NAS verified; Bassez unchanged-input proof and current cohort identities reviewed before targeted reruns |
 | P4: changed inputs | DONE | All16 batch derivatives and53-sample Stephenson input individually reviewed; Bassez metadata repair and Stephenson dual annotation validated/synchronized/approved |
-| P5: method waves | DONE | All selected benchmark/batch method outputs scientifically reviewed and NAS-published; failed historical gates preserved, completed outputs reused through scoped recovery |
+| P5: method waves | IN_PROGRESS | Original selections reviewed and NAS-published; user-identified missing GM parameter coverage reopens only the explicitly verified missing/current-input-invalid settings, with all completed outputs reused |
 | P6: evaluation/reporting | IN_PROGRESS | Complete five-metric scores, score both Kidney axes, refresh all affected maintained reports/figures from approved results, verify plots and document limitations/provenance |
 
 ### P0: first implementation action, before harmonization or pipeline changes
@@ -4780,3 +4783,91 @@ and input-only review, not a success dependency on the failed97 gate.
   comparison reconstructs exact v4 bytes and preserves all foreign notebook
   changes and resident depth/SE results. NotebookSHAe2755f0a…, testSHAb87945c1…;
   packet`.gate/benchmark_figure_execution_20261110_v5`.
+
+### Local reporting execution, metadata repair and QA findings —2026-11-10
+
+- Projection pinned audit passed; ROOT reviewSHA9bfdce266c90497c505459812e5ef45f772ef6b332f979f18357e25abfa5b347
+  and official reviewer phase approved. Actual native inventorySHA0bc6a086…
+  binds5505payload rows plusfiles.tsv. Exact11012-file raw mirror verified all
+  MD5/size pairs; local access controlMD5fa146125e805593a70810229e47028ec is a
+  new metadata-only relocation, preserving all native bytes and scientific origin.
+- ROOT R48284 loaded915 benchmark methods once (7320values including three
+  diagnostic modularity neighborhoods; canonical five-metric grid4575).
+  All43 maintained base chunks and optional validated Adams correspondence ran.
+  Resident QA capturev2 validates the exact full core grid and main12/extended21
+  pools (660/1155scaled cells); only these rectangular pools are ranked, not
+  heterogeneous parameter menus. Tables are indata/derived/benchmark_reporting_20261110_v2.
+- Batch paired-metadata guard caught14Lupus UNC first-row batch assignments,
+  contrary to this plan's sharedmajority_v1 reporting policy. SHA-pinned Stage3
+  reportc8e1d9b5… proves identical paired source/counts/ordered cell+sample
+  identities and94retained IDs; corrected metadata matches all94saved majority
+  winners. ROOT review5a7e1d6f… and independent negatives/peer review accepted
+  an analysis-only Feather derivative changing exactly14UNCbatch_cov values;
+  every other metadata field and151other control rows stay unchanged. Native
+  exports/A1100/method artifacts remain immutable; no RNA equivalence is invented.
+  New batch controlMD5e75b1036df9d80d21cd633058957f55f at
+  data/derived/batch_majority_metadata_v3/batch_analysis_release.rds passes all8
+  paired semantic comparisons. UNC360finite cells/reporting launched08:12:23UTC.
+- Actual figure QA found three missing manual shape scales for11datasets;
+  v6 fixes those sites without changing data/coordinates. Further actual-frame
+  checks found chunk8's score==metric data-mask collision (metric is also a
+  column), and hard display limits dropping valid transformation/zero values
+  and breaking paired annotations. BENCH owns focused fixes/fixtures and frozen
+  v7; rerun only affected plotting chunks from resident results. Batch technical
+  MDS subtitles need two-decimal, three-line wrapping; BATCH owns that display-only
+  fix and scoped redraw. Do not approve figures merely because files exist.
+- User identified missing PILOT-GM settings inSupp2. Current intake incorrectly
+  contains only defaultHR2000 for11cohorts. Worker menu isHR1000/2000/3000 plus
+  LR2000 (44supported cohort/settings), not sixsettings. Two omitted Bassez HR
+  results already pass current science;31other supported cells need finite
+  existence/current-input/scientific reconciliation before any recomputation.
+  The coverage matrix and discovery request are in
+  .gate/p6_pilotgm_parameter_coverage_20261110_v1. Restore eligible existing rows;
+  do not silently report an incomplete cohort count as11. Anchor PILOT/QOT/GM
+  display rewrites so LR labels do not becomeHR_LR. No additional fit is inferred
+  from this audit alone.
+- Backup inventory parser's ancestor predicate rebuiltset(names) quadratically.
+  Independently reviewed/tested three-line hoistf94ca7c preserves all guards;
+  actual22035-row projection inventory parses in0.238s. Known102 plus projection
+  component currently has22510unique files; final QA/metadata additions and final
+  copy/verify remain pending. Use a new exact committed backup snapshot, not an
+  edited HPC checkout, and retain selectedNAS666/777 requirements.
+
+### Supported GM parameter supplement — exact Step3 launch scope
+
+- User's Supp2 question exposed incomplete parameter intake. Finite discovery36
+  SHA1de876acf3e05b28d1e65394adb2270eeca47748cb82500d38d85f43e2cd064e
+  finds32files and4absences; this is schema/proof discovery, not science approval.
+  Current Stephenson HR1000,HR3000,LR2000 are absent. Their old alternatives
+  have55sample columns, incompatible with current53 and required-new policy.
+  Current defaultHR2000 is valid and explicitly excluded from recomputation.
+- Approved next gate ecoda_stage5_p6_step_pilotgm3_20261110_v1 / run
+  stage5_p6_step_pilotgm3_20261110_v1: exactly three explicit Stephenson benchmark
+  pilotgm requests hvg1000_highres,hvg3000_highres,hvg2000_lowres; one native
+  three-task CPU array, static4initial scheduler roots/6units including one
+  input preflight, one watchdog and one aggregate. No broad force, R prep,
+  annotation or metadata export. CPU EPYC-7742/16 and runtime remain pinned;
+  excludednodes cpu046,cpu051,cpu052 remain. Collect every actual ID/retry for
+  sole terminal accounting; static counts are not accounting evidence.
+- Selector352400e2de25aa287ddd0a3b10877270d6d796b8 adds only explicit LR2000
+  request support, preserving whole-family defaultHR2000. Focused/peer tests pass.
+  Immutable source manifestSHAaaaea98f3234f58fd5fc6a36ff29fbdd1745144f6f115b85fe3317700fbf7485;
+  archivea1342155d55cb38486254f83e006c417a7bbecdace6631bf8cb5d53b6cb85ed0.
+  Current Stage4 inputMD57d92fb6e0d3d7dd5c3500212fd951493/13,357,978,168bytes
+  and exact3selection/inputcontrols pass source/runtime/nativeproof/NAS/fresh-root
+  preflight. No H5 body read or scheduler query was needed for that preflight.
+- Wrapper/spec/controls: .gate/p6_step_pilotgm3_20261110_v1/source_bound_v1.
+  The immutable snapshot executor invokes stage5_dispatcher.sh with explicit
+  selectionSHA7e8000fc6d5d9ab9bdedebfc798226c931434d53310c472a0d27d5076619a5d1
+  and inputcontrolSHAa7d83f744d5dcb13c5936407b14b76ab7f90797342b7c8ebad3f156ab08c949d.
+  Command-fileSHAe03a19fd9566cbdcae82f003d6c5fdfe0ea7f6e8b4c82c1f29bd1fc5726aa5ca
+  includes its newline; CLI digestad4769591f79455975e7bc4c997ff4d8f1b5a5d0326af6ea43d5ef2902e3ba5f
+  does not. First local preflight used the wrong newline convention and stopped
+  before staging; v2 verifies actual file identity and passes. No job was launched
+  by that local check. Last same-group projectionv2 is terminal-reviewed; there
+  is no failed formal dependency. One waiter/sole inspect/pinned audit/ROOT review
+  are mandatory before admission/publication.
+- Independent local benchmark QA and batch reporting continue while targeted
+  CPU jobs run. Present legacy parameter files are checked separately; absent
+  checksum or omission from old intake never alone justifies a model refit.
+  Exact NAS Gong3000 discovery and scoped27compatibility remain pending.
