@@ -389,8 +389,9 @@ def inventory(p):
                 'invalid inventory identity')
         result.append((name, md5, int(size)))
     names = [row[0] for row in result]
-    require(result and len(names) == len(set(names)), 'empty or duplicate inventory')
-    require(not any(parent in set(names) for name in names
+    names_set = set(names)
+    require(result and len(names) == len(names_set), 'empty or duplicate inventory')
+    require(not any(parent in names_set for name in names
                     for parent in map(str, Path(name).parents) if parent != '.'),
             'overlapping inventory entries')
     return result
