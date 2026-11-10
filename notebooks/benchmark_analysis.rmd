@@ -1284,7 +1284,7 @@ p_mod <- ggplot(df_plot, aes(x = method, y = value)) +
 print(p_mod)
 ggsave(file.path(path_plots, "benchmark_summary_barplot_modularity_annotationmethods_refECODAhr.pdf"),
        plot = p_mod,
-       width = 2.5,
+       width = 7,
        height = 4)
 
 
@@ -1317,7 +1317,7 @@ p_ari <- ggplot(df_plot, aes(x = method, y = value)) +
 print(p_ari)
 ggsave(file.path(path_plots, "benchmark_summary_barplot_ari_annotationmethods_refECODAhr.pdf"),
        plot = p_ari,
-       width = 2.5,
+       width = 7,
        height = 4)
 
 
@@ -2689,9 +2689,12 @@ for (m in names(methods)) {
     labels,
     cluster_score = FALSE,mod_score = FALSE, anosim_score = FALSE,
     coord_equal = TRUE, pointsize = 2,
-    title = methods[[m]],
+    title = if (m == "Freq_highres") "Cell-type\nfrequency (%)" else methods[[m]],
     separation_score = benchmark_normalized_mean(df_benchmark, ds, m, benchmark_extended_normalization_methods)
   ) + labs(color = "Clonal expansion", shape = "Clonal expansion")
+  plot_list[[m]] <- plot_list[[m]] + labs(
+    subtitle = sub(" mean:", "\nmean:", plot_list[[m]]$labels$subtitle, fixed = TRUE)
+  )
 }
 
 wrap_plots(plot_list) +

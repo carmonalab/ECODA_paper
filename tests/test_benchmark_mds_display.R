@@ -29,6 +29,9 @@ run<-function(){
  e$ggsave<-function(filename,...){saved[[basename(filename)]]<<-e$plot_list;invisible(filename)}
  # Any fresh metric calculation would violate this display-only fixture.
  e$calc_sep_score<-e$clust_eval<-e$calc_modularity<-function(...)stop('SCORING FORBIDDEN')
+ native_mds<-plot_mds;mds_calls<-0L
+ e$plot_mds<-function(...){args<-list(...);stopifnot(identical(args$cluster_score,FALSE),identical(args$mod_score,FALSE),identical(args$anosim_score,FALSE),is.null(args$sil_score)||identical(args$sil_score,FALSE));mds_calls<<-mds_calls+1L;do.call(native_mds,args)}
+
  eval(chunk(14L),e)
  check<-function(plots,ds){
   for(p in plots){
@@ -40,7 +43,12 @@ run<-function(){
  stopifnot(length(saved)==2L,calls==22L);check(saved[[grep('_Bassez.pdf$',names(saved),value=TRUE)]],'Bassez');check(saved[[grep('_Adams.pdf$',names(saved),value=TRUE)]],'Adams')
  # Figure2B intentionally contains frequency and therefore retains extended21.
  e$expected_pool<-benchmark_extended_method_keys;eval(chunk(42L),e);check(saved[['Figure_2_B_MDS_Bassez.pdf']],'Bassez')
- stopifnot(calls==30L,identical(digest::digest(e$result_list),before))
+ for(p in saved[['Figure_2_B_MDS_Bassez.pdf']]) {
+  stopifnot(identical(p$labels$subtitle,'Five-metric min–max\nmean: 0.50'),
+    max(nchar(strsplit(p$labels$subtitle,'\n',fixed=TRUE)[[1L]]))<=19L)
+ }
+ stopifnot(identical(saved[['Figure_2_B_MDS_Bassez.pdf']][['Freq_highres']]$labels$title,'Cell-type\nfrequency (%)'))
+ stopifnot(calls==30L,mds_calls==30L,identical(digest::digest(e$result_list),before))
  cat('PASS: actual SuppMDS expansion labels/legend, main12; Figure2B frequency/extended21; unchanged coordinates/source labels; no scoring\n')
 }
 run()

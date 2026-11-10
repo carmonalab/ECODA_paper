@@ -83,6 +83,20 @@ run<-function(){
  eval(combined_expressions[[2L]],e)
  stopifnot(capture$width==10,capture$height==4.5,basename(capture$filename)=='Supp_fig_16AB_trans_zero_anosim.pdf',
    identical(source_panels,digest::digest(list(e$p1$data,e$p2$data))))
+ # Only the two standalone annotation exports widen; cached plot data are passed explicitly.
+ e$p_mod<-ggplot(filter(frame,score=='mod_knn3_score'),aes(method,value))+geom_point()
+ e$p_ari<-ggplot(filter(frame,score=='cluster_score'),aes(method,value))+geom_point()
+ annotation_before<-digest::digest(list(e$p_mod$data,e$p_ari$data));annotation_saves<-list()
+ e$ggsave<-function(filename,plot,width,height){annotation_saves[[basename(filename)]]<<-list(plot=plot,width=width,height=height)}
+ for(x in as.list(chunk(21L))){
+  text<-paste(deparse(x),collapse=' ')
+  if(is.call(x)&&identical(x[[1L]],as.name('ggsave'))&&grepl('benchmark_summary_barplot_(modularity|ari)_annotationmethods_refECODAhr.pdf',text))eval(x,e)
+ }
+ stopifnot(length(annotation_saves)==2L,all(vapply(annotation_saves,function(x)x$width==7&&x$height==4,logical(1))),
+   identical(annotation_saves[['benchmark_summary_barplot_modularity_annotationmethods_refECODAhr.pdf']]$plot,e$p_mod),
+   identical(annotation_saves[['benchmark_summary_barplot_ari_annotationmethods_refECODAhr.pdf']]$plot,e$p_ari),
+   identical(annotation_before,digest::digest(list(e$p_mod$data,e$p_ari$data))))
+ cat('PASS: two actual standalone annotation export calls7x4/explicitcachedplots/unchanged data\n')
  cat('PASS: actual combinedA/B uses1:3panelwidths and10x4.5canvas with identical sourcepanels\n')
  cat('PASS: metric data-mask regression; bare HR/LR labels; six actual statistics panels retain all paired11 observations and annotations; no scoring\n')
  cat('PASS: four actual panels retain all11 cohorts/finitepoints/unchangedvalues; removed-scale redcontrols lose5cohorts; no scoring\n')
