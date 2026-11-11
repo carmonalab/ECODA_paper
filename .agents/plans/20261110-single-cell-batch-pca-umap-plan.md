@@ -10,3 +10,11 @@ check, and the eight-dataset HR category-count table.
 
 Matched-HVG, fine-annotation and fixed-anchor variants remain deferred optional
 work. No job or review remains active for this completed scope.
+
+## Follow-up audit — 2026-11-11
+
+The user has questioned Lupus batch membership. The original implementation
+is complete under its recorded whole-sample policy, but Lupus's alignment with
+a strict cell-level batch exclusion is now under review. See the new
+[consistency audit](20261111-batch-figure-confounding-consistency-audit.md).
+Existing artifacts and their historical reviews remain unchanged.
