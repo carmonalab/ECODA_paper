@@ -36,14 +36,17 @@ scientific calculations operate dataset-by-dataset on Bamboo; the local
 plotting chunks consume the compact cache. Neither sourcing this notebook nor
 rendering its prose submits scheduler work.
 
-Set `ECODA_BECM_CACHE` and `ECODA_BECM_CACHE_MD5` to the reviewed cache, then
-set `ECODA_BECM_RENDER=1` to enable the explicit plotting chunks. For figure
-iteration, execute only the relevant chunk in a persistent Pixi R session.
+The default is the reviewed local cache from this initial test. Run setup,
+core, plotting functions and cache loading once, then execute only the plotting
+chunk being changed in a persistent Pixi R session. This needs no HPC work.
+Environment variables can override the cache or disable rendering.
 
 ```{r becm-setup, message=FALSE, warning=FALSE}
 if (basename(getwd()) == "notebooks") setwd("..")
 becm_plot_root <- file.path(getwd(), "plots", "batch_effect_ECODA_becm_comparison")
-becm_render <- identical(Sys.getenv("ECODA_BECM_RENDER"), "1")
+becm_render <- identical(Sys.getenv("ECODA_BECM_RENDER", "1"), "1")
+becm_default_cache <- file.path(getwd(), "data", "derived", "ECODA_becm_comp_20261116_v1", "comparison_cache.rds")
+becm_default_cache_md5 <- "d22ed3205de4b439f4063f1b88f37ebf"
 becm_dataset_ids <- c("Alzheimer", "Breast_cancer", "Covid19_PBMC", "Joanito",
                    "Kidney_KPMP_full", "Lupus_PBMC", "Stephenson")
 stopifnot(requireNamespace("ggplot2", quietly=TRUE),
@@ -719,6 +722,8 @@ becm_mds_figure <- function(dataset, entry, scores) {
           paste(strwrap(becm_count_label(variant), width=43), collapse="\n")), colour=NULL) +
         ggplot2::theme_bw(base_size=9) + ggplot2::theme(panel.grid.minor=ggplot2::element_blank(),
           legend.position="bottom", legend.text=ggplot2::element_text(size=7))
+      if (grouping[column] == "batch") panel <- panel +
+        ggplot2::scale_colour_discrete(labels=function(x) becm_short_batch(dataset, x))
     }
     panels[[length(panels) + 1L]] <- panel + ggplot2::theme(
       plot.title=ggplot2::element_text(size=10, face="bold"),
@@ -797,8 +802,8 @@ becm_anosim_summary <- function(scores) {
 # Load the reviewed comparison cache
 
 ```{r becm-load-cache, eval=becm_render}
-cache_path <- Sys.getenv("ECODA_BECM_CACHE")
-cache_md5 <- Sys.getenv("ECODA_BECM_CACHE_MD5")
+cache_path <- Sys.getenv("ECODA_BECM_CACHE", becm_default_cache)
+cache_md5 <- Sys.getenv("ECODA_BECM_CACHE_MD5", becm_default_cache_md5)
 stopifnot(file.exists(cache_path), grepl("^[0-9a-f]{32}$", cache_md5),
   identical(unname(tools::md5sum(cache_path)), cache_md5))
 becm_cache <- readRDS(cache_path)
@@ -848,7 +853,7 @@ zero second coordinate. Biological labels do not determine these coordinates.
 for (dataset in becm_dataset_ids) {
   figure <- becm_mds_figure(dataset, becm_cache$datasets[[dataset]], becm_cache$scores)
   becm_save_pages(list(figure), file.path(becm_plot_root, "mds", paste0(dataset, "_mds.pdf")),
-    width=18, height=31)
+    width=11, height=31)
   rm(figure)
 }
 ```
@@ -867,10 +872,24 @@ cross-metric mean or min-max normalization is used in this approved figure.
 figure <- becm_anosim_summary(becm_cache$scores)
 becm_save_pages(list(figure), file.path(becm_plot_root, "summary", "ECODA_becm_comp_ANOSIM.pdf"),
   width=15, height=12)
+utils::write.csv(becm_cache$scores,
+  file.path(becm_plot_root, "ANOSIM_scores_and_cell_type_counts.csv"), row.names=FALSE)
 rm(figure)
 ```
 
 # Provenance and interpretation
+
+The initial run produced all 168 requested dataset/method rows successfully.
+Its numerical worker is bound to commit `79cb9e6943a48cbb918ea62697fd5facce10506d`,
+selection MD5 `90566e8151a86f5ba4a7f027f5794dff`, and worker MD5
+`6522f2947abb202d176ea8df8198bead`. Bamboo job `4715509` completed in 22 seconds
+with R 4.5.2 and vegan 2.7.5. The compact local cache above is sufficient for
+all figure iteration. An independent audit reproduced all 336 ANOSIM values
+from the cached distances; maximum absolute difference was 1.5e-14.
+
+The original maintainable scientific and plotting helpers have been
+centralized here. Exact historical source text remains in frozen execution
+snapshots and the new run's `legacy_*_migration.rds` metadata receipts.
 
 The `boxplots/relocation.tsv` table records the byte-identical relocation of
 the earlier six-dataset figures into this structure. Old checksum inventories
