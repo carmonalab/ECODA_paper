@@ -1,0 +1,892 @@
+---
+title: "ECODA batch effect correction method comparison (ECODA_becm_comp)"
+author: "Christian Halter"
+output: rmdformats::downcute
+---
+
+# Purpose and scope
+
+This notebook is the maintained entry point for the ECODA batch-effect
+correction comparison. It brings the cell-type abundance diagnostics, MDS
+comparisons and ANOSIM summary into one documented analysis. Figures live in
+`plots/batch_effect_ECODA_becm_comparison/`, with `boxplots/`, `mds/` and
+`summary/` subdirectories. The byte-identical November 11 figures are under
+`boxplots/20261111/`; refreshed seven-dataset figures are directly under
+`boxplots/`. Historical source receipts, frozen execution
+snapshots and checksum inventories remain in their original run directories.
+
+The seven physical datasets are Alzheimer, Breast_cancer, Covid19_PBMC,
+Joanito, Kidney_KPMP_full, Lupus_PBMC and Stephenson. Lung is excluded. Kidney's
+main biological evaluation is `condition.l1`; the partly batch-confounded
+tissue evaluation is not pooled into this comparison. Dataset columns and
+participation come from the top-level `datasets.json` contract.
+
+This is an exploratory sample-level comparison of existing composition
+results. Biological labels colour plots and evaluate sample distances only.
+They never select cell types, enter correction, or define embeddings. No
+donor adjustment or biological covariates are introduced in this first pass.
+Existing inputs, original result bundles and annotations are preserved.
+
+## Input and execution contract
+
+Use a checksum-validated, run-owned cache containing compact distances,
+sample metadata, scores and grouped boxplot statistics. Full H5AD files,
+expression matrices and pseudobulks do not belong on the workstation. The
+scientific calculations operate dataset-by-dataset on Bamboo; the local
+plotting chunks consume the compact cache. Neither sourcing this notebook nor
+rendering its prose submits scheduler work.
+
+Set `ECODA_BECM_CACHE` and `ECODA_BECM_CACHE_MD5` to the reviewed cache, then
+set `ECODA_BECM_RENDER=1` to enable the explicit plotting chunks. For figure
+iteration, execute only the relevant chunk in a persistent Pixi R session.
+
+```{r becm-setup, message=FALSE, warning=FALSE}
+if (basename(getwd()) == "notebooks") setwd("..")
+becm_plot_root <- file.path(getwd(), "plots", "batch_effect_ECODA_becm_comparison")
+becm_render <- identical(Sys.getenv("ECODA_BECM_RENDER"), "1")
+becm_dataset_ids <- c("Alzheimer", "Breast_cancer", "Covid19_PBMC", "Joanito",
+                   "Kidney_KPMP_full", "Lupus_PBMC", "Stephenson")
+stopifnot(requireNamespace("ggplot2", quietly=TRUE),
+          requireNamespace("patchwork", quietly=TRUE),
+          requireNamespace("jsonlite", quietly=TRUE))
+```
+
+# Scientific definition of the variants
+
+Each original CLR composition uses the existing count + 0.5 pseudocount.
+For two varying batch groups the screen uses a two-sided unpaired Wilcoxon
+rank-sum test; with more than two groups it uses Kruskal-Wallis. Both raw and
+BH-adjusted p-values are reported. A correction family contains all original
+cell types of one dataset and one composition source. Constant cell types
+receive p=1.
+
+For cell type `j`, the effect-size filter is the maximum difference between
+batch medians of its original CLR coordinate:
+
+`delta_j = max(batch median CLR_j) - min(batch median CLR_j)`.
+
+The `sigdiff_ctdrop_t` variants remove the union of cell types satisfying
+`BH-adjusted p < 0.05` **and** `delta_j >= t`. With several batches, one large
+pairwise median difference is sufficient; the omnibus p-value does not claim
+that every pair differs. The screen is calculated once on the original
+composition, not repeated after each removal. CLR is recomputed from the
+remaining categories with the same +0.5 pseudocount applied exactly once.
+No biological labels enter the screen.
+
+The author family starts from original author annotations. The Harmony family
+starts from the existing Harmony-derived Leiden composition, before sample
+CLR limma correction. These drop variants do not additionally apply limma.
+The author threshold-2 `droplow50pct` variant additionally removes every type
+with zero observed cells in at least 50% of all samples. Its sparse screen
+uses original counts, before pseudocount addition; it is combined with the
+threshold-2 removal as a union.
+
+The fixed comparators are author CLR + limma, Harmony/Leiden CLR, and
+Harmony/Leiden CLR + limma. The uncorrected anchors are author CLR and
+non-Harmony PCA/Leiden CLR. All Harmony rows use that same non-Harmony
+uncorrected anchor. Existing correction endpoints are reused rather than
+refitted.
+
+```{r becm-core}
+becm_datasets <- function() c("Alzheimer", "Breast_cancer", "Covid19_PBMC", "Joanito",
+  "Kidney_KPMP_full", "Lupus_PBMC", "Stephenson")
+
+becm_threshold_id <- function(x) format(x, trim = TRUE, scientific = FALSE)
+
+becm_screen <- function(clr, batch, counts) {
+  stopifnot(is.matrix(clr), is.numeric(clr), all(is.finite(clr)),
+    nrow(clr) == length(batch), ncol(clr) >= 1L, !anyNA(batch), all(nzchar(trimws(batch))),
+    !is.null(rownames(clr)), all(nzchar(trimws(rownames(clr)))), !anyDuplicated(rownames(clr)),
+    !is.null(colnames(clr)), all(nzchar(trimws(colnames(clr)))), !anyDuplicated(colnames(clr)),
+    identical(dimnames(counts), dimnames(clr)), all(is.finite(counts)),
+    all(counts >= 0), all(counts == round(counts)))
+  group <- factor(batch)
+  stopifnot(nlevels(group) >= 2L, all(table(group) >= 2L))
+  rows <- lapply(seq_len(ncol(clr)), function(j) {
+    y <- clr[, j]
+    constant <- length(unique(y)) == 1L
+    value <- if (constant) list(statistic = 0, p.value = 1) else if (nlevels(group) == 2L) {
+      stats::wilcox.test(y ~ group, exact = FALSE, correct = TRUE)
+    } else stats::kruskal.test(y ~ group)
+    medians <- tapply(y, group, stats::median)
+    data.frame(cell_type = colnames(clr)[j], p = value$p.value,
+      statistic = unname(value$statistic), median_clr_range = max(medians) - min(medians),
+      zero_fraction = mean(counts[, j] == 0),
+      test = if (nlevels(group) == 2L) "Wilcoxon rank-sum" else "Kruskal-Wallis",
+      stringsAsFactors = FALSE)
+  })
+  result <- do.call(rbind, rows)
+  result$p_bh <- stats::p.adjust(result$p, "BH")
+  result$q <- result$p_bh
+  stopifnot(all(is.finite(result$p)), all(is.finite(result$p_bh)))
+  result
+}
+
+becm_drop <- function(clr, screen, cutoff, drop_sparse = FALSE) {
+  stopifnot(length(cutoff) == 1L, is.finite(cutoff), cutoff >= 0,
+    identical(colnames(clr), screen$cell_type), length(drop_sparse) == 1L,
+    is.logical(drop_sparse), !is.na(drop_sparse))
+  significant <- screen$p_bh < 0.05
+  remove_diff <- significant & screen$median_clr_range >= cutoff
+  remove_sparse <- drop_sparse & screen$zero_fraction >= 0.5
+  keep <- !(remove_diff | remove_sparse)
+  features <- clr[, keep, drop = FALSE]
+  # Recenter the retained log ratios; the original +0.5 is never added again.
+  if (sum(keep) >= 2L) features <- features - rowMeans(features)
+  status <- if (sum(keep) < 2L) "UNSCORABLE_TOO_FEW_TYPES" else if (
+    max(as.matrix(stats::dist(features))) <= 1e-12) "UNSCORABLE_IDENTICAL_SAMPLES" else "PASS"
+  list(feat_mat = features, status = status, n_initial = ncol(clr),
+    n_significant = sum(significant), n_dropped = sum(!keep), n_remaining = sum(keep),
+    n_sparse_dropped = sum(remove_sparse), removed_types = colnames(clr)[!keep],
+    differential_removed_types = colnames(clr)[remove_diff],
+    sparse_removed_types = colnames(clr)[remove_sparse])
+}
+
+becm_variant <- function(features, family, state, threshold = NA_real_, counts = NULL) {
+  if (is.null(counts)) counts <- list(n_initial = ncol(features), n_significant = NA_integer_,
+    n_dropped = 0L, n_remaining = ncol(features), n_sparse_dropped = 0L,
+    removed_types = character(), differential_removed_types = character(), sparse_removed_types = character())
+  status <- if (!is.null(counts$status)) counts$status else if (ncol(features) < 2L) {
+    "UNSCORABLE_TOO_FEW_TYPES"
+  } else if (max(as.matrix(stats::dist(features))) <= 1e-12) "UNSCORABLE_IDENTICAL_SAMPLES" else "PASS"
+  distance <- if (status == "PASS") stats::dist(features) else NULL
+  list(family = family, state = state, threshold = threshold, status = status,
+    dist_mat = distance, n_initial = counts$n_initial, n_significant = counts$n_significant,
+    n_dropped = counts$n_dropped, n_remaining = counts$n_remaining,
+    n_sparse_dropped = counts$n_sparse_dropped, removed_types = counts$removed_types,
+    differential_removed_types = counts$differential_removed_types,
+    sparse_removed_types = counts$sparse_removed_types)
+}
+
+becm_build_variants <- function(inputs, batch) {
+  stopifnot(identical(names(inputs), c("authors", "leiden", "authors_limma", "harmony", "harmony_limma")))
+  ids <- rownames(inputs$authors$clr)
+  stopifnot(!is.null(ids), length(ids) >= 3L, !anyNA(ids), all(nzchar(trimws(ids))), !anyDuplicated(ids))
+  stopifnot(all(vapply(inputs, function(x) identical(rownames(x$clr), ids) &&
+    is.matrix(x$clr) && all(is.finite(x$clr)), logical(1))))
+  screens <- list(authors = becm_screen(inputs$authors$clr, batch, inputs$authors$counts),
+    harmony = becm_screen(inputs$harmony$clr, batch, inputs$harmony$counts))
+  variants <- list(
+    ECODA_authors_uncorrected = becm_variant(inputs$authors$clr, "authors_uncorrected", "uncorrected"),
+    ECODA_Leiden_CLR_uncorrected = becm_variant(inputs$leiden$clr, "leiden_uncorrected", "uncorrected"),
+    ECODA_authors_limma = becm_variant(inputs$authors_limma$clr, "authors_limma", "corrected"),
+    ECODA_Harmony_Leiden_CLR = becm_variant(inputs$harmony$clr, "harmony", "corrected"),
+    ECODA_Harmony_Leiden_CLR_limma = becm_variant(inputs$harmony_limma$clr, "harmony_limma", "corrected"))
+  for (family in c("authors", "harmony")) for (cutoff in seq(0, 4, by = 0.5)) {
+    source <- inputs[[family]]$clr
+    filtered <- becm_drop(source, screens[[family]], cutoff)
+    prefix <- if (family == "authors") "ECODA_authors_sigdiff_ctdrop_" else "ECODA_Harmony_Leiden_CLR_sigdiff_ctdrop_"
+    variants[[paste0(prefix, becm_threshold_id(cutoff))]] <- becm_variant(filtered$feat_mat,
+      paste0(family, "_drop"), "corrected", cutoff, filtered)
+  }
+  sparse <- becm_drop(inputs$authors$clr, screens$authors, 2, drop_sparse = TRUE)
+  variants$ECODA_authors_sigdiff_ctdrop_2_droplow50pct <- becm_variant(sparse$feat_mat,
+    "authors_drop_sparse", "corrected", 2, sparse)
+  stopifnot(length(variants) == 24L, !anyDuplicated(names(variants)))
+  list(variants = variants, screens = screens)
+}
+
+becm_anosim <- function(distance, labels) {
+  stopifnot(inherits(distance, "dist"), !anyNA(labels), length(labels) == attr(distance, "Size"))
+  group <- factor(labels)
+  stopifnot(nlevels(group) >= 2L, nlevels(group) < length(labels))
+  # Only R is requested, not a permutation p-value; R does not depend on permutations.
+  value <- unname(vegan::anosim(distance, group, permutations = 0, parallel = 1)$statistic)
+  stopifnot(length(value) == 1L, is.finite(value), value >= -1 - 1e-8, value <= 1 + 1e-8)
+  value
+}
+
+becm_score_variants <- function(variants, metadata, dataset) {
+  stopifnot(identical(names(metadata), c("Sample", "bio", "batch")),
+    !anyNA(metadata), !anyDuplicated(metadata$Sample))
+  rows <- lapply(names(variants), function(key) {
+    v <- variants[[key]]
+    biological <- technical <- NA_real_
+    if (v$status == "PASS") {
+      stopifnot(identical(attr(v$dist_mat, "Labels"), metadata$Sample))
+      biological <- becm_anosim(v$dist_mat, metadata$bio)
+      technical <- becm_anosim(v$dist_mat, metadata$batch)
+    }
+    data.frame(dataset = dataset, method_id = key, family = v$family, state = v$state,
+      threshold = v$threshold, status = v$status, biological_anosim = biological,
+      batch_anosim = technical, n_initial = v$n_initial, n_significant = v$n_significant,
+      n_dropped = v$n_dropped, n_remaining = v$n_remaining, n_sparse_dropped = v$n_sparse_dropped)
+  })
+  do.call(rbind, rows)
+}
+
+becm_box_summary <- function(clr, counts, batch, screen, dataset) {
+  selected <- screen$cell_type[screen$p < 0.05]
+  selected <- selected[order(screen$p[match(selected, screen$cell_type)])]
+  results <- screen[match(selected, screen$cell_type), , drop = FALSE]
+  # Keep every test in the result table so BH always has its original family.
+  results <- screen[order(screen$q, screen$p, screen$cell_type), , drop = FALSE]
+  proportions <- counts / rowSums(counts)
+  rows <- summaries <- list()
+  for (g in sort(unique(batch))) {
+    ix <- which(batch == g)
+    summaries[[g]] <- data.frame(batch = g, n_samples = length(ix), cell_type = colnames(clr),
+      mean_clr = colMeans(clr[ix, , drop = FALSE]), median_clr = apply(clr[ix, , drop = FALSE], 2, median),
+      mean_proportion = colMeans(proportions[ix, , drop = FALSE]),
+      median_proportion = apply(proportions[ix, , drop = FALSE], 2, median),
+      prevalence = colMeans(counts[ix, , drop = FALSE] > 0), row.names = NULL)
+  }
+  for (scale in if (dataset == "Stephenson") c("CLR", "Percentage") else "CLR") {
+    values <- if (scale == "CLR") clr else proportions * 100
+    for (ct in selected) for (g in sort(unique(batch))) {
+      y <- values[batch == g, ct]
+      box <- grDevices::boxplot.stats(y)
+      rows[[length(rows) + 1L]] <- data.frame(scale = scale, cell_type = ct, batch = g,
+        n = length(y), ymin = box$stats[1], lower = box$stats[2], middle = box$stats[3],
+        upper = box$stats[4], ymax = box$stats[5], minimum = min(y), maximum = max(y), n_outliers = length(box$out))
+    }
+  }
+  list(dataset = dataset, results = results, boxes = if (length(rows)) do.call(rbind, rows) else data.frame(),
+    batch_summaries = do.call(rbind, summaries), n_samples = nrow(clr), n_types = ncol(clr),
+    batch_counts = as.list(table(batch)),
+    proportion_tests = if (dataset == "Stephenson") becm_screen(proportions, batch, counts) else NULL)
+}
+
+becm_checked_rds <- function(path, md5) {
+  check <- function() stopifnot(file.exists(path), file.info(path)$size > 0,
+    identical(unname(tools::md5sum(path)), md5))
+  check(); value <- readRDS(path); check(); value
+}
+
+becm_native_input <- function(row, ids, expected_columns = NULL) {
+  receipt <- becm_checked_rds(row$receipt_path, row$receipt_md5)
+  stopifnot(identical(receipt$status, "reviewed"), identical(receipt$md5, row$md5),
+    identical(receipt$artifact_path, row$artifact_path), identical(receipt$bundle_key, row$bundle_key))
+  value <- becm_checked_rds(row$artifact_path, row$md5)[[row$bundle_key]]
+  clr <- as.matrix(value$feat_mat)
+  stopifnot(is.numeric(clr), all(is.finite(clr)), !is.null(rownames(clr)),
+    all(nzchar(trimws(rownames(clr)))), !anyDuplicated(rownames(clr)),
+    setequal(rownames(clr), ids), !is.null(colnames(clr)), !anyDuplicated(colnames(clr)))
+  d <- as.matrix(value$dist_mat)
+  stopifnot(identical(rownames(d), rownames(clr)), identical(colnames(d), rownames(clr)),
+    all(is.finite(d)), all(d >= 0), max(abs(d - t(d))) < 1e-10,
+    max(abs(diag(d))) < 1e-10, max(abs(as.matrix(stats::dist(clr)) - d)) < 1e-8)
+  clr <- clr[ids, , drop = FALSE]
+  counts <- NULL
+  if (!is.null(value$counts)) {
+    padded <- as.matrix(value$counts)
+    stopifnot(!is.null(rownames(padded)), !anyDuplicated(rownames(padded)),
+      setequal(rownames(padded), ids), !is.null(colnames(padded)), !anyDuplicated(colnames(padded)))
+    padded <- padded[ids, , drop = FALSE]
+    stopifnot(ncol(padded) == ncol(clr), all(is.finite(padded)), all(padded >= 0.5),
+      max(abs(padded - 0.5 - round(padded - 0.5))) < 1e-8)
+    stopifnot(identical(colnames(clr), colnames(padded)) ||
+      identical(colnames(clr), make.names(colnames(padded), unique = TRUE)))
+    if (!is.null(expected_columns)) stopifnot(identical(colnames(padded), expected_columns))
+    # The bundle may sanitize CLR names; count-column names remain author labels.
+    colnames(clr) <- colnames(padded)
+    counts <- padded - 0.5
+    if (row$role %in% c("authors", "leiden", "harmony"))
+      stopifnot(max(abs(unname(clr) - unname(log(padded) - rowMeans(log(padded))))) < 1e-8)
+  }
+  list(clr = clr, counts = counts)
+}
+
+becm_run_dataset <- function(selection) {
+  stopifnot(selection$dataset %in% becm_datasets(),
+    identical(names(selection$inputs), c("authors", "leiden", "authors_limma", "harmony", "harmony_limma")))
+  metadata <- selection$metadata
+  stopifnot(identical(names(metadata), c("Sample", "bio", "batch")), !anyNA(metadata),
+    !anyDuplicated(metadata$Sample), nrow(metadata) == selection$n_samples)
+  inputs <- lapply(selection$inputs, function(row) becm_native_input(row, metadata$Sample, row$cell_type_names))
+  # Shared producer identities are checked, not inferred from matching dimensions.
+  stopifnot(identical(inputs$authors$counts, inputs$authors_limma$counts),
+    identical(inputs$harmony$counts, inputs$harmony_limma$counts))
+  built <- becm_build_variants(inputs, metadata$batch)
+  scores <- becm_score_variants(built$variants, metadata, selection$dataset)
+  boxes <- becm_box_summary(inputs$authors$clr, inputs$authors$counts, metadata$batch,
+    built$screens$authors, selection$dataset)
+  # No CLR features or counts are returned to the workstation.
+  list(schema = "ecoda_becm_comp_dataset_v1", dataset = selection$dataset,
+    metadata = metadata, variants = built$variants, screens = built$screens,
+    scores = scores, boxplots = boxes, sources = selection$inputs,
+    policy = list(alpha = 0.05, adjustment = "BH within initial annotation family",
+      effect = "max batch median CLR - min batch median CLR", pseudocount = 0.5,
+      recenter_after_drop = TRUE, retest = FALSE, sparse_zero_fraction = 0.5,
+      donor_adjustment = FALSE, evaluation = "primary condition only",
+      lupus = "whole-sample majority_v1, as approved"))
+}
+
+becm_worker <- function(selection_path, selection_md5, output_dir, run_id,
+                        source_commit, code_md5, code_path) {
+  stopifnot(nzchar(run_id), grepl("^[a-f0-9]{40}$", source_commit),
+    identical(unname(tools::md5sum(code_path)), code_md5),
+    getRversion() == "4.5.2", requireNamespace("vegan", quietly = TRUE))
+  selection <- becm_checked_rds(selection_path, selection_md5)
+  stopifnot(identical(names(selection), becm_datasets()), dir.exists(output_dir))
+  index <- list()
+  for (ds in names(selection)) {
+    path <- file.path(output_dir, paste0(ds, ".rds"))
+    proof <- paste0(path, ".md5")
+    if (file.exists(path) || file.exists(proof)) {
+      stopifnot(file.exists(path), file.exists(proof))
+      md5 <- readLines(proof, warn = FALSE)
+      value <- becm_checked_rds(path, md5)
+      stopifnot(identical(value$run_identity$run_id, run_id),
+        identical(value$run_identity$selection_md5, selection_md5),
+        identical(value$run_identity$source_commit, source_commit),
+        identical(value$run_identity$code_md5, code_md5))
+    } else {
+      value <- becm_run_dataset(selection[[ds]])
+      value$run_identity <- list(run_id = run_id, selection_md5 = selection_md5,
+        source_commit = source_commit, code_md5 = code_md5,
+        R = R.version.string, vegan = as.character(utils::packageVersion("vegan")),
+        host = Sys.info()[["nodename"]], job_id = Sys.getenv("SLURM_JOB_ID"),
+        time_utc = format(Sys.time(), tz = "UTC", usetz = TRUE))
+      tmp <- tempfile(".becm-", tmpdir = output_dir)
+      saveRDS(value, tmp, version = 3)
+      stopifnot(file.rename(tmp, path))
+      md5 <- unname(tools::md5sum(path))
+      proof_tmp <- tempfile(".becm-md5-", tmpdir = output_dir)
+      writeLines(md5, proof_tmp)
+      stopifnot(file.rename(proof_tmp, proof))
+    }
+    stopifnot(identical(value$schema, "ecoda_becm_comp_dataset_v1"),
+      identical(value$metadata, selection[[ds]]$metadata), length(value$variants) == 24L,
+      nrow(value$scores) == 24L, !anyDuplicated(value$scores$method_id))
+    index[[ds]] <- data.frame(dataset = ds, file = basename(path),
+      md5 = unname(tools::md5sum(path)), size = file.info(path)$size,
+      n_variants = 24L, n_unscorable = sum(value$scores$status != "PASS"))
+    cat(ds, ":", sum(value$scores$status == "PASS"), "/24 scorable variants\n")
+    flush.console()
+    rm(value); invisible(gc(FALSE))
+  }
+  manifest <- do.call(rbind, index)
+  path <- file.path(output_dir, "outputs.tsv")
+  if (file.exists(path)) {
+    stopifnot(isTRUE(all.equal(read.delim(path, stringsAsFactors = FALSE),
+      `rownames<-`(manifest, NULL), check.attributes = FALSE)))
+  } else {
+    tmp <- tempfile(".becm-index-", tmpdir = output_dir)
+    write.table(manifest, tmp, sep = "\t", row.names = FALSE, quote = FALSE)
+    stopifnot(file.rename(tmp, path))
+  }
+  invisible(manifest)
+}
+
+becm_prepare_selection <- function(control_path, control_md5, config_path = "datasets.json") {
+  e <- new.env(parent = globalenv())
+  for (path in c("src/utils/datasets_io.R", "src/utils/analysis_release.R"))
+    sys.source(path, envir = e)
+  control <- becm_checked_rds(control_path, control_md5)
+  stopifnot(identical(control$status, "approved"),
+    identical(control$schema, "ecoda_batch_analysis_release_v1"))
+  registry <- e$read_datasets_json(config_path)
+  roles <- list(authors = c("batch_effect_uncorrected", "ECODA_authors_HR"),
+    leiden = c("batch_effect_uncorrected", "ECODA_seuratres_2"),
+    authors_limma = c("batch_effect_corrected", "ECODA_authors_HR"),
+    harmony = c("batch_effect_corrected", "ecoda_unsupervised_harmony"),
+    harmony_limma = c("batch_effect_corrected", "ecoda_unsupervised_harmony_limma"))
+  result <- setNames(vector("list", length(becm_datasets())), becm_datasets())
+  for (ds in names(result)) {
+    cfg <- registry[[ds]]
+    stopifnot(!startsWith(ds, "_"), isTRUE(cfg$use_for_batch_effect),
+      all(c("batch_effect_uncorrected", "batch_effect_corrected") %in% names(cfg$views)))
+    wanted <- data.frame(dataset = ds, view = c(vapply(roles, `[`, character(1), 1),
+      "batch_effect_uncorrected", "batch_effect_corrected"),
+      method_key = c(vapply(roles, `[`, character(1), 2), rep("__sample_metadata__", 2)),
+      stringsAsFactors = FALSE)
+    keys <- e$.analysis_key(wanted)
+    rows <- control$ledger[e$.analysis_key(control$ledger) %in% keys, , drop = FALSE]
+    scope <- control$expected_scope[e$.analysis_key(control$expected_scope) %in% keys, , drop = FALSE]
+    stopifnot(nrow(rows) == 7L, nrow(scope) == 7L)
+    loaded <- e$load_analysis_release(rows, scope, require_projection = TRUE)
+    entry <- function(view, key) loaded[[paste(ds, view, key, sep = "\r")]]
+    unc <- entry("batch_effect_uncorrected", "__sample_metadata__")$result$metadata
+    cor <- entry("batch_effect_corrected", "__sample_metadata__")$result$metadata
+    stopifnot(!anyDuplicated(unc$Sample), !anyDuplicated(cor$Sample), setequal(unc$Sample, cor$Sample))
+    cor <- cor[match(unc$Sample, cor$Sample), , drop = FALSE]
+    batch_columns <- unlist(cfg$batch_col)
+    batch_columns <- batch_columns[vapply(batch_columns,
+      function(b) length(unique(unc[[b]])) > 1L, logical(1))]
+    stopifnot(length(batch_columns) == 1L,
+      identical(as.character(unc[[cfg$label_col]]), as.character(cor[[cfg$label_col]])),
+      identical(as.character(unc[[batch_columns]]), as.character(cor[[batch_columns]])))
+    metadata <- data.frame(Sample = as.character(unc$Sample), bio = as.character(unc[[cfg$label_col]]),
+      batch = as.character(unc[[batch_columns]]), stringsAsFactors = FALSE)
+    inputs <- lapply(names(roles), function(role) {
+      k <- roles[[role]]; value <- entry(k[1], k[2])
+      proof <- e$.analysis_checked_file(value$receipt$evidence_path, value$receipt$evidence_md5)
+      parent <- readRDS(proof)$parent
+      stopifnot(identical(parent$dataset, ds), identical(parent$view, k[1]),
+        identical(parent$method_key, k[2]))
+      list(role = role, artifact_path = parent$artifact_path, md5 = parent$md5,
+        bundle_key = parent$bundle_key, receipt_path = parent$receipt_path,
+        receipt_md5 = parent$receipt_md5, cell_type_names = value$result$cell_type_names)
+    })
+    names(inputs) <- names(roles)
+    result[[ds]] <- list(dataset = ds, n_samples = nrow(metadata), metadata = metadata,
+      inputs = inputs, columns = list(sample = cfg$sample_col, bio = cfg$label_col, batch = batch_columns),
+      control_md5 = control_md5, config_md5 = unname(tools::md5sum(config_path)))
+    rm(loaded, unc, cor, metadata, inputs); invisible(gc(FALSE))
+  }
+  result
+}
+
+becm_read_cache <- function(root, index_md5) {
+  index_path <- file.path(root, "outputs.tsv")
+  stopifnot(identical(unname(tools::md5sum(index_path)), index_md5))
+  index <- read.delim(index_path, stringsAsFactors = FALSE)
+  stopifnot(identical(index$dataset, becm_datasets()), nrow(index) == 7L,
+    !anyDuplicated(index$file), all(index$n_variants == 24L))
+  datasets <- boxes <- setNames(vector("list", 7L), becm_datasets())
+  scores <- list()
+  for (i in seq_len(nrow(index))) {
+    stopifnot(identical(index$file[i], paste0(index$dataset[i], ".rds")))
+    path <- file.path(root, index$file[i])
+    value <- becm_checked_rds(path, index$md5[i])
+    stopifnot(identical(value$schema, "ecoda_becm_comp_dataset_v1"),
+      identical(value$dataset, index$dataset[i]), nrow(value$scores) == 24L,
+      identical(file.info(path)$size, as.numeric(index$size[i])))
+    datasets[[i]] <- value[c("metadata", "variants", "screens", "sources", "policy", "run_identity")]
+    boxes[[i]] <- value$boxplots
+    scores[[i]] <- value$scores
+    rm(value)
+  }
+  list(schema = "ecoda_becm_comp_cache_v1", datasets = datasets,
+    scores = do.call(rbind, scores), boxplots = boxes,
+    output_index = index, output_index_md5 = index_md5)
+}
+```
+
+# Prepare the scoped Bamboo calculation
+
+The calculation is the approved initial noncanonical scoring test. It reads
+existing sample-composition bundles on a Bamboo compute allocation, preserves
+all native outputs, and checkpoints one compact result per dataset. It does
+not run a pipeline submitter or refit preprocessing, annotation, Harmony or
+limma. ANOSIM uses `permutations=0`: only its deterministic R statistic is
+needed here. The generated worker is a frozen copy of this notebook's core,
+with the notebook revision, selection MD5 and worker MD5 recorded. Maintain
+the notebook, not the generated worker.
+
+Run the following preparation chunk explicitly after committing the notebook.
+Transfer only the generated `selection.rds` and `worker.R` to a new run-owned
+Bamboo directory. Execute that worker with the configured Pixi R on a compute
+allocation, from a checkout/snapshot of the recorded commit. Its six arguments
+are the remote selection path, selection MD5, remote output directory, run ID,
+full source commit and worker MD5. It writes seven compact RDS files, their
+checksum sidecars and `outputs.tsv`. Copy only those output files back.
+
+```{r becm-prepare-run, eval=FALSE}
+run_id <- "ECODA_becm_comp_20261116_v1"
+run_root <- file.path(getwd(), "data", "derived", run_id)
+dir.create(run_root, recursive=TRUE, showWarnings=FALSE)
+source_commit <- system2("git", c("rev-parse", "HEAD"), stdout=TRUE)
+stopifnot(grepl("^[a-f0-9]{40}$", source_commit),
+  system2("git", c("diff", "--quiet", "HEAD", "--",
+    "notebooks/batch_effect_ECODA_becm_comparison.rmd")) == 0L)
+selection <- becm_prepare_selection(
+  "data/derived/batch_majority_metadata_v3/batch_analysis_release.rds",
+  "e75b1036df9d80d21cd633058957f55f")
+selection_path <- file.path(run_root, "selection.rds")
+if (file.exists(selection_path)) {
+  stopifnot(identical(readRDS(selection_path), selection))
+} else saveRDS(selection, selection_path)
+notebook_path <- "notebooks/batch_effect_ECODA_becm_comparison.rmd"
+lines <- readLines(notebook_path)
+start <- grep("^```\\{r becm-core[,}]", lines)
+stopifnot(length(start) == 1L)
+end <- start + which(grepl("^```[[:space:]]*$", lines[(start+1):length(lines)]))[1L]
+worker <- c(lines[(start+1):(end-1)],
+  "args <- commandArgs(trailingOnly=TRUE)", "stopifnot(length(args)==6L)",
+  "script <- sub('^--file=', '', grep('^--file=', commandArgs(), value=TRUE)[1L])",
+  "becm_worker(args[1], args[2], args[3], args[4], args[5], args[6], normalizePath(script))")
+worker_path <- file.path(run_root, "worker.R")
+if (file.exists(worker_path)) {
+  stopifnot(identical(readLines(worker_path), worker))
+} else writeLines(worker, worker_path)
+run_identity <- list(run_id=run_id, source_commit=source_commit,
+  notebook_md5=unname(tools::md5sum(notebook_path)),
+  selection_md5=unname(tools::md5sum(selection_path)),
+  worker_md5=unname(tools::md5sum(worker_path)),
+  selected_datasets=becm_datasets(), expected_rows=7L * 24L,
+  execution="Scoped temporary noncanonical sample-composition comparison on Bamboo")
+saveRDS(run_identity, file.path(run_root, "run_identity.rds"))
+print(run_identity)
+```
+
+After the compact output transfer, verify `outputs.tsv` against its recorded
+MD5 and assemble the plotting cache. It contains distances, scores, labels,
+tests and grouped summaries, never sample CLR/count matrices.
+
+```{r becm-assemble-cache, eval=FALSE}
+output_root <- file.path(run_root, "outputs")
+output_index_md5 <- Sys.getenv("ECODA_BECM_OUTPUT_INDEX_MD5")
+becm_cache <- becm_read_cache(output_root, output_index_md5)
+cache_path <- file.path(run_root, "comparison_cache.rds")
+if (file.exists(cache_path)) {
+  stopifnot(identical(readRDS(cache_path), becm_cache))
+} else saveRDS(becm_cache, cache_path)
+Sys.setenv(ECODA_BECM_CACHE=cache_path,
+  ECODA_BECM_CACHE_MD5=unname(tools::md5sum(cache_path)), ECODA_BECM_RENDER="1")
+```
+
+# Plotting functions
+
+The boxplot implementation below replaces the former free-standing
+`plot_boxplots.R`. It accepts explicit payloads instead of relying on a
+resident `batch_boxes` object. It retains the original Tukey hinges, extreme
+outlier markers, p-value labels and pooled zero-count bars. Dataset and panel
+counts are derived from the payloads rather than hard-coded. Before removing
+that old helper, all 125 main boxplots and their zero bars were checked for
+numerical equivalence against the original plotting layers. Its exact source
+bytes remain in the frozen plotting-migration receipt.
+
+```{r becm-plot-functions}
+becm_pformat <- function(x) vapply(x, function(z) {
+  if (is.na(z)) "NA" else if (z < 0.001) formatC(z, format="e", digits=1)
+  else format(signif(z, 2), trim=TRUE, scientific=FALSE)
+}, character(1))
+
+becm_axisformat <- function(x) format(signif(x, 2), trim=TRUE, scientific=FALSE)
+
+becm_short_batch <- function(dataset, batch) {
+  if (dataset == "Alzheimer") return(ifelse(batch == "10x 3' v3", "3' v3", "Multiome"))
+  if (dataset == "Breast_cancer") return(ifelse(batch == "12 hour", "12 h", "15 min"))
+  if (dataset == "Lupus_PBMC") return(sub("dmx_", "", sub("YS-JY-", "", sub("_pool", "p", batch))))
+  batch
+}
+
+becm_save_pages <- function(pages, path, width, height) {
+  stopifnot(length(pages) > 0L, !dir.exists(path))
+  dir.create(dirname(path), recursive=TRUE, showWarnings=FALSE)
+  tmp <- tempfile(".becm-", tmpdir=dirname(path), fileext=".pdf")
+  on.exit(unlink(tmp))
+  grDevices::pdf(tmp, width=width, height=height, onefile=TRUE, useDingbats=FALSE)
+  tryCatch(for (page in pages) print(page), finally=grDevices::dev.off())
+  stopifnot(file.info(tmp)$size > 0, file.rename(tmp, path))
+  invisible(path)
+}
+
+becm_boxplot_pages <- function(payload, dataset, scale="CLR") {
+  selected <- payload$results$cell_type[payload$results$p < 0.05]
+  if (!length(selected)) {
+    return(list(ggplot2::ggplot() + ggplot2::theme_void() +
+      ggplot2::labs(title=paste(dataset, "| No cell types with raw CLR p < 0.05"))))
+  }
+  tests <- if (scale == "CLR") payload$results else payload$proportion_tests
+  stopifnot(is.data.frame(tests), !anyDuplicated(tests$cell_type))
+  tests <- tests[match(selected, tests$cell_type), , drop=FALSE]
+  boxes <- payload$boxes[payload$boxes$scale == scale, , drop=FALSE]
+  batches <- sort(unique(boxes$batch))
+  batch_labels <- paste0(becm_short_batch(dataset, batches), "\nn=",
+    vapply(batches, function(b) as.integer(payload$batch_counts[[b]]), integer(1)))
+  panels <- lapply(seq_along(selected), function(j) {
+    cell_type <- selected[j]
+    box <- boxes[boxes$cell_type == cell_type, , drop=FALSE]
+    box$batch_display <- factor(box$batch, levels=batches, labels=batch_labels)
+    prev <- payload$batch_summaries[payload$batch_summaries$cell_type == cell_type, , drop=FALSE]
+    zero <- sum(round(prev$n_samples * (1 - prev$prevalence)))
+    n <- sum(prev$n_samples)
+    zero_pct <- 100 * zero / n
+    stopifnot(n == payload$n_samples, zero >= 0, zero <= n,
+      nrow(box) == length(batches), all(box$ymin <= box$lower),
+      all(box$lower <= box$middle), all(box$middle <= box$upper),
+      all(box$upper <= box$ymax), is.finite(tests$p[j]), is.finite(tests$q[j]))
+    status <- if (tests$q[j] < 0.05) "BH significant" else if (tests$p[j] < 0.05) "Raw only" else "Neither"
+    fill <- c("BH significant"="#71A8CF", "Raw only"="#EBC579", "Neither"="#CCCCCC")[[status]]
+    extrema <- rbind(
+      data.frame(batch_display=box$batch_display[box$minimum < box$ymin], value=box$minimum[box$minimum < box$ymin]),
+      data.frame(batch_display=box$batch_display[box$maximum > box$ymax], value=box$maximum[box$maximum > box$ymax]))
+    top <- ggplot2::ggplot(box, ggplot2::aes(x=batch_display)) +
+      ggplot2::geom_boxplot(ggplot2::aes(ymin=ymin, lower=lower, middle=middle,
+        upper=upper, ymax=ymax), stat="identity", fill=fill, width=.55, linewidth=.35) +
+      ggplot2::geom_point(data=extrema, ggplot2::aes(x=batch_display, y=value),
+        inherit.aes=FALSE, shape=4, size=1, stroke=.35, colour="#666666") +
+      ggplot2::scale_y_continuous(labels=becm_axisformat, breaks=scales::breaks_pretty(n=4),
+        expand=ggplot2::expansion(mult=c(.08, .08))) +
+      ggplot2::labs(title=cell_type, subtitle=paste0("p = ", becm_pformat(tests$p[j]),
+        "   BH = ", becm_pformat(tests$q[j])), x=NULL,
+        y=if (scale == "CLR") "CLR abundance" else "Cell abundance (%)") +
+      ggplot2::theme_bw(base_size=9) +
+      ggplot2::theme(plot.title=ggplot2::element_text(size=10.5, face="bold"),
+        plot.subtitle=ggplot2::element_text(size=9), panel.grid.minor=ggplot2::element_blank(),
+        panel.grid.major.x=ggplot2::element_blank(),
+        axis.text.x=ggplot2::element_text(size=8, angle=if (length(batches) > 3) 45 else 0,
+          hjust=if (length(batches) > 3) 1 else .5), plot.margin=ggplot2::margin(5, 8, 1, 5))
+    bottom <- ggplot2::ggplot(data.frame(pct=zero_pct, all=""), ggplot2::aes(x=pct, y=all)) +
+      ggplot2::geom_col(width=.65, fill="#808A93") +
+      ggplot2::scale_x_continuous(limits=c(0, 100), breaks=c(0, 50, 100),
+        labels=c("0%", "50%", "100%"), expand=c(0, 0)) +
+      ggplot2::labs(title=paste0("Zero cells: ", zero, "/", n, " samples (",
+        format(signif(zero_pct, 2), trim=TRUE), "%)"), x=NULL, y=NULL) +
+      ggplot2::theme_minimal(base_size=8) +
+      ggplot2::theme(plot.title=ggplot2::element_text(size=8.5),
+        panel.grid=ggplot2::element_blank(), axis.text.y=ggplot2::element_blank(),
+        plot.margin=ggplot2::margin(0, 8, 5, 5))
+    patchwork::wrap_plots(top, bottom, ncol=1, heights=c(3.7, 1))
+  })
+  chunks <- split(seq_along(panels), ceiling(seq_along(panels) / 12))
+  lapply(seq_along(chunks), function(k) {
+    subtitle <- if (scale == "CLR") paste0(length(selected), " types with raw p < 0.05; ",
+      sum(payload$results$q < .05), " / ", payload$n_types, " survive BH. ", payload$n_samples, " samples.")
+    else paste0("Same ", length(selected), " CLR-selected types; p-values test percentages; BH across all ", payload$n_types, " types.")
+    patchwork::wrap_plots(panels[chunks[[k]]], ncol=3, nrow=min(4L, ceiling(length(panels) / 3))) +
+      patchwork::plot_annotation(title=paste(dataset, "|", if (scale == "CLR")
+        "Cell-type CLR abundance by batch" else "Percentage-abundance diagnostic"), subtitle=subtitle,
+        caption=paste0("Boxes: median/IQR; whiskers: 1.5 IQR. Crosses: outlier extremes; intermediate outliers omitted.\n",
+          "Blue: BH < 0.05; gold: raw p < 0.05 only; gray: neither. Zero-count bars pool all samples.\n",
+          if (dataset == "Lupus_PBMC") "Lupus retains the documented whole-sample majority_v1 policy. " else "",
+          "Page ", k, "/", length(chunks)), theme=ggplot2::theme(
+            plot.title=ggplot2::element_text(size=16, face="bold"),
+            plot.subtitle=ggplot2::element_text(size=10.5),
+            plot.caption=ggplot2::element_text(size=8, hjust=0)))
+  })
+}
+
+becm_mds_rows <- function() {
+  ids <- c("ECODA_authors_limma", paste0("ECODA_authors_sigdiff_ctdrop_", 1:3),
+    "ECODA_Harmony_Leiden_CLR", "ECODA_Harmony_Leiden_CLR_limma",
+    paste0("ECODA_Harmony_Leiden_CLR_sigdiff_ctdrop_", 1:3))
+  data.frame(method_id=ids,
+    baseline_id=c(rep("ECODA_authors_uncorrected", 4), rep("ECODA_Leiden_CLR_uncorrected", 5)),
+    label=c("Authors + limma", paste0("Authors: drop, CLR cutoff ", 1:3),
+      "Harmony / Leiden / CLR", "Harmony / Leiden / CLR + limma",
+      paste0("Harmony: drop, CLR cutoff ", 1:3)), stringsAsFactors=FALSE)
+}
+
+becm_coordinates <- function(variant, sample_ids) {
+  if (is.null(variant$dist_mat)) return(NULL)
+  distance <- as.matrix(variant$dist_mat)
+  stopifnot(identical(rownames(distance), sample_ids), identical(colnames(distance), sample_ids),
+    all(is.finite(distance)), all(distance >= 0), max(abs(distance - t(distance))) < 1e-8,
+    max(abs(diag(distance))) < 1e-8)
+  if (max(distance) == 0) return(matrix(0, nrow=length(sample_ids), ncol=2,
+    dimnames=list(sample_ids, c("MDS1", "MDS2"))))
+  # Use the standard double-centred squared-distance matrix explicitly.
+  squared <- distance^2
+  gram <- -.5 * (squared - rowMeans(squared) - rep(colMeans(squared), each=nrow(squared)) + mean(squared))
+  eig <- eigen(gram, symmetric=TRUE)
+  keep <- which(eig$values > max(eig$values) * 1e-10)
+  coords <- matrix(0, nrow=nrow(distance), ncol=2, dimnames=list(sample_ids, c("MDS1", "MDS2")))
+  keep <- head(keep, 2L)
+  if (length(keep)) coords[, seq_along(keep)] <- sweep(eig$vectors[, keep, drop=FALSE], 2, sqrt(eig$values[keep]), "*")
+  coords
+}
+
+becm_count_label <- function(variant) {
+  if (is.null(variant)) return("Missing variant")
+  fields <- c(n_initial="initial", n_significant="BH significant", n_dropped="removed", n_remaining="remaining")
+  available <- names(fields)[vapply(names(fields), function(key)
+    length(variant[[key]]) == 1L && is.finite(variant[[key]]), logical(1))]
+  paste(paste0(fields[available], " ", unlist(variant[available])), collapse="; ")
+}
+
+becm_mds_figure <- function(dataset, entry, scores) {
+  metadata <- entry$metadata
+  stopifnot(all(c("Sample", "bio", "batch") %in% names(metadata)),
+    !anyNA(metadata[c("Sample", "bio", "batch")]), !anyDuplicated(metadata$Sample))
+  ids <- as.character(metadata$Sample)
+  rows <- becm_mds_rows()
+  needed <- unique(c(rows$baseline_id, rows$method_id))
+  stopifnot(all(needed %in% names(entry$variants)))
+  coordinates <- setNames(lapply(entry$variants[needed], becm_coordinates, sample_ids=ids), needed)
+  grouping <- c("bio", "bio", "batch", "batch")
+  states <- c("Uncorrected", "Corrected", "Uncorrected", "Corrected")
+  panels <- list()
+  for (r in seq_len(nrow(rows))) for (column in 1:4) {
+    id <- if (column %in% c(1L, 3L)) rows$baseline_id[r] else rows$method_id[r]
+    variant <- entry$variants[[id]]
+    coords <- coordinates[[id]]
+    title <- paste0(if (column == 1L) rows$label[r] else "", "\n",
+      if (grouping[column] == "bio") "Biology" else "Batch", " | ", states[column])
+    if (is.null(coords)) {
+      panel <- ggplot2::ggplot() + ggplot2::theme_void() +
+        ggplot2::labs(title=title, subtitle=paste(
+          paste(strwrap(paste("Unscorable:", variant$status), width=35), collapse="\n"),
+          paste(strwrap(becm_count_label(variant), width=35), collapse="\n"), sep="\n"))
+    } else {
+      score <- scores[scores$dataset == dataset & scores$method_id == id, , drop=FALSE]
+      stopifnot(nrow(score) == 1L)
+      value <- score[[if (grouping[column] == "bio") "biological_anosim" else "batch_anosim"]]
+      data <- data.frame(MDS1=coords[, 1], MDS2=coords[, 2],
+        group=factor(metadata[[grouping[column]]], levels=sort(unique(metadata[[grouping[column]]]))))
+      span <- max(abs(coords)) * 1.08
+      if (span == 0) span <- 1
+      panel <- ggplot2::ggplot(data, ggplot2::aes(x=MDS1, y=MDS2, colour=group)) +
+        ggplot2::geom_point(size=1.4, alpha=.85) +
+        ggplot2::coord_equal(xlim=c(-span, span), ylim=c(-span, span), expand=FALSE) +
+        ggplot2::scale_x_continuous(labels=becm_axisformat, breaks=scales::breaks_pretty(n=3)) +
+        ggplot2::scale_y_continuous(labels=becm_axisformat, breaks=scales::breaks_pretty(n=3)) +
+        ggplot2::labs(title=title, subtitle=paste0("ANOSIM: ",
+          if (is.finite(value)) sprintf("%.2f", value) else "unscorable", "\n",
+          paste(strwrap(becm_count_label(variant), width=43), collapse="\n")), colour=NULL) +
+        ggplot2::theme_bw(base_size=9) + ggplot2::theme(panel.grid.minor=ggplot2::element_blank(),
+          legend.position="bottom", legend.text=ggplot2::element_text(size=7))
+    }
+    panels[[length(panels) + 1L]] <- panel + ggplot2::theme(
+      plot.title=ggplot2::element_text(size=10, face="bold"),
+      plot.subtitle=ggplot2::element_text(size=8))
+  }
+  patchwork::wrap_plots(panels, ncol=4) + patchwork::plot_annotation(
+    title=paste(dataset, "| ECODA batch-effect correction comparison"),
+    subtitle="Columns: biological groups before / after correction; batches before / after correction.",
+    caption=paste0("Distances are evaluated with ANOSIM; biological labels are evaluation-only. ",
+      "Each variant uses the same MDS coordinates for biology and batch colouring.\n",
+      "All Harmony rows share the non-Harmony Leiden uncorrected anchor. ",
+      if (dataset == "Lupus_PBMC") "Lupus uses whole-sample majority_v1 batches." else ""),
+    theme=ggplot2::theme(plot.title=ggplot2::element_text(size=17, face="bold"),
+      plot.subtitle=ggplot2::element_text(size=11), plot.caption=ggplot2::element_text(size=9, hjust=0)))
+}
+
+becm_anosim_summary <- function(scores) {
+  required <- c("dataset", "method_id", "threshold", "biological_anosim", "batch_anosim")
+  stopifnot(all(required %in% names(scores)), !anyDuplicated(scores[c("dataset", "method_id")]))
+  data <- scores
+  author_drop <- grepl("^ECODA_authors_sigdiff_ctdrop_", data$method_id) & !grepl("droplow", data$method_id)
+  harmony_drop <- grepl("^ECODA_Harmony_Leiden_CLR_sigdiff_ctdrop_", data$method_id)
+  labels <- c(ECODA_authors_uncorrected="Authors: uncorrected",
+    ECODA_Leiden_CLR_uncorrected="Leiden: uncorrected", ECODA_authors_limma="Authors + limma",
+    ECODA_Harmony_Leiden_CLR="Harmony / Leiden / CLR",
+    ECODA_Harmony_Leiden_CLR_limma="Harmony / Leiden / CLR + limma",
+    ECODA_authors_sigdiff_ctdrop_2_droplow50pct="Authors: cutoff 2 + zero >=50%")
+  data$series <- unname(labels[data$method_id])
+  data$series[author_drop] <- "Authors: drop trajectory"
+  data$series[harmony_drop] <- "Harmony: drop trajectory"
+  stopifnot(!anyNA(data$series))
+  data$valid <- is.finite(data$biological_anosim) & is.finite(data$batch_anosim)
+  trajectory <- data[author_drop | harmony_drop, , drop=FALSE]
+  trajectory <- trajectory[order(trajectory$dataset, trajectory$series, trajectory$threshold), ]
+  groups <- interaction(trajectory$dataset, trajectory$series, drop=TRUE)
+  trajectory$segment <- ave(as.integer(!trajectory$valid), groups, FUN=cumsum)
+  trajectory$line <- interaction(trajectory$dataset, trajectory$series, trajectory$segment, drop=TRUE)
+  # Preserve breaks at unscorable thresholds; never bridge an invalid entry.
+  line_data <- trajectory[trajectory$valid, , drop=FALSE]
+  points <- data[data$valid, , drop=FALSE]
+  palette <- c("Authors: uncorrected"="#333333", "Leiden: uncorrected"="#999999",
+    "Authors + limma"="#1B9E77", "Harmony / Leiden / CLR"="#377EB8",
+    "Harmony / Leiden / CLR + limma"="#984EA3", "Authors: drop trajectory"="#D73027",
+    "Harmony: drop trajectory"="#E68A00", "Authors: cutoff 2 + zero >=50%"="#A65628")
+  shapes <- c("Authors: uncorrected"=1, "Leiden: uncorrected"=2,
+    "Authors + limma"=17, "Harmony / Leiden / CLR"=15,
+    "Harmony / Leiden / CLR + limma"=18, "Authors: drop trajectory"=16,
+    "Harmony: drop trajectory"=16, "Authors: cutoff 2 + zero >=50%"=8)
+  ggplot2::ggplot(points, ggplot2::aes(x=biological_anosim, y=batch_anosim,
+    colour=series, shape=series)) +
+    ggplot2::geom_path(data=line_data, ggplot2::aes(group=line), linewidth=.6, show.legend=FALSE) +
+    ggplot2::geom_point(size=2.2) +
+    ggplot2::geom_text(data=line_data, ggplot2::aes(label=threshold),
+      vjust=-.65, size=2.6, check_overlap=TRUE, show.legend=FALSE) +
+    ggplot2::facet_wrap(~dataset, ncol=3) +
+    ggplot2::scale_colour_manual(values=palette, limits=names(palette), drop=FALSE) +
+    ggplot2::scale_shape_manual(values=shapes, limits=names(shapes), drop=FALSE) +
+    ggplot2::scale_x_continuous(labels=becm_axisformat, breaks=scales::breaks_pretty(n=4),
+      expand=ggplot2::expansion(mult=.1)) +
+    ggplot2::scale_y_continuous(labels=becm_axisformat, breaks=scales::breaks_pretty(n=4),
+      expand=ggplot2::expansion(mult=.1)) +
+    ggplot2::labs(title="ECODA correction methods: biological versus batch separation",
+      subtitle="Labels show CLR-difference cutoffs; paths follow 0, 0.5, ..., 4 in order.",
+      x="Biological ANOSIM (higher separation)", y="Batch ANOSIM (higher separation)",
+      colour=NULL, shape=NULL, caption=paste0(
+        "High biological and low batch separation are desirable. Points are correction endpoints; no arrows.\n",
+        "Unscorable variants are reported in the cached score table and leave gaps in paths. ",
+        "Overlapping threshold labels may be suppressed. Kidney: condition.l1 only.")) +
+    ggplot2::theme_bw(base_size=11) + ggplot2::theme(legend.position="bottom",
+      legend.text=ggplot2::element_text(size=9), plot.caption=ggplot2::element_text(hjust=0)) +
+    ggplot2::guides(colour=ggplot2::guide_legend(nrow=3, byrow=TRUE),
+      shape=ggplot2::guide_legend(nrow=3, byrow=TRUE))
+}
+```
+
+# Load the reviewed comparison cache
+
+```{r becm-load-cache, eval=becm_render}
+cache_path <- Sys.getenv("ECODA_BECM_CACHE")
+cache_md5 <- Sys.getenv("ECODA_BECM_CACHE_MD5")
+stopifnot(file.exists(cache_path), grepl("^[0-9a-f]{32}$", cache_md5),
+  identical(unname(tools::md5sum(cache_path)), cache_md5))
+becm_cache <- readRDS(cache_path)
+stopifnot(identical(unname(tools::md5sum(cache_path)), cache_md5),
+  setequal(names(becm_cache$datasets), becm_dataset_ids),
+  all(c("datasets", "scores", "boxplots") %in% names(becm_cache)))
+```
+
+# Cell-type abundance boxplots and zero-count diagnostics
+
+Each main boxplot PDF includes all cell types with raw CLR p<0.05, with both
+raw and BH-adjusted p-values. Blue boxes survive BH; gold boxes are raw-only.
+The bar under each panel reports the fraction of samples with zero observed
+cells across all batches. Missing a rare category can interact strongly with
+the fixed pseudocount and changing CLR reference. The Stephenson percentage
+companion helps distinguish reference-sensitive findings from visible changes
+in cell proportions; its p-values test percentages and are labelled as such.
+
+```{r becm-boxplots, eval=becm_render}
+for (dataset in names(becm_cache$boxplots)) {
+  payload <- becm_cache$boxplots[[dataset]]
+  for (scale in if (is.null(payload$proportion_tests)) "CLR" else c("CLR", "Percentage")) {
+    pages <- becm_boxplot_pages(payload, dataset, scale)
+    n_selected <- sum(payload$results$p < .05)
+    filename <- if (scale == "CLR") paste0(dataset, "_CLR_boxplots.pdf") else paste0(dataset, "_percentage_diagnostic.pdf")
+    becm_save_pages(pages, file.path(becm_plot_root, "boxplots", filename),
+      width=13, height=4 * max(1L, min(4L, ceiling(n_selected / 3))))
+  }
+  rm(payload, pages)
+}
+```
+
+# MDS: nine rows by four columns for each dataset
+
+The rows are author limma; author cell-type dropping at cutoffs 1, 2 and 3;
+Harmony/Leiden CLR; Harmony/Leiden CLR + limma; and Harmony cell-type dropping
+at cutoffs 1, 2 and 3. Columns show biology before and after correction, then
+batch before and after correction. Row subtitles record original, significant,
+removed and remaining category counts where applicable. A variant with too
+few usable features remains explicitly unscorable instead of disappearing.
+
+Classical metric MDS is computed from each persisted sample distance matrix
+once and reused for both colourings. A rank-one representation receives a
+zero second coordinate. Biological labels do not determine these coordinates.
+
+```{r becm-mds, eval=becm_render}
+for (dataset in becm_dataset_ids) {
+  figure <- becm_mds_figure(dataset, becm_cache$datasets[[dataset]], becm_cache$scores)
+  becm_save_pages(list(figure), file.path(becm_plot_root, "mds", paste0(dataset, "_mds.pdf")),
+    width=18, height=31)
+  rm(figure)
+}
+```
+
+# ANOSIM summary and threshold trajectories
+
+The x-axis is biological separation and the y-axis is batch separation; high
+biological separation with low batch separation is desirable. The two cell-type
+drop families follow thresholds `seq(0, 4, 0.5)` in increasing order. The
+author threshold-2 plus zero-in-at-least-half variant is a separate point,
+alongside the fixed comparators and two uncorrected anchors. Kidney contributes
+its condition evaluation once. ANOSIM is shown on its original scale; no
+cross-metric mean or min-max normalization is used in this approved figure.
+
+```{r becm-summary, eval=becm_render}
+figure <- becm_anosim_summary(becm_cache$scores)
+becm_save_pages(list(figure), file.path(becm_plot_root, "summary", "ECODA_becm_comp_ANOSIM.pdf"),
+  width=15, height=12)
+rm(figure)
+```
+
+# Provenance and interpretation
+
+The `boxplots/relocation.tsv` table records the byte-identical relocation of
+the earlier six-dataset figures into this structure. Old checksum inventories
+remain historical evidence and retain their original recorded paths. Frozen
+`run_*` scripts also remain as evidence; all maintained scientific and plotting
+code now lives in this notebook.
+
+Lupus retains the previously approved **whole-sample** cohort with majority_v1
+sample batch labels. Those 94 samples contain cells from 17 raw batches, even
+though seven majority groups enter the sample-level comparison. The separate
+November 11 cohort audit documents a potential strict cell-level alternative;
+this notebook does not silently change that scientific cohort definition.
+
+These are exploratory batch associations in relative compositions. They do
+not establish absolute cell abundance changes or independent technical causes.
+Removing features chosen using batch labels targets batch separation by
+construction. Biological recovery is therefore reported alongside batch
+separation, and thresholds remain visible rather than selecting the best one
+using biological labels.
