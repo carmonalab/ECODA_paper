@@ -782,6 +782,13 @@ becm_anosim_summary <- function(scores) {
     "Authors + limma"=17, "Harmony / Leiden / CLR"=15,
     "Harmony / Leiden / CLR + limma"=18, "Authors: drop trajectory"=16,
     "Harmony: drop trajectory"=16, "Authors: cutoff 2 + zero >=50%"=8)
+  facet_labels <- setNames(vapply(unique(data$dataset), function(dataset) {
+    initial <- data[data$dataset == dataset, ]
+    authors <- initial$n_initial[initial$method_id == "ECODA_authors_uncorrected"]
+    harmony <- initial$n_initial[initial$method_id == "ECODA_Harmony_Leiden_CLR"]
+    stopifnot(length(authors) == 1L, length(harmony) == 1L)
+    paste0(dataset, " (n cell types: ", authors, " author / ", harmony, " Harmony)")
+  }, character(1)), unique(data$dataset))
   ggplot2::ggplot(points, ggplot2::aes(x=biological_anosim, y=batch_anosim,
     colour=series, shape=series)) +
     ggplot2::geom_segment(data=arrows, ggplot2::aes(
@@ -793,7 +800,8 @@ becm_anosim_summary <- function(scores) {
     ggplot2::geom_point(size=2.2) +
     ggplot2::geom_text(data=line_data, ggplot2::aes(label=threshold),
       vjust=-.65, size=2.6, check_overlap=TRUE, show.legend=FALSE) +
-    ggplot2::facet_wrap(~dataset, ncol=3) +
+    ggplot2::facet_wrap(~dataset, ncol=3,
+      labeller=ggplot2::as_labeller(facet_labels)) +
     ggplot2::scale_colour_manual(values=palette, limits=names(palette), drop=FALSE) +
     ggplot2::scale_shape_manual(values=shapes, limits=names(shapes), drop=FALSE) +
     ggplot2::scale_x_continuous(labels=becm_axisformat, breaks=scales::breaks_pretty(n=4),
@@ -803,10 +811,7 @@ becm_anosim_summary <- function(scores) {
     ggplot2::labs(title="ECODA correction methods: biological versus batch separation",
       subtitle="Labels show CLR-difference cutoffs; paths follow 0, 0.5, ..., 4 in order.",
       x="Biological ANOSIM (higher separation)", y="Batch ANOSIM (higher separation)",
-      colour=NULL, shape=NULL, caption=paste0(
-        "High biological and low batch separation are desirable. Arrows connect uncorrected anchors to their selected correction endpoints.\n",
-        "Unscorable variants are reported in the cached score table and leave gaps in paths. ",
-        "Overlapping threshold labels may be suppressed. Kidney: condition.l1 only.")) +
+      colour=NULL, shape=NULL) +
     ggplot2::theme_bw(base_size=11) + ggplot2::theme(legend.position="bottom",
       legend.text=ggplot2::element_text(size=9), plot.caption=ggplot2::element_text(hjust=0)) +
     ggplot2::guides(colour=ggplot2::guide_legend(nrow=3, byrow=TRUE),
