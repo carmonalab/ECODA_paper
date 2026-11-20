@@ -929,3 +929,338 @@ Removing features chosen using batch labels targets batch separation by
 construction. Biological recovery is therefore reported alongside batch
 separation, and thresholds remain visible rather than selecting the best one
 using biological labels.
+
+# Additional figure: all available historical cohort versions
+
+This separate, three-page figure deliberately includes cohorts disabled in
+the current production configuration. It does not change `datasets.json` or
+replace the final-seven figure. The 25 panels cover 13 distinct dataset IDs:
+seven current filtered versions, seven historical paired versions plus one mixed-contract Lupus and one
+Alzheimer corrected-only version, and nine broader historical versions.
+"Historical" means before the final November confounding exclusions, not
+completely unfiltered raw data.
+
+Current panels reuse all existing methods and threshold trajectories. Legacy
+panels compare author CLR only: the old unsupervised correction key does not
+establish the two modern Harmony identities, so it is not relabelled as either.
+Matching historical corrections are plotted from their existing distances.
+For broader versions without a matching correction, limma is fitted locally
+to the tiny saved sample CLR matrix using only the configured technical batch
+columns and an intercept. No biological variable is protected or fitted.
+Multiple varying configured columns define a joint batch axis for evaluation;
+limma uses their additive indicator design. This is explicitly exploratory.
+Myocardial_infarction's historical configuration includes patient as a batch
+column; its title exposes that problematic choice rather than presenting it
+as an unconfounded technical correction.
+
+Facet titles report sample and author-type counts, cohort status, unavailable
+methods and how many batches contain only one biological group. Zero such
+batches does not establish absence of confounding: imbalanced group fractions
+can remain. The old 45-sample Kidney_KPMP has no configured batch column and
+is retained as an unscorable panel. Alzheimer104 has no matching historical
+uncorrected IDs and is shown as a corrected-only point, without an arrow.
+Drop curves are omitted when any batch has fewer than two samples; missing
+methods and unscorable results are never replaced with zero scores.
+
+The historical corrected-distance JSON is a checksum-checked metadata export
+of existing Bamboo results. It contains distances and sample metadata, never
+CLR, counts, expression data or fitted models. All new calculations and plots
+run locally. The generated cache contains scores, panel metadata and source
+references, not sample feature matrices.
+
+```{r becm-all-available-functions}
+becm_historical_check <- function(path) {
+  expected <- sub("^MD5=", "", grep("^MD5=", readLines(paste0(path, ".md5")), value=TRUE))
+  stopifnot(length(expected)==1L, identical(unname(tools::md5sum(path)), expected))
+  expected
+}
+
+becm_all_available <- function(corrected_json, current_cache) {
+  cfg <- jsonlite::fromJSON("datasets.json", simplifyVector=FALSE)
+  corrected <- lapply(readLines(corrected_json), jsonlite::fromJSON)
+  names(corrected) <- vapply(corrected, `[[`, character(1), "dataset")
+  all_rows <- panels <- provenance <- list()
+  panel_number <- 0L
+  add <- function(ds, id, category, status, problem, metadata, variants, n_types) {
+    panel_number <<- panel_number+1L
+    panel <- paste(ds,id,sep="__")
+    batch <- metadata$batch; bio <- metadata$bio
+    good <- length(unique(batch))>=2L && length(unique(batch))<length(batch)
+    invalid <- sum(vapply(variants,function(v)is.null(v$dist_mat),logical(1)))
+    if(invalid>0L) problem <- paste0(problem,"; ",invalid," unscorable settings (curve gaps)")
+    rows <- lapply(names(variants),function(key) {
+      v <- variants[[key]]
+      score <- function(labels) {
+        if(is.null(v$dist_mat) || length(unique(labels))<2L || length(unique(labels))>=length(labels)) return(NA_real_)
+        becm_anosim(v$dist_mat,labels)
+      }
+      data.frame(panel_id=panel,dataset=ds,status=status,problem=problem,n_samples=nrow(metadata),
+        n_types=n_types,method_id=key,threshold=v$threshold,
+        method_status=if(!good) "UNSCORABLE_NO_BATCH" else if(!is.null(v$status)) v$status else "PASS",
+        n_remaining=if(is.null(v$n_remaining)) NA_integer_ else v$n_remaining,
+        biological_anosim=score(bio),batch_anosim=if(good)score(if(is.null(v$batch_labels)) batch else v$batch_labels) else NA_real_)
+    })
+    all_rows[[panel]] <<- do.call(rbind,rows)
+    panels[[panel]] <<- data.frame(panel_id=panel,page=category,dataset=ds,status=status,problem=problem,
+      n_samples=nrow(metadata),n_types=n_types)
+  }
+  for(ds in names(current_cache$datasets)) {
+    d <- current_cache$datasets[[ds]]
+    problem <- if(ds=="Lupus_PBMC") "Whole-sample majority batches; off-list cells retained" else
+      if(ds=="Kidney_KPMP_full") "Condition only; residual confounding possible" else "Final confounding exclusions applied"
+    add(ds,"current","Current filtered","Current filtered",problem,d$metadata,d$variants,
+      d$variants$ECODA_authors_uncorrected$n_initial)
+  }
+  datasets <- c("Alzheimer","Breast_cancer","CombinedPBMC","Covid19_PBMC","Diabetes","Joanito",
+    "Kidney_KPMP","Kidney_KPMP_full","Lung","Lupus_PBMC","Myocardial_infarction","Parkinson","Stephenson")
+  for(ds in datasets) {
+    file <- file.path("data/batch_effect/uncorrected/results",paste0(ds,"_batch_effect_uncorrected_composition.rds"))
+    mp <- file.path("data/batch_effect/uncorrected/metadata",paste0(ds,"_sample_metadata.feather"))
+    md5 <- becm_historical_check(file); mmd5 <- becm_historical_check(mp)
+    z <- readRDS(file)$ECODA_authors_HR
+    metadata <- as.data.frame(arrow::read_feather(mp))
+    roles <- list(broad=list(file=file,md5=md5,z=z,metadata=metadata))
+    intermediate <- file.path("data/batch_effect/uncorrected_final/results",paste0(ds,"_batch_effect_uncorrected_final_composition.rds"))
+    if(file.exists(intermediate)) {
+      imd5 <- becm_historical_check(intermediate)
+      iz <- readRDS(intermediate)$ECODA_authors_HR
+      if(!setequal(rownames(z$feat_mat),rownames(iz$feat_mat)))
+        roles$intermediate <- list(file=intermediate,md5=imd5,z=iz,metadata=metadata)
+    }
+    for(version in names(roles)) {
+      entry <- roles[[version]]; z <- entry$z
+      ids <- rownames(z$feat_mat); clr <- as.matrix(z$feat_mat)
+      stopifnot(!anyDuplicated(ids),!anyDuplicated(entry$metadata$Sample),all(ids%in%entry$metadata$Sample))
+      m <- entry$metadata[match(ids,entry$metadata$Sample),,drop=FALSE]
+      batch_columns <- unlist(cfg[[ds]]$columns$batch)
+      stopifnot(all(batch_columns%in%names(m)))
+      batch_columns <- batch_columns[vapply(batch_columns,function(k)length(unique(m[[k]]))>1L,logical(1))]
+      batch_data <- m[,batch_columns,drop=FALSE]
+      batch <- if(length(batch_columns)) as.character(do.call(interaction,c(lapply(batch_data,factor),list(drop=TRUE,sep=" | ")))) else rep("No configured batch",length(ids))
+      meta <- data.frame(Sample=ids,bio=as.character(m[[cfg[[ds]]$columns$label]]),batch=batch)
+      stopifnot(!anyNA(meta),all(is.finite(clr)))
+      counts <- as.matrix(z$counts)[ids,,drop=FALSE] - 0.5
+      stopifnot(all(counts>=0),max(abs(counts-round(counts)))<1e-8)
+      colnames(clr) <- colnames(counts)
+      variants <- list(ECODA_authors_uncorrected=becm_variant(clr,"authors_uncorrected","uncorrected"))
+      stored <- corrected[[ds]]
+      paired <- !is.null(stored) && setequal(ids,stored$ids)
+      category <- if(paired) "Historical correction results" else "Broader historical"
+      status <- if(paired) "Historical paired; pre-final exclusions" else "Broader historical; locally derived limma"
+      issues <- c("Author CLR only; Harmony not compared")
+      if(length(unique(batch))>=2L) {
+        tab <- table(meta$bio,meta$batch)
+        issues <- c(issues,paste0(sum(colSums(tab>0)==1),"/",ncol(tab)," batches have one bio group"))
+      }
+      if(paired) {
+        distance <- as.matrix(stored$distance);dimnames(distance)<-list(stored$ids,stored$ids)
+        distance <- stats::as.dist(distance[ids,ids,drop=FALSE])
+        variants$ECODA_authors_limma <- list(dist_mat=distance,threshold=NA_real_)
+        issues <- c(issues,"Stored legacy limma; historical contract")
+        cm <- stored$metadata[match(ids,stored$metadata$Sample),,drop=FALSE]
+        stopifnot(identical(as.character(cm[[cfg[[ds]]$columns$label]]),meta$bio))
+        changed <- sum(vapply(batch_columns,function(k)
+          sum(as.character(m[[k]])!=as.character(cm[[k]])),integer(1)))
+        if(changed>0L) {
+          variants$ECODA_authors_limma$batch_labels <- as.character(do.call(interaction,
+            c(lapply(cm[,batch_columns,drop=FALSE],factor),list(drop=TRUE,sep=" | "))))
+          issues <- c(issues,paste0(changed," sample batch labels differ; COR evaluated with its own labels"))
+        }
+        if(changed>0L || ncol(clr)!=stored$n_types)
+          status <- "Historical mixed contracts; not a paired correction"
+        if(ncol(clr)!=stored$n_types) issues <- c(issues,paste0(
+          "Annotation basis differs: UNC ",ncol(clr)," / COR ",stored$n_types,"; no limma arrow"))
+      } else if(length(batch_columns)) {
+        design <- stats::model.matrix(~.,data=lapply(batch_data,factor))
+        if(qr(design)$rank==ncol(design) && ncol(design)<nrow(design)) {
+          corrected_clr <- t(limma::removeBatchEffect(t(clr),covariates=design[,-1,drop=FALSE],
+            design=matrix(1,nrow(clr),1)))
+          variants$ECODA_authors_limma <- becm_variant(corrected_clr,"authors_limma","corrected")
+        } else issues <- c(issues,"Limma omitted: aliased/saturated batch design")
+      } else {
+        status <- "Unscorable batch comparison"
+        issues <- c(issues,"No configured batch column; no batch score or limma")
+      }
+      if(length(batch_columns)>1L) issues <- c(issues,paste0("Joint batch axis: ",paste(batch_columns,collapse=" + ")))
+      if(length(unique(batch))>=2L && all(table(batch)>=2L)) {
+        screen <- becm_screen(clr,batch,counts)
+        for(t in seq(0,4,.5)) {
+          dropped <- becm_drop(clr,screen,t)
+          variants[[paste0("ECODA_authors_sigdiff_ctdrop_",becm_threshold_id(t))]] <-
+            becm_variant(dropped$feat_mat,"authors_drop","corrected",t,dropped)
+        }
+        dropped <- becm_drop(clr,screen,2,TRUE)
+        variants$ECODA_authors_sigdiff_ctdrop_2_droplow50pct <- becm_variant(dropped$feat_mat,"authors_drop_sparse","corrected",2,dropped)
+      } else issues <- c(issues,"Drop curves omitted: missing/under-replicated batches")
+      add(ds,version,category,status,paste(issues,collapse="; "),meta,variants,ncol(clr))
+      provenance[[paste(ds,version)]] <- list(file=entry$file,md5=entry$md5,metadata=mp,metadata_md5=mmd5,
+        corrected_source=if(paired)stored$source else NULL,corrected_md5=if(paired)stored$md5 else NULL,
+        batch_columns=batch_columns,method=if(paired)"Existing historical correction" else "New local batch-only limma on saved CLR")
+    }
+    rm(z,metadata,roles,clr,counts,m);invisible(gc(FALSE))
+  }
+  # The old Alzheimer correction uses a different ID scheme from its 83-sample baseline.
+  z <- corrected$Alzheimer
+  distance <- as.matrix(z$distance);dimnames(distance)<-list(z$ids,z$ids)
+  m <- z$metadata
+  add("Alzheimer","corrected_only","Historical correction results","Historical corrected-only; unmatched baseline",
+    "104 corrected samples vs incompatible 83-sample baseline; no connecting arrow; legacy limma only",
+    data.frame(Sample=z$ids,bio=m[[cfg$Alzheimer$columns$label]],batch=m[[cfg$Alzheimer$columns$batch]]),
+    list(ECODA_authors_limma=list(dist_mat=stats::as.dist(distance),threshold=NA_real_)),z$n_types)
+  list(scores=do.call(rbind,all_rows),panels=do.call(rbind,panels),sources=provenance,
+    corrected_sources=lapply(corrected,function(x)x[c("dataset","source","md5","metadata_md5")]),
+    scope="Exploratory historical cohorts, including disabled cohorts; current production configuration unchanged")
+}
+# Same endpoint colours and trajectories as the maintained seven-cohort plot,
+# while retaining historical panels that lack one or more comparators.
+becm_all_available_panel_plot <- function(data) {
+  author_drop <- grepl("^ECODA_authors_sigdiff_ctdrop_", data$method_id) & !grepl("droplow", data$method_id)
+  harmony_drop <- grepl("^ECODA_Harmony_Leiden_CLR_sigdiff_ctdrop_", data$method_id)
+  labels <- c(ECODA_authors_uncorrected="Authors: uncorrected",
+    ECODA_Leiden_CLR_uncorrected="Leiden: uncorrected", ECODA_authors_limma="Authors + limma",
+    ECODA_Harmony_Leiden_CLR="Harmony / Leiden / CLR",
+    ECODA_Harmony_Leiden_CLR_limma="Harmony / Leiden / CLR + limma",
+    ECODA_authors_sigdiff_ctdrop_2_droplow50pct="Authors: cutoff 2 + zero >=50%")
+  data$series <- unname(labels[data$method_id])
+  data$series[author_drop] <- "Authors: drop trajectory"
+  data$series[harmony_drop] <- "Harmony: drop trajectory"
+  stopifnot(!anyNA(data$series))
+  data$valid <- is.finite(data$biological_anosim) & is.finite(data$batch_anosim)
+  trajectory <- data[author_drop | harmony_drop, , drop=FALSE]
+  trajectory <- trajectory[order(trajectory$dataset, trajectory$series, trajectory$threshold), ]
+  trajectory$line <- character(nrow(trajectory))
+  if (nrow(trajectory)) {
+    groups <- interaction(trajectory$dataset, trajectory$series, drop=TRUE)
+    segment <- ave(as.integer(!trajectory$valid), groups, FUN=cumsum)
+    trajectory$line <- interaction(trajectory$dataset, trajectory$series, segment, drop=TRUE)
+  }
+  line_data <- trajectory[trajectory$valid, , drop=FALSE]
+  palette <- c("Authors: uncorrected"="#333333", "Leiden: uncorrected"="#999999",
+    "Authors + limma"="#1B9E77", "Harmony / Leiden / CLR"="#377EB8",
+    "Harmony / Leiden / CLR + limma"="#984EA3", "Authors: drop trajectory"="#D73027",
+    "Harmony: drop trajectory"="#E68A00", "Authors: cutoff 2 + zero >=50%"="#A65628")
+  shapes <- c("Authors: uncorrected"=1, "Leiden: uncorrected"=2,
+    "Authors + limma"=17, "Harmony / Leiden / CLR"=15,
+    "Harmony / Leiden / CLR + limma"=18, "Authors: drop trajectory"=16,
+    "Harmony: drop trajectory"=16, "Authors: cutoff 2 + zero >=50%"=8)
+  present <- names(palette)[names(palette) %in% data$series]
+  axisformat <- function(x) format(signif(x, 2), trim=TRUE, scientific=FALSE)
+  ggplot2::ggplot(data[data$valid, ], ggplot2::aes(x=biological_anosim, y=batch_anosim,
+      colour=series, shape=series)) +
+    ggplot2::geom_path(data=line_data, ggplot2::aes(group=line), linewidth=.6, show.legend=FALSE) +
+    ggplot2::geom_point(size=2.2) +
+    ggplot2::geom_text(data=line_data, ggplot2::aes(label=threshold), vjust=-.65,
+      size=2.6, check_overlap=TRUE, show.legend=FALSE) +
+    ggplot2::scale_colour_manual(values=palette, limits=present, drop=FALSE) +
+    ggplot2::scale_shape_manual(values=shapes, limits=present, drop=FALSE) +
+    ggplot2::scale_x_continuous(labels=axisformat, breaks=scales::breaks_pretty(n=4),
+      expand=ggplot2::expansion(mult=.1)) +
+    ggplot2::scale_y_continuous(labels=axisformat, breaks=scales::breaks_pretty(n=4),
+      expand=ggplot2::expansion(mult=.1)) +
+    ggplot2::labs(x="Biological ANOSIM (higher separation)",
+      y="Batch ANOSIM (higher separation)", colour=NULL, shape=NULL) +
+    ggplot2::theme_bw(base_size=11) + ggplot2::theme(legend.position="bottom",
+      legend.text=ggplot2::element_text(size=9)) +
+    ggplot2::guides(colour=ggplot2::guide_legend(nrow=3, byrow=TRUE),
+      shape=ggplot2::guide_legend(nrow=3, byrow=TRUE))
+}
+
+becm_all_available_pages <- function(scores, page_groups = NULL,
+                                     max_panels = 9L, columns = 3L) {
+  fields <- c("panel_id", "dataset", "status", "problem", "n_samples", "n_types",
+    "method_id", "biological_anosim", "batch_anosim", "threshold")
+  stopifnot(is.data.frame(scores), nrow(scores) > 0L, all(fields %in% names(scores)),
+    !anyNA(scores[c("panel_id", "dataset", "status", "problem", "method_id")]),
+    !anyDuplicated(scores[c("panel_id", "method_id")]),
+    max_panels >= 1L, columns >= 1L)
+  info <- unique(scores[c("panel_id", "dataset", "status", "problem", "n_samples", "n_types")])
+  stopifnot(!anyDuplicated(info$panel_id))
+  if (is.null(page_groups)) page_groups <- setNames(info$status, info$panel_id)
+  stopifnot(!is.null(names(page_groups)), !anyDuplicated(names(page_groups)),
+    all(info$panel_id %in% names(page_groups)), !anyNA(page_groups[info$panel_id]),
+    all(nzchar(page_groups[info$panel_id])))
+  info$page_group <- unname(page_groups[info$panel_id])
+  wrap <- function(x) paste(strwrap(x, width = 60), collapse = "\n")
+  number <- function(x) if (is.finite(x)) format(x, trim = TRUE, scientific = FALSE) else "unavailable"
+  info$facet_title <- vapply(seq_len(nrow(info)), function(i) {
+    z <- info[i, ]
+    paste(c(paste0(z$dataset, " | n=", number(z$n_samples),
+      "; author types=", number(z$n_types)), wrap(z$status),
+      if (nzchar(trimws(z$problem))) wrap(z$problem)), collapse = "\n")
+  }, character(1))
+  stopifnot(!anyDuplicated(info$facet_title))
+  pairs <- data.frame(
+    before = c("ECODA_authors_uncorrected", "ECODA_authors_uncorrected",
+      "ECODA_Leiden_CLR_uncorrected", "ECODA_Leiden_CLR_uncorrected"),
+    after = c("ECODA_authors_limma", "ECODA_authors_sigdiff_ctdrop_2_droplow50pct",
+      "ECODA_Harmony_Leiden_CLR", "ECODA_Harmony_Leiden_CLR_limma"),
+    series = c("Authors + limma", "Authors: cutoff 2 + zero >=50%",
+      "Harmony / Leiden / CLR", "Harmony / Leiden / CLR + limma"))
+  pages <- list()
+  for (category in unique(info$page_group)) {
+    selected <- info$panel_id[info$page_group == category]
+    chunks <- split(selected, ceiling(seq_along(selected) / max_panels))
+    for (k in seq_along(chunks)) {
+      panel_ids <- chunks[[k]]
+      rows <- scores[scores$panel_id %in% panel_ids, , drop = FALSE]
+      labels <- info$facet_title[match(panel_ids, info$panel_id)]
+      # The existing helper keys by dataset. These titles distinguish current
+      # and historical versions of a cohort rather than pooling their scores.
+      rows$dataset <- factor(info$facet_title[match(rows$panel_id, info$panel_id)],
+        levels = labels)
+      arrows <- list()
+      for (panel in panel_ids) for (j in seq_len(nrow(pairs))) {
+        if (pairs$after[j] == "ECODA_authors_limma" &&
+            any(grepl("Annotation basis differs", rows$problem[rows$panel_id == panel], fixed=TRUE))) next
+        before <- rows[rows$panel_id == panel & rows$method_id == pairs$before[j], , drop = FALSE]
+        after <- rows[rows$panel_id == panel & rows$method_id == pairs$after[j], , drop = FALSE]
+        if (nrow(before) != 1L || nrow(after) != 1L) next
+        values <- c(before$biological_anosim, before$batch_anosim,
+          after$biological_anosim, after$batch_anosim)
+        if (!all(is.finite(values))) next
+        arrows[[length(arrows) + 1L]] <- data.frame(dataset = after$dataset,
+          x = values[1], y = values[2], xend = values[3], yend = values[4],
+          series = pairs$series[j])
+      }
+      plot <- becm_all_available_panel_plot(rows)
+      # Keep a visibly labelled facet even if all methods are unscorable.
+      blank <- data.frame(dataset = factor(labels, levels = labels),
+        biological_anosim = NA_real_, batch_anosim = NA_real_)
+      plot <- plot + ggplot2::geom_blank(data = blank,
+        ggplot2::aes(x = biological_anosim, y = batch_anosim), inherit.aes = FALSE)
+      if (length(arrows)) plot <- plot + ggplot2::geom_segment(
+        data = do.call(rbind, arrows),
+        ggplot2::aes(x = x, y = y, xend = xend, yend = yend, colour = series),
+        inherit.aes = FALSE, linewidth = .45, alpha = .8,
+        arrow = grid::arrow(length = grid::unit(1.8, "mm")), show.legend = FALSE)
+      plot <- plot + ggplot2::facet_wrap(~dataset, ncol = columns, drop = FALSE) +
+        ggplot2::labs(title = paste("ECODA ANOSIM comparison |", category),
+          subtitle = paste0(length(panel_ids), " cohort panels; page ", k, "/", length(chunks),
+            ". Threshold curves follow 0, 0.5, ..., 4."),
+          caption = NULL) +
+        ggplot2::theme(strip.text = ggplot2::element_text(size = 8.5, lineheight = .95),
+          plot.title = ggplot2::element_text(size = 15, face = "bold"),
+          plot.subtitle = ggplot2::element_text(size = 10),
+          plot.caption = ggplot2::element_text(size = 8, hjust = 0))
+      pages[[paste(category, k, sep = " / ")]] <- plot
+    }
+  }
+  attr(pages, "panel_index") <- info
+  pages
+}
+```
+
+The saved all-available cache can be plotted locally without recomputing methods.
+
+```{r becm-all-available-render, eval=FALSE}
+broad_root <- file.path(getwd(), 'data', 'derived', 'ECODA_becm_all_available_20261120_v1')
+broad <- becm_checked_rds(file.path(broad_root,'all_available_cache.final.rds'),'765c62ef1143e8b48a1d8d44efb2c1a6')
+page_order <- c('Current filtered','Historical correction results','Broader historical')
+panel_order <- broad$panels$panel_id[order(match(broad$panels$page,page_order))]
+broad$scores <- broad$scores[order(match(broad$scores$panel_id,panel_order)), ]
+page_groups <- setNames(broad$panels$page,broad$panels$panel_id)
+pages_all <- becm_all_available_pages(broad$scores,page_groups)
+becm_save_pages(pages_all,file.path(becm_plot_root,'summary','ECODA_becm_comp_ANOSIM_all_available.pdf'),17,16)
+```
+
+For a deliberate refresh, run `becm_all_available()` with the preserved historical JSON and the reviewed current cache. Its inputs and source MD5s are recorded in the all-available run directory.
