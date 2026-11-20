@@ -764,6 +764,16 @@ becm_anosim_summary <- function(scores) {
   # Preserve breaks at unscorable thresholds; never bridge an invalid entry.
   line_data <- trajectory[trajectory$valid, , drop=FALSE]
   points <- data[data$valid, , drop=FALSE]
+  arrow_pairs <- list(
+    c("ECODA_Leiden_CLR_uncorrected", "ECODA_Harmony_Leiden_CLR"),
+    c("ECODA_Leiden_CLR_uncorrected", "ECODA_Harmony_Leiden_CLR_limma"),
+    c("ECODA_authors_uncorrected", "ECODA_authors_limma"),
+    c("ECODA_authors_uncorrected", "ECODA_authors_sigdiff_ctdrop_2_droplow50pct"))
+  arrows <- do.call(rbind, lapply(arrow_pairs, function(pair) {
+    from <- points[points$method_id == pair[1], c("dataset", "biological_anosim", "batch_anosim")]
+    to <- points[points$method_id == pair[2], c("dataset", "biological_anosim", "batch_anosim", "series")]
+    merge(from, to, by="dataset", suffixes=c("_from", "_to"))
+  }))
   palette <- c("Authors: uncorrected"="#333333", "Leiden: uncorrected"="#999999",
     "Authors + limma"="#1B9E77", "Harmony / Leiden / CLR"="#377EB8",
     "Harmony / Leiden / CLR + limma"="#984EA3", "Authors: drop trajectory"="#D73027",
@@ -774,6 +784,11 @@ becm_anosim_summary <- function(scores) {
     "Harmony: drop trajectory"=16, "Authors: cutoff 2 + zero >=50%"=8)
   ggplot2::ggplot(points, ggplot2::aes(x=biological_anosim, y=batch_anosim,
     colour=series, shape=series)) +
+    ggplot2::geom_segment(data=arrows, ggplot2::aes(
+      x=biological_anosim_from, y=batch_anosim_from,
+      xend=biological_anosim_to, yend=batch_anosim_to, colour=series),
+      inherit.aes=FALSE, linewidth=.5, alpha=.8,
+      arrow=grid::arrow(length=grid::unit(.10, "inches"), type="closed"), show.legend=FALSE) +
     ggplot2::geom_path(data=line_data, ggplot2::aes(group=line), linewidth=.6, show.legend=FALSE) +
     ggplot2::geom_point(size=2.2) +
     ggplot2::geom_text(data=line_data, ggplot2::aes(label=threshold),
@@ -789,7 +804,7 @@ becm_anosim_summary <- function(scores) {
       subtitle="Labels show CLR-difference cutoffs; paths follow 0, 0.5, ..., 4 in order.",
       x="Biological ANOSIM (higher separation)", y="Batch ANOSIM (higher separation)",
       colour=NULL, shape=NULL, caption=paste0(
-        "High biological and low batch separation are desirable. Points are correction endpoints; no arrows.\n",
+        "High biological and low batch separation are desirable. Arrows connect uncorrected anchors to their selected correction endpoints.\n",
         "Unscorable variants are reported in the cached score table and leave gaps in paths. ",
         "Overlapping threshold labels may be suppressed. Kidney: condition.l1 only.")) +
     ggplot2::theme_bw(base_size=11) + ggplot2::theme(legend.position="bottom",
