@@ -108,6 +108,27 @@ def check_registered_selections():
     )
     assert l_min4_audit["cohort_membership"]["retained_after_cellcount_ids"] == []
     assert l_min4_audit["cohort_membership"]["post_cell_filter_sample_counts"] == {"L-1": 3, "L-2": 3}
+    # Interleaved batches: dropping L-2's early minority cell shifts L-2 after L-1 in obs.loc[mask].
+    interleaved_obs = pd.DataFrame({
+        "sampleID": ["L-2"] + ["L-1"] * 3 + ["L-2"] * 3,
+        "Status": ["Case"] * 7,
+        "batch_cov": [good_lupus[0]] + [good_lupus[0]] * 3 + [good_lupus[1]] * 3,
+    }, index=[f"il_cell_{i}" for i in range(7)])
+    il_cfg = configuration("Lupus_PBMC", lupus_entry, "batch_effect_uncorrected", minimum=3)
+    il_mask, _, il_audit = resolve_cohort_selection(interleaved_obs, il_cfg)
+    assert il_audit["retained_sample_ids"] == ["L-1", "L-2"]
+    assert il_audit["cohort_membership"]["retained_after_cellcount_ids"] == ["L_1", "L_2"]
+    with tempfile.TemporaryDirectory(prefix="ecoda-lupus-order-") as temporary:
+        il_root = Path(temporary)
+        (il_root / "raw.h5ad").write_bytes(b"lupus interleaved raw fixture")
+        il_sources = input_file_identities("raw.h5ad", il_root)
+        il_out = interleaved_obs.loc[il_mask].copy()
+        il_out["Sample"] = il_out["sampleID"].str.replace("-", "_", regex=False)
+        il_data = ad.AnnData(obs=il_out)
+        il_data.uns["cohort_selection"] = cohort_record(il_audit, il_sources, il_out)
+        il_path = il_root / "lupus_interleaved.h5ad"
+        il_data.write_h5ad(il_path)
+        assert validate_cohort_h5ad_path(il_path, il_cfg, il_sources)
     lung = ["Goveia_Carmeliet_2020", "Lambrechts_Thienpont_2018_6149v2", "Lambrechts_Thienpont_2018_6653",
             "Leader_Merad_2021_10x_3p_v2_beads_cite", "Leader_Merad_2021_10x_3p_v2_digest-deadcell_cite",
             "Leader_Merad_2021_10x_5p_v1_CD2"]

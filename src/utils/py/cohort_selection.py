@@ -216,10 +216,18 @@ def resolve_cohort_selection(obs, configuration):
             retained_samples = sample_series.iloc[retained_positions].astype(str).tolist()
     if majority_cell_filter:
         post_counts = sample_series.loc[mask].value_counts(sort=False)
+        retained_after_mask = (
+            sample_series.loc[mask].astype(str).drop_duplicates().tolist()
+        )
+        retained_after_mask_set = set(retained_after_mask)
+        retained = retained_after_mask + [
+            sample for sample in retained if sample not in retained_after_mask_set
+        ]
         after_count_filter = [
             sample for sample in retained
             if int(post_counts.get(sample, 0)) >= configuration["min_cells_per_sample"]
         ]
+        audit["retained_sample_ids"] = list(retained)
         audit["cell_filter"] = "majority_only"
         audit["pre_cell_filter_retained_cells"] = int(sample_mask.sum())
         audit["retained_cells"] = int(mask.sum())
