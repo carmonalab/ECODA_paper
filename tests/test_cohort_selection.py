@@ -86,6 +86,28 @@ def check_registered_selections():
                   "dmx_YS-JY-21_pool1", "dmx_YS-JY-21_pool2", "dmx_YS-JY-22_pool5", "dmx_YS-JY-22_pool6"]
     select("Lupus_PBMC", [{"Status": "Case", "batch_cov": batch}
                            for batch in good_lupus + ["dmx_AbFlare-3", "dmx_YS-JY-23_pool1"]], [True] * 7 + [False, False])
+    # Lupus_PBMC majority_only retains only cells matching each sample's winning majority batch_cov.
+    lupus_entry = datasets["Lupus_PBMC"]
+    lupus_obs = pd.DataFrame({
+        "sampleID": ["L-1"] * 4 + ["L-2"] * 4 + ["L-3"] * 4,
+        "Status": ["Case"] * 8 + ["Healthy"] * 4,
+        "batch_cov": [good_lupus[0], good_lupus[0], good_lupus[0], "dmx_AbFlare-3",
+                      good_lupus[1], good_lupus[1], good_lupus[1], good_lupus[2],
+                      "dmx_AbFlare-3", "dmx_AbFlare-3", "dmx_AbFlare-3", good_lupus[0]],
+    }, index=[f"lupus_cell_{i}" for i in range(12)])
+    l_mask, _, l_audit = resolve_cohort_selection(
+        lupus_obs, configuration("Lupus_PBMC", lupus_entry, "batch_effect_uncorrected", minimum=3)
+    )
+    assert l_mask.tolist() == [True, True, True, False, True, True, True, False, False, False, False, False]
+    assert l_audit["cell_filter"] == "majority_only"
+    assert l_audit["retained_cells"] == 6 and l_audit["dropped_non_majority_cells"] == 2
+    assert lupus_obs.loc[l_mask].groupby("sampleID")["batch_cov"].nunique().max() == 1
+    assert l_audit["cohort_membership"]["retained_after_cellcount_ids"] == ["L_1", "L_2"]
+    l_min4_mask, _, l_min4_audit = resolve_cohort_selection(
+        lupus_obs, configuration("Lupus_PBMC", lupus_entry, "batch_effect_uncorrected", minimum=4)
+    )
+    assert l_min4_audit["cohort_membership"]["retained_after_cellcount_ids"] == []
+    assert l_min4_audit["cohort_membership"]["post_cell_filter_sample_counts"] == {"L-1": 3, "L-2": 3}
     lung = ["Goveia_Carmeliet_2020", "Lambrechts_Thienpont_2018_6149v2", "Lambrechts_Thienpont_2018_6653",
             "Leader_Merad_2021_10x_3p_v2_beads_cite", "Leader_Merad_2021_10x_3p_v2_digest-deadcell_cite",
             "Leader_Merad_2021_10x_5p_v1_CD2"]

@@ -84,10 +84,10 @@ for (metric in metrics) trans[[aliases[[metric]]]] <- values[[metric]]
 attr(trans, "transformation_policy") <- transformation_analysis_policy()
 counts <- matrix(seq_len(18), 6, dimnames = list(paste0("s", 1:6), c("A", "B", "C")))
 labels <- setNames(rep(c("a", "b"), each = 3), rownames(counts))
-draws <- data.frame(trans_method = rep(trans$trans_method, each = 20), zero_imp_method = "counts_all__1",
+draws <- data.frame(trans_method = rep(trans$trans_method, each = 20), zero_imp_method = "counts_all__0.5",
   n_celltypes = 0, Amount_of_perturbation = 0, bootstrap_id = rep(1:20, 6), alr_reference = NA_character_)
 features <- lapply(draws$trans_method, function(method) {
-  matrix <- counts + 1
+  matrix <- counts + 0.5
   frequency <- matrix / rowSums(matrix)
   switch(method, counts = matrix, freq = 100 * frequency, arcsine_sqrt = asin(sqrt(frequency)),
     clr = log(matrix) - rowMeans(log(matrix)),

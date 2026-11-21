@@ -701,7 +701,8 @@
     "batch_metadata_policy": {
       "sample_aggregation": "majority_v1",
       "majority_keys": ["batch_cov"],
-      "accepted_sentinel_values": {}
+      "accepted_sentinel_values": {},
+      "cell_filter": "majority_only"
     },
     "views": {
       "batch_effect_uncorrected": {

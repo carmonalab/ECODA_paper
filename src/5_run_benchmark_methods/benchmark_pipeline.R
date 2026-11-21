@@ -10,7 +10,7 @@ transformation_analysis_policy <- function() {
       cluster_score='Adjusted_Rand_Index',sil_score='Silhouette_score',lisi_score='LISI_score'),
     modularity_k=3L, ari='mean(Ward.D2 ARI, PAM ARI)',
     lisi='separation; higher is better', aggregation='arithmetic mean of replicate scores',
-    replicates=20L, zero_imputation='counts_all__1', seed=123L,
+    replicates=20L, zero_imputation='counts_all__0.5', seed=123L,
     rng_kind="L'Ecuyer-CMRG", rng_normal_kind="Inversion", rng_sample_kind="Rejection", rng_policy='seed + perturbation index - 1; scoring RNG restored',
     alr_randref='seeded uniform reference',alr_mincvref='minimum frequency CV reference')
 }
@@ -83,7 +83,7 @@ datrans <- function(
     "alr_mincvref",
     "clr"
   ),
-  zero_imp_method = "counts_all__1",
+  zero_imp_method = "counts_all__0.5",
   n_cores = 8,
   rng_seed = 123L
 ) {

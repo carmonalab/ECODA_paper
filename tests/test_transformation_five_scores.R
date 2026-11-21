@@ -15,10 +15,11 @@ validate_transformation_result(result)
 reject(validate_transformation_result(result,expected_samples='foreign'))
 policy<-transformation_analysis_policy();draws<-attr(result,'transformation_replicates')
 stopifnot(nrow(result)==6L,nrow(draws)==120L,policy$modularity_k==3L,
+ policy$zero_imputation=='counts_all__0.5',
  all(draws$alr_reference[draws$trans_method=='alr_mincvref']=='reference'),
  all(is.na(draws$alr_reference[!grepl('^alr_',draws$trans_method)])))
 # Minimum CV is uniquely the constant-frequency reference, not a random draw.
-imputed<-as.matrix(counts)+1;freq<-imputed/rowSums(imputed)*100
+imputed<-as.matrix(counts)+0.5;freq<-imputed/rowSums(imputed)*100
 stopifnot(which.min(apply(freq,2,cv))==1L)
 set.seed(policy$seed,kind=policy$rng_kind,normal.kind=policy$rng_normal_kind,sample.kind=policy$rng_sample_kind)
 expected_random<-replicate(20,sample(colnames(counts),1))

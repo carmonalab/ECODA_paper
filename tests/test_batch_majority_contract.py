@@ -696,6 +696,7 @@ def _check_configured_policies() -> None:
             "sample_aggregation": "majority_v1",
             "majority_keys": ["batch_cov"],
             "accepted_sentinel_values": {},
+            "cell_filter": "majority_only",
         },
     }
     actual = {
@@ -704,6 +705,19 @@ def _check_configured_policies() -> None:
         if "batch_metadata_policy" in entry
     }
     assert actual == expected
+    # Verify cell_filter=majority_only is rejected for non-Lupus cohorts and invalid values fail.
+    from src.utils.py.export_h5ad_sample_metadata import _normalise_batch_metadata_policy
+    for bad_ds, bad_policy in (
+        ("Alzheimer", {"sample_aggregation": "majority_v1", "majority_keys": ["assay"], "cell_filter": "majority_only"}),
+        ("Breast_cancer", {"sample_aggregation": "majority_v1", "majority_keys": ["suspension_dissociation_time"], "cell_filter": "majority_only"}),
+        ("Lupus_PBMC", {"sample_aggregation": "majority_v1", "majority_keys": ["batch_cov"], "cell_filter": "unknown_mode"}),
+    ):
+        try:
+            _normalise_batch_metadata_policy(bad_policy, dataset=bad_ds)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected cell_filter rejection for {bad_ds}: {bad_policy}")
     assert {dataset: policy["majority_keys"] for dataset, policy in actual.items()} == {
         "Alzheimer": ["assay"],
         "Breast_cancer": ["suspension_dissociation_time"],

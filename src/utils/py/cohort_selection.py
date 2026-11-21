@@ -15,6 +15,7 @@ import re
 from types import SimpleNamespace
 
 import h5py
+import numpy as np
 import pandas as pd
 
 try:
@@ -152,22 +153,82 @@ def _observation_digest(rows):
     return digest.hexdigest()
 
 
+def _canonical_category_map(series, *, key, accepted_sentinel_values):
+    """Map raw cell values in a series to canonical categories."""
+    canon_cache = {}
+
+    def canonicalize(value):
+        if isinstance(value, np.generic):
+            value = value.item()
+        if value is None or value is pd.NA or value is pd.NaT:
+            return _canonical_batch_value(value, key=key, accepted_sentinel_values=accepted_sentinel_values)[0]
+        if isinstance(value, float) and not np.isfinite(value):
+            return _canonical_batch_value(value, key=key, accepted_sentinel_values=accepted_sentinel_values)[0]
+        cache_key = (type(value), value)
+        if cache_key not in canon_cache:
+            canon_cache[cache_key] = _canonical_batch_value(
+                value, key=key, accepted_sentinel_values=accepted_sentinel_values
+            )[0]
+        return canon_cache[cache_key]
+
+    return [canonicalize(value) for value in series.tolist()]
+
+
 def resolve_cohort_selection(obs, configuration):
-    """Return a whole-cell mask, resolved sample metadata, and an auditable identity."""
+    """Return a cell selection mask, resolved sample metadata, and an auditable identity."""
     sample_column = configuration["sample_column"]
     frame = sample_metadata_for_selection(obs, configuration)
     selected = evaluate_subset_mask(
         SimpleNamespace(obs=frame, obs_names=frame.index), configuration["subset_vars"]
     )
     retained = frame.index[selected].tolist()
-    mask = obs[sample_column].astype("string").isin(retained)
+    sample_series = obs[sample_column].astype("string")
+    sample_mask = sample_series.isin(retained)
     audit = assert_subset_sample_consistency(
-        SimpleNamespace(obs=obs, obs_names=obs.index), mask, sample_column,
+        SimpleNamespace(obs=obs, obs_names=obs.index), sample_mask, sample_column,
         f"{configuration['dataset']} / {configuration['view']}",
     )
-    counts = obs[sample_column].astype("string").value_counts(sort=False)
-    after_count_filter = [sample for sample in retained
-                          if counts[sample] >= configuration["min_cells_per_sample"]]
+    mask = sample_mask.copy()
+    policy = configuration["batch_metadata_policy"]
+    majority_cell_filter = policy is not None and policy.get("cell_filter") == "majority_only"
+    counts = sample_series.value_counts(sort=False)
+    if majority_cell_filter and retained:
+        retained_positions = mask.to_numpy(dtype=bool)
+        retained_samples = sample_series.iloc[retained_positions].astype(str).tolist()
+        for key in policy["majority_keys"]:
+            winner_cats = _canonical_category_map(
+                frame.loc[retained, key], key=key,
+                accepted_sentinel_values=policy["accepted_sentinel_values"],
+            )
+            winner_by_sample = dict(zip([str(s) for s in retained], winner_cats))
+            cell_cats = _canonical_category_map(
+                obs.loc[mask, key], key=key,
+                accepted_sentinel_values=policy["accepted_sentinel_values"],
+            )
+            keep_flags = [
+                cell_cats[idx] == winner_by_sample[retained_samples[idx]]
+                for idx in range(len(retained_samples))
+            ]
+            new_mask_arr = mask.to_numpy(dtype=bool).copy()
+            new_mask_arr[retained_positions] = keep_flags
+            mask = pd.Series(new_mask_arr, index=obs.index, dtype=bool)
+            retained_positions = new_mask_arr
+            retained_samples = sample_series.iloc[retained_positions].astype(str).tolist()
+    if majority_cell_filter:
+        post_counts = sample_series.loc[mask].value_counts(sort=False)
+        after_count_filter = [
+            sample for sample in retained
+            if int(post_counts.get(sample, 0)) >= configuration["min_cells_per_sample"]
+        ]
+        audit["cell_filter"] = "majority_only"
+        audit["pre_cell_filter_retained_cells"] = int(sample_mask.sum())
+        audit["retained_cells"] = int(mask.sum())
+        audit["dropped_cells"] = int(len(mask) - mask.sum())
+        audit["dropped_non_majority_cells"] = int(sample_mask.sum() - mask.sum())
+    else:
+        post_counts = None
+        after_count_filter = [sample for sample in retained
+                              if counts[sample] >= configuration["min_cells_per_sample"]]
     membership = {
         "configuration_sha256": _sha256(_selection_configuration(configuration)),
         "source_observations_sha256": _observation_digest(zip(obs.index, obs[sample_column])),
@@ -181,6 +242,10 @@ def resolve_cohort_selection(obs, configuration):
         "retained_after_cellcount_raw_ids": after_count_filter,
         "retained_after_cellcount_ids": canonical_sample_ids(after_count_filter),
     }
+    if majority_cell_filter:
+        membership["post_cell_filter_sample_counts"] = {
+            sample: int(post_counts.get(sample, 0)) for sample in retained
+        }
     audit["cohort_configuration"] = configuration
     audit["cohort_membership"] = membership
     audit["cohort_membership_sha256"] = _sha256(membership)

@@ -341,6 +341,7 @@ def _normalise_batch_metadata_policy(
         "sample_aggregation",
         "majority_keys",
         "accepted_sentinel_values",
+        "cell_filter",
     }
     unknown_fields = set(raw_policy) - allowed_fields
     if unknown_fields:
@@ -389,11 +390,19 @@ def _normalise_batch_metadata_policy(
         accepted[key] = ("unknown",)
     if dataset in {"Alzheimer", "Lupus_PBMC"} and accepted:
         raise ValueError(f"accepted sentinel values are not approved for {dataset!r}")
-    return {
+    normalized = {
         "sample_aggregation": "majority_v1",
         "majority_keys": tuple(majority_keys),
         "accepted_sentinel_values": accepted,
     }
+    raw_cell_filter = raw_policy.get("cell_filter")
+    if raw_cell_filter is not None:
+        if raw_cell_filter != "majority_only":
+            raise ValueError(f"unsupported cell_filter {raw_cell_filter!r}; expected 'majority_only'")
+        if dataset is not None and dataset != "Lupus_PBMC":
+            raise ValueError(f"cell_filter=majority_only is not approved for {dataset!r}")
+        normalized["cell_filter"] = "majority_only"
+    return normalized
 
 
 def _resolved_batch_configuration(

@@ -380,6 +380,24 @@ def main() -> None:
             assert report["validation_summary"]["n_samples"] == 4
             assert report["validation_summary"]["key_level_counts"] == {"batch_cov": 2}
             assert input_path.read_bytes() == before
+
+            strict_policy = {**policy, "cell_filter": "majority_only"}
+            strict_config = {dataset: {**majority_config[dataset], "batch_metadata_policy": strict_policy}}
+            strict_base = base / "majority_strict"
+            strict_fixture = _make_snapshot(strict_base, strict_config)
+            try:
+                strict_input = strict_base / f"{dataset}.h5ad"
+                ad.AnnData(obs=obs).write_h5ad(strict_input)
+                strict_report_path = strict_fixture["run_root"] / "reports" / "majority_strict.json"
+                _assert_completed(_invoke(strict_fixture, strict_input, strict_report_path, dataset), "strict majority audit")
+                strict_report = json.loads(strict_report_path.read_text())
+                assert strict_report["subset_audit"]["retained_cells"] == 8
+                assert strict_report["subset_audit"]["retained_sample_ids"] == ["S1", "S2", "S3", "S4"]
+                assert strict_report["validation_summary"]["n_cells"] == 8
+                assert strict_report["validation_summary"]["n_samples"] == 4
+                assert strict_report["validation_summary"]["key_level_counts"] == {"batch_cov": 2}
+            finally:
+                _make_writable(strict_base / "snapshot")
         finally:
             _make_writable(majority_base / "snapshot")
 
