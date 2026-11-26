@@ -125,7 +125,7 @@ p <- ggplot(df_sub, aes(x = gene, y = cluster_key)) +
   labs(
     x = "Canonical Adams et al. (2020) lineage and disease marker genes",
     y = NULL,
-    title = "Adams IPF cohort (n = 100, 305,701 cells): marker concordance across annotation strategies"
+    title = NULL
   ) +
   theme_bw(base_size = 9) +
   theme(

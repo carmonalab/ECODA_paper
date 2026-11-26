@@ -144,6 +144,7 @@ p1 <- df_normalization %>%
     method = "wilcox.test",
     method.args = list(exact = FALSE),
     paired = TRUE,
+    hide.ns = TRUE,
     label.y = 0.96,
     aes(label = after_stat(p.signif)),
     size = 3
@@ -170,7 +171,7 @@ transformation_companion_scores <- df_normalization %>% mutate(method = as.chara
 transformation_companions <- lapply(setdiff(evaluation_metrics(), "anosim_score"), function(metric) {
   panel <- plot_benchmark_raw_metric(
     transformation_companion_scores, metric,
-    method_order = levels(df_normalization$trans_method), reference = "CLR"
+    method_order = levels(df_normalization$trans_method), reference = "CLR", monochrome = TRUE
   )
   ggsave(file.path(path_plots, paste0("Supp_fig_16A_transformations_", metric, ".pdf")),
          plot = panel, width = 5, height = 4)
@@ -213,16 +214,17 @@ zeroimp_metric_panel <- function(metric) {
     data.frame(
       method = method_key, family = as.character(values$family[[1]]),
       label = as.character(cut(p_value, c(-Inf, 0.0001, 0.001, 0.01, 0.05, Inf),
-                               labels = c("****", "***", "**", "*", "ns")))
+                               labels = c("****", "***", "**", "*", "")))
     )
   }))
   tests$y <- max(rows$value) + 0.08 * max(diff(range(rows$value)), 0.1)
-  plot_benchmark_raw_metric(zeroimp_companion_scores, metric, method_order = zeroimp_order) +
+  plot_benchmark_raw_metric(zeroimp_companion_scores, metric, method_order = zeroimp_order, monochrome = TRUE) +
     facet_grid(cols = vars(family), scales = "free_x", space = "free_x") +
     scale_x_discrete(labels = function(x) sub("^(counts_all_|counts_zeros_|multLN_)", "", x)) +
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.14))) +
     geom_text(data = tests, aes(x = method, y = y, label = label), inherit.aes = FALSE, size = 3) +
     labs(y = paste0("Separation score (", score_label_map[[metric]], ")")) +
-    theme(legend.position = "bottom")
+    theme(legend.position = "none")
 }
 
 p2 <- zeroimp_metric_panel("anosim_score")

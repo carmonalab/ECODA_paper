@@ -30,13 +30,15 @@ extract_chunks_between <- function(lines, start_line, end_line) {
   out
 }
 
+fig3_start <- grep("^### Supp fig 18:", rmd_lines)[1]
+stopifnot(length(fig3_start) == 1L, !is.na(fig3_start))
 fig3_end <- grep('ggsave\\(file\\.path\\(path_plots, "Figure_3\\.pdf"\\)', rmd_lines)
 stopifnot(length(fig3_end) == 1L)
 # Include closing line + fence after Figure_3.pdf ggsave
 fig3_end <- fig3_end + 3L
 code_lines <- c(
   extract_chunks_between(rmd_lines, 44L, 275L),
-  extract_chunks_between(rmd_lines, 1170L, fig3_end)
+  extract_chunks_between(rmd_lines, fig3_start, fig3_end)
 )
 tmp_script <- tempfile(fileext = ".R")
 writeLines(code_lines, tmp_script)

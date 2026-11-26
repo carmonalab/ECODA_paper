@@ -45,9 +45,11 @@ Environment variables can override the cache or disable rendering.
 if (basename(getwd()) == "notebooks") setwd("..")
 becm_plot_root <- file.path(getwd(), "plots", "batch_effect_ECODA_becm_comparison")
 becm_render <- identical(Sys.getenv("ECODA_BECM_RENDER", "1"), "1")
-becm_default_cache <- file.path(getwd(), "data", "derived", "ECODA_becm_comp_20261116_v1", "comparison_cache.rds")
-becm_default_cache_md5 <- "d22ed3205de4b439f4063f1b88f37ebf"
+becm_default_cache <- file.path(getwd(), "data", "derived", "ECODA_becm_comp_20261121_v2", "comparison_cache.rds")
+becm_default_cache_md5 <- "62e23496975657c0f75a0342275bbe6e"
 becm_dataset_ids <- c("Alzheimer", "Breast_cancer", "Covid19_PBMC", "Joanito",
+                   "Kidney_KPMP_full", "Lupus_PBMC", "Stephenson")
+becm_retained_6_datasets <- c("Breast_cancer", "Covid19_PBMC", "Joanito",
                    "Kidney_KPMP_full", "Lupus_PBMC", "Stephenson")
 stopifnot(requireNamespace("ggplot2", quietly=TRUE),
           requireNamespace("patchwork", quietly=TRUE),
@@ -561,7 +563,7 @@ becm_save_pages <- function(pages, path, width, height) {
   dir.create(dirname(path), recursive=TRUE, showWarnings=FALSE)
   tmp <- tempfile(".becm-", tmpdir=dirname(path), fileext=".pdf")
   on.exit(unlink(tmp))
-  grDevices::pdf(tmp, width=width, height=height, onefile=TRUE, useDingbats=FALSE)
+  grDevices::cairo_pdf(tmp, width=width, height=height, onefile=TRUE)
   tryCatch(for (page in pages) print(page), finally=grDevices::dev.off())
   stopifnot(file.info(tmp)$size > 0, file.rename(tmp, path))
   invisible(path)
@@ -740,54 +742,73 @@ becm_mds_figure <- function(dataset, entry, scores) {
       plot.subtitle=ggplot2::element_text(size=11), plot.caption=ggplot2::element_text(size=9, hjust=0)))
 }
 
-becm_anosim_summary <- function(scores) {
+becm_anosim_summary <- function(scores, datasets = becm_retained_6_datasets,
+                                hide_limma = FALSE, hide_droplow = TRUE) {
   required <- c("dataset", "method_id", "threshold", "biological_anosim", "batch_anosim")
   stopifnot(all(required %in% names(scores)), !anyDuplicated(scores[c("dataset", "method_id")]))
-  data <- scores
+  data <- scores[scores$dataset %in% datasets, , drop=FALSE]
+  if (hide_limma) {
+    data <- data[!data$method_id %in% c("ECODA_authors_limma", "ECODA_Harmony_Leiden_CLR_limma"), , drop=FALSE]
+  }
+  if (hide_droplow) {
+    data <- data[data$method_id != "ECODA_authors_sigdiff_ctdrop_2_droplow50pct", , drop=FALSE]
+  }
   author_drop <- grepl("^ECODA_authors_sigdiff_ctdrop_", data$method_id) & !grepl("droplow", data$method_id)
   harmony_drop <- grepl("^ECODA_Harmony_Leiden_CLR_sigdiff_ctdrop_", data$method_id)
-  labels <- c(ECODA_authors_uncorrected="Authors: uncorrected",
-    ECODA_Leiden_CLR_uncorrected="Leiden: uncorrected", ECODA_authors_limma="Authors + limma",
-    ECODA_Harmony_Leiden_CLR="Harmony / Leiden / CLR",
-    ECODA_Harmony_Leiden_CLR_limma="Harmony / Leiden / CLR + limma",
-    ECODA_authors_sigdiff_ctdrop_2_droplow50pct="Authors: cutoff 2 + zero >=50%")
+  auth_traj_label <- "ECODA_authors: |\u0394CLR| \u2265 0..4"
+  harm_traj_label <- "ECODA_Leiden (Harmony): |\u0394CLR| \u2265 0..4"
+  labels <- c(ECODA_authors_uncorrected="ECODA_authors (uncorrected)",
+    ECODA_Leiden_CLR_uncorrected="ECODA_Leiden (uncorrected)", ECODA_authors_limma="ECODA_authors (limma)",
+    ECODA_Harmony_Leiden_CLR="ECODA_Leiden (Harmony)",
+    ECODA_Harmony_Leiden_CLR_limma="ECODA_Leiden (Harmony + limma)",
+    ECODA_authors_sigdiff_ctdrop_2_droplow50pct="ECODA_authors: cutoff 2 + zero \u2265 50%")
   data$series <- unname(labels[data$method_id])
-  data$series[author_drop] <- "Authors: drop trajectory"
-  data$series[harmony_drop] <- "Harmony: drop trajectory"
+  data$series[author_drop] <- auth_traj_label
+  data$series[harmony_drop] <- harm_traj_label
   stopifnot(!anyNA(data$series))
   data$valid <- is.finite(data$biological_anosim) & is.finite(data$batch_anosim)
   trajectory <- data[author_drop | harmony_drop, , drop=FALSE]
   trajectory <- trajectory[order(trajectory$dataset, trajectory$series, trajectory$threshold), ]
   groups <- interaction(trajectory$dataset, trajectory$series, drop=TRUE)
   trajectory$segment <- ave(as.integer(!trajectory$valid), groups, FUN=cumsum)
-  trajectory$line <- interaction(trajectory$dataset, trajectory$series, trajectory$segment, drop=TRUE)
+  trajectory$line <- interaction(trajectory$dataset, trajectory$series, segment, drop=TRUE)
   # Preserve breaks at unscorable thresholds; never bridge an invalid entry.
   line_data <- trajectory[trajectory$valid, , drop=FALSE]
   points <- data[data$valid, , drop=FALSE]
-  arrow_pairs <- list(
-    c("ECODA_Leiden_CLR_uncorrected", "ECODA_Harmony_Leiden_CLR"),
-    c("ECODA_Leiden_CLR_uncorrected", "ECODA_Harmony_Leiden_CLR_limma"),
-    c("ECODA_authors_uncorrected", "ECODA_authors_limma"),
-    c("ECODA_authors_uncorrected", "ECODA_authors_sigdiff_ctdrop_2_droplow50pct"))
+  arrow_pairs <- list(c("ECODA_Leiden_CLR_uncorrected", "ECODA_Harmony_Leiden_CLR"))
+  if (!hide_limma) {
+    arrow_pairs <- c(arrow_pairs, list(
+      c("ECODA_Leiden_CLR_uncorrected", "ECODA_Harmony_Leiden_CLR_limma"),
+      c("ECODA_authors_uncorrected", "ECODA_authors_limma")
+    ))
+  }
+  if (!hide_droplow) {
+    arrow_pairs <- c(arrow_pairs, list(
+      c("ECODA_authors_uncorrected", "ECODA_authors_sigdiff_ctdrop_2_droplow50pct")
+    ))
+  }
   arrows <- do.call(rbind, lapply(arrow_pairs, function(pair) {
     from <- points[points$method_id == pair[1], c("dataset", "biological_anosim", "batch_anosim")]
     to <- points[points$method_id == pair[2], c("dataset", "biological_anosim", "batch_anosim", "series")]
     merge(from, to, by="dataset", suffixes=c("_from", "_to"))
   }))
-  palette <- c("Authors: uncorrected"="#333333", "Leiden: uncorrected"="#999999",
-    "Authors + limma"="#1B9E77", "Harmony / Leiden / CLR"="#377EB8",
-    "Harmony / Leiden / CLR + limma"="#984EA3", "Authors: drop trajectory"="#D73027",
-    "Harmony: drop trajectory"="#E68A00", "Authors: cutoff 2 + zero >=50%"="#A65628")
-  shapes <- c("Authors: uncorrected"=1, "Leiden: uncorrected"=2,
-    "Authors + limma"=17, "Harmony / Leiden / CLR"=15,
-    "Harmony / Leiden / CLR + limma"=18, "Authors: drop trajectory"=16,
-    "Harmony: drop trajectory"=16, "Authors: cutoff 2 + zero >=50%"=8)
+  palette <- setNames(
+    c("#333333", "#888888", "#1B9E77", "#377EB8", "#984EA3", "#D73027", "#E68A00", "#A65628"),
+    c("ECODA_authors (uncorrected)", "ECODA_Leiden (uncorrected)", "ECODA_authors (limma)",
+      "ECODA_Leiden (Harmony)", "ECODA_Leiden (Harmony + limma)",
+      auth_traj_label, harm_traj_label, "ECODA_authors: cutoff 2 + zero \u2265 50%")
+  )
+  shapes <- setNames(
+    c(1, 2, 17, 15, 18, 16, 16, 8),
+    names(palette)
+  )
+  active_levels <- names(palette)[names(palette) %in% data$series]
   facet_labels <- setNames(vapply(unique(data$dataset), function(dataset) {
     initial <- data[data$dataset == dataset, ]
     authors <- initial$n_initial[initial$method_id == "ECODA_authors_uncorrected"]
     harmony <- initial$n_initial[initial$method_id == "ECODA_Harmony_Leiden_CLR"]
     stopifnot(length(authors) == 1L, length(harmony) == 1L)
-    paste0(dataset, " (n cell types: ", authors, " author / ", harmony, " Harmony)")
+    paste0(dataset, " (", authors, " author / ", harmony, " Harmony cell types)")
   }, character(1)), unique(data$dataset))
   ggplot2::ggplot(points, ggplot2::aes(x=biological_anosim, y=batch_anosim,
     colour=series, shape=series)) +
@@ -798,24 +819,24 @@ becm_anosim_summary <- function(scores) {
       arrow=grid::arrow(length=grid::unit(.10, "inches"), type="closed"), show.legend=FALSE) +
     ggplot2::geom_path(data=line_data, ggplot2::aes(group=line), linewidth=.6, show.legend=FALSE) +
     ggplot2::geom_point(size=2.2) +
-    ggplot2::geom_text(data=line_data, ggplot2::aes(label=threshold),
-      vjust=-.65, size=2.6, check_overlap=TRUE, show.legend=FALSE) +
+    ggrepel::geom_text_repel(data=line_data, ggplot2::aes(label=threshold),
+      size=2.6, max.overlaps=Inf, box.padding=0.36, point.padding=0.24,
+      force=5.5, show.legend=FALSE) +
     ggplot2::facet_wrap(~dataset, ncol=3,
       labeller=ggplot2::as_labeller(facet_labels)) +
-    ggplot2::scale_colour_manual(values=palette, limits=names(palette), drop=FALSE) +
-    ggplot2::scale_shape_manual(values=shapes, limits=names(shapes), drop=FALSE) +
+    ggplot2::scale_colour_manual(values=palette[active_levels], limits=active_levels, drop=FALSE) +
+    ggplot2::scale_shape_manual(values=shapes[active_levels], limits=active_levels, drop=FALSE) +
     ggplot2::scale_x_continuous(labels=becm_axisformat, breaks=scales::breaks_pretty(n=4),
       expand=ggplot2::expansion(mult=.1)) +
     ggplot2::scale_y_continuous(labels=becm_axisformat, breaks=scales::breaks_pretty(n=4),
       expand=ggplot2::expansion(mult=.1)) +
-    ggplot2::labs(title="ECODA correction methods: biological versus batch separation",
-      subtitle="Labels show CLR-difference cutoffs; paths follow 0, 0.5, ..., 4 in order.",
-      x="Biological ANOSIM (higher separation)", y="Batch ANOSIM (higher separation)",
+    ggplot2::labs(x="Biological ANOSIM (higher = stronger biological separation)",
+      y="Batch ANOSIM (higher = stronger batch effect)",
       colour=NULL, shape=NULL) +
     ggplot2::theme_bw(base_size=11) + ggplot2::theme(legend.position="bottom",
       legend.text=ggplot2::element_text(size=9), plot.caption=ggplot2::element_text(hjust=0)) +
-    ggplot2::guides(colour=ggplot2::guide_legend(nrow=3, byrow=TRUE),
-      shape=ggplot2::guide_legend(nrow=3, byrow=TRUE))
+    ggplot2::guides(colour=ggplot2::guide_legend(nrow=2, byrow=TRUE),
+      shape=ggplot2::guide_legend(nrow=2, byrow=TRUE))
 }
 ```
 
@@ -882,16 +903,22 @@ for (dataset in becm_dataset_ids) {
 
 The x-axis is biological separation and the y-axis is batch separation; high
 biological separation with low batch separation is desirable. The two cell-type
-drop families follow thresholds `seq(0, 4, 0.5)` in increasing order. The
-author threshold-2 plus zero-in-at-least-half variant is a separate point,
-alongside the fixed comparators and two uncorrected anchors. Kidney contributes
-its condition evaluation once. ANOSIM is shown on its original scale; no
-cross-metric mean or min-max normalization is used in this approved figure.
+drop families follow thresholds `seq(0, 4, 0.5)` in increasing order. For the
+publication summary (`Supp_fig_TMP_ECODA_becm_comp_ANOSIM.pdf` via
+`src/notebooks/build_batch_6cohort_figures_20261126.R`), `Alzheimer` is
+excluded (retaining the 6 cohorts in a 2x3 layout), the `limma` points and
+arrows (`ECODA_authors (limma)` and `ECODA_Leiden (Harmony + limma)`) are
+shown (`hide_limma = FALSE`), and the `droplow50pct` variant remains hidden from
+the plot (`hide_droplow = TRUE`) while remaining intact in the underlying cache
+and computation code. Kidney contributes its condition evaluation once. ANOSIM is
+shown on its original scale; no cross-metric mean or min-max normalization is
+used in this figure.
 
 ```{r becm-summary, eval=becm_render}
-figure <- becm_anosim_summary(becm_cache$scores)
+figure <- becm_anosim_summary(becm_cache$scores, datasets = becm_retained_6_datasets,
+                              hide_limma = FALSE, hide_droplow = TRUE)
 becm_save_pages(list(figure), file.path(becm_plot_root, "summary", "ECODA_becm_comp_ANOSIM.pdf"),
-  width=15, height=12)
+  width=13.5, height=8.2)
 utils::write.csv(becm_cache$scores,
   file.path(becm_plot_root, "ANOSIM_scores_and_cell_type_counts.csv"), row.names=FALSE)
 rm(figure)

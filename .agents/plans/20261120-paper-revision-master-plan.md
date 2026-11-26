@@ -3,7 +3,7 @@
 - **Created:** 2026-11-20
 - **Owner:** Orchestrator (`Orchestrator (Neon)`) — **SINGLE-WRITER POLICY:** only the orchestrator edits this plan file. Subagents/workers read this file for context and report findings/status via board/messages to prevent parallel write conflicts.
 - **Target Manuscript:** *Cell type composition enables effective patient stratification in single-cell RNA-seq cohorts* (Review Commons `RC-2026-03528`; PLOS Computational Biology transfer)
-- **Status:** `✅ PHASES 3 & 4 COMPLETE — READY FOR USER WORD FIELD REFRESH & ZOTERO LINKING (2026-11-21)`
+- **Status:** `✅ ROUND 2 REVISIONS COMPLETE & VERIFIED — 2026-11-26 (6-Cohort Batch / CT-drop, sLISI, 16-Row Classic SF15, PLOS DOCX)`
 
 ---
 
@@ -26,6 +26,7 @@ Complete all scientific, analytical, figure, table, documentation, and manuscrip
 | **Phase 2** | `Lupus_PBMC` Option 2 Bamboo rerun (`durable-hpc-gate-ecoda`) + centralize `NOTES.md` + recompute `Supp_fig_16A` (`counts_all_0.5`) + build/polish new & updated figures (`Figure 3C/3`, `Figure 5`, `Supp_fig_X_*`) | ✅ Done & Approved (2026-11-21) | **User Gate 2 approved** (method parenthetical labels + larger BatchMDS text updated; proceeded to Phases 3 & 4) |
 | **Phase 3** | Update manuscript (`revision_docs/Halter_etal_bioRxiv_ReviewCommons_revised_20261121.docx`; native `Christian Halter` track changes, dynamic `SEQ`/`REF` for Main Figs 1–7, Supp Figs 1–36 & Supp Tables 1–6, `[ZOTERO: ...]` placeholders, OOXML/`xmllint`/reject-all QA) | ✅ Done (2026-11-21) | **User Review** (`Cmd+A -> F9` field refresh & link 17 `[ZOTERO: ...]` placeholders) |
 | **Phase 4** | Populate green `#007A33` tracked-change responses in `revision_docs/Review_RC-2026-03528_1781259937_1_CH_2_revised_20261121.docx` + 13 Word progress comments in `revision_docs/revision-plan_commented_20261121.docx` + OOXML/`xmllint` QA | ✅ Done (2026-11-21) | **Final Release Sign-off** |
+| **Round 2** | 16-row Bamboo classic `SF15` profiling (`EPYC 7742` / `H200 NVL`), `Alzheimer` excluded (6 batch / 17 unique cohorts), `CT-drop (|ΔCLR| ≥ 2)`, `sLISI`, `Supp_fig_2` `benchmark_access1133_v1`, figure polish & `*_revised_20261126.docx` | ✅ Done (2026-11-26) | Verified & committed |
 
 ---
 
@@ -284,3 +285,13 @@ Replace `[ZOTERO: ...]` tracked placeholders in `revision_docs/Halter_etal_bioRx
 | `[ZOTERO: Tumeh et al. 2014]` | PD-1 blockade induces responses via pre-existing CD8+ T cells | `10.1038/nature13954` |
 | `[ZOTERO: Wang Z et al. 2024]` | QOT & GloProp sample distance / divergence methods | Verify against existing Ref in `Bibliography` / `10.1093/bioinformatics/btae597` |
 | `[ZOTERO: Yan et al. 2026]` | Early-stage TNBC neoadjuvant chemotherapy response cohort | `10.1038/s41586-026-10469-9` |
+
+---
+
+## 9. Round 2 Key Updates & Decisions (2026-11-26)
+
+1. **Batch cohort exclusion (`Alzheimer`):** Moved `Alzheimer` (`n = 101`) from `Supp Table 4` to `Supp Table 5` due to low biological separation across all methods (uncorrected ANOSIM `0.059–0.110`, corrected `0.018–0.143`), leaving **6 retained multi-batch cohorts** (`485` samples; **17 unique cohorts total**) and `SF27–SF32` (`BatchMDS` without score subtitles; internal scored copies archived under `plots/batch_mds_internal_with_scores_20261126/`).
+2. **ECODA batch mitigation & combined ranking (`Figure 5`, `SF26`):** Replaced ECODA `limma` and `droplow50pct` in `Figure 5` and `BatchMDS` with **`CT-drop (|ΔCLR| ≥ 2)`** (`ECODA_authors` `0.737`, rank 2 behind `MrVI` `0.760` under joint 16-row min-max scaling; `ECODA_Leiden` `Harmony` `0.666`; `ECODA_Leiden` `Harmony + CT-drop` `0.637`), while retaining `limma` alongside `|ΔCLR| ≥ 0..4` in `SF26`.
+3. **Metric & framing updates:** Standardized **`sLISI`** everywhere (native Word equation in Methods, `cLISI` restricted to Methods only); replaced Bassez "sole exception" framing with longitudinal post-treatment outcome wording; simplified `SF18` (`Supp_fig_TMP_Stephenson_IFN.pdf`) to single-panel `CD14+` monocyte pseudobulk PCA (ANOSIM-only comparison); removed `"ns"` across `Figure 3`, `SF17`, `SF20` and added Wilcoxon asterisks (`hide.ns = TRUE`) to `SF19` and `SF23`.
+4. **`Supp_fig_2` & `SF15` profiling harmonization:** Switched `Supp_fig_2` to `data/derived/benchmark_access1133_v1/analysis_release.rds` to include all 4 `PILOT-GM-VAE` parameter-screening variants; ran scoped 16-row classic-full-H5AD Bamboo profiling (`13 AMD EPYC 7742 CPU + 3 NVIDIA H200 NVL GPU`, `16/16 COMPLETED|0:0`, `data/derived/sf15_classic_profile_20261126/`) resolving `Stephenson`/`Bassez` `SF15` outliers, and documented Bamboo CPU/GPU hardware plus `PILOT-GM-VAE` CPU routing (`batch_size = 32` + CPU `ot.emd2`) in Methods and `NOTES.md`.
+5. **Deliverables & final repository sync:** Generated `revision_docs/Halter_etal_bioRxiv_ReviewCommons_revised_20261126.docx` and `revision_docs/Review_RC-2026-03528_1781259937_1_CH_2_revised_20261126.docx` (native `Christian Halter` track changes, PLOS-style Arial typography, zero em dashes in tracked insertions, `SF01–SF35` monotonic numbering), validated OOXML/reject-all/R contract tests, and committed and pushed all changes to `origin/master`.

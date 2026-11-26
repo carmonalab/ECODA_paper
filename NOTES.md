@@ -6,6 +6,31 @@
 ---
 
 
+## Round 2 Revision Updates & Final Decisions — 2026-11-26
+
+> **Superseding Updates (2026-11-26):** The updates below refine the 2026-11-21 registry for the finalized manuscript (`Halter_etal_bioRxiv_ReviewCommons_revised_20261126.docx`) and reviewer response (`Review_RC-2026-03528_1781259937_1_CH_2_revised_20261126.docx`).
+
+1. **Exclusion of `Alzheimer` from multi-batch publication figures (6 retained batch cohorts; 17 unique cohorts total):**
+   - `Alzheimer` (`Gabitto et al. 2024`, `n = 101`) was moved from retained batch cohorts (`Supp Table 4`) to excluded candidates (`Supp Table 5`) due to low overall biological signal across all tested methods (uncorrected bio ANOSIM `0.059–0.110`, unscaled 5-metric mean `0.083–0.182`; corrected bio ANOSIM `0.018–0.143`, 5-metric mean `0.077–0.226`).
+   - Retained active batch set is now **6 cohorts** (`485` samples total, `1.82M` cells): `Breast_cancer` (`33`), `Covid19_PBMC` (`44`), `Joanito` (`124`), `Kidney_KPMP_full` (`80`, `condition.l1` only), `Lupus_PBMC` (`94`, strict `majority_only`), and `Stephenson` (`110`), yielding **17 unique cohorts** across the paper (`11` clean benchmark + `5` non-Stephenson batch + `Yan`). `Supp_fig_TMP_BatchMDS_Alzheimer.pdf` was removed from the publication figure sequence (`SF27–SF32` cover the 6 retained cohorts).
+2. **Standardized ECODA batch mitigation — `CT-drop (|ΔCLR| ≥ 2)` & combined ranking (`Figure 5`, `SF26`, `data/derived/batch_6cohort_release_20261126/`):**
+   - Replaced ECODA `limma` and `droplow50pct` in `Figure 5` and `BatchMDS` (`SF27–SF32`) with ECODA's unsupervised batch-associated cell-type dropping (**`CT-drop (|ΔCLR| ≥ 2)`**: Kruskal–Wallis BH FDR `< 0.05` and `|ΔCLR| ≥ 2`), while retaining `limma` points/arrows alongside the full `|ΔCLR| ≥ 0..4` threshold sweep in `SF26` (`Supp_fig_TMP_ECODA_becm_comp_ANOSIM.pdf`) and preserving `limma`/`droplow50pct` code and cached data internally.
+   - `Figure 5A` ranks all 16 corrected and uncorrected rows jointly via joint min–max scaling per `(dataset, metric)` across all 16 rows (`MrVI`: `0.760`, `ECODA_authors` `CT-drop (|ΔCLR| ≥ 2)`: `0.737`, uncorrected `ECODA_authors`: `0.708`, `GloScope` `Harmony`: `0.675`, `ECODA_Leiden` `Harmony`: `0.666`, `ECODA_Leiden` `Harmony + CT-drop (|ΔCLR| ≥ 2)`: `0.637`, uncorrected `ECODA_Leiden`: `0.608`, ..., `Shuffled_baseline`: `0.105`).
+3. **Sample-level Local Inverse Simpson's Index (`sLISI`) standardization:**
+   - Renamed the 5th separation metric from `LISI` to **`sLISI`** across prose, equations, tables, and figure labels (`src/utils/constants.R`), explicitly defining it in Methods (`sLISI = (1/n) sum_i clip_[0,1]((N - LISI_i)/(N - 1))`) as sample-neighborhood purity (distinct from single-cell `cLISI` and batch-mixing `iLISI`) and omitting `cLISI` everywhere outside Methods.
+4. **Non-circular label provenance framing (`Bassez`):**
+   - Removed "sole exception" phrasing across manuscript and reviewer responses; clarified that across all 11 benchmark cohorts sample-level labels were defined independently of single-cell profiling, and in `Bassez` pre-treatment baseline biopsies are labeled by subsequent on-treatment intratumoral T-cell clonotype expansion following anti-PD-1 therapy (a longitudinal outcome unobserved in pre-treatment samples).
+5. **Stephenson complementarity (`SF18`):**
+   - Simplified `SF18` (`Supp_fig_TMP_Stephenson_IFN.pdf`) to single-panel `CD14+` monocyte pseudobulk PCA (`ANOSIM = 0.489`), omitting the `UCell` interferon panel and reporting ANOSIM-only comparisons (`MrVI: 0.651`, `ECODA: 0.313`, `CD14+` pseudobulk: `0.489`), while removing `"label-blind"` / `"bio-blind"` phrasing.
+6. **`Supp_fig_2` (`PILOT-GM-VAE` parameter screening):**
+   - Switched `Supp_fig_2_methodparameter_screening.pdf` data source in `notebooks/benchmark_analysis.rmd` from `access_v2` (`1,100` rows) to `data/derived/benchmark_access1133_v1/analysis_release.rds` (`1,133` rows = `access_v2` + `gm33_access_v1`), restoring `PILOT-GM-VAE` `hvg1000`, `hvg2000_lowres`, `hvg2000`, and `hvg3000` bars.
+7. **`SF15` (`Supp_fig_14`) classic full-H5AD profiling harmonization & verified Bamboo HPC hardware parity:**
+   - Traced `Stephenson` (`415,482` cells) and 6 `Bassez` RAM/runtime anomalies in `execution_times.feather` to mixed pipeline loader generations (`legacy_reuse` full-H5AD loading on `105/121` rows vs Nov 9 streaming loaders on `16/121` rows).
+   - Verified via Bamboo `sacct` accounting that across all 11 clean-benchmark cohorts, `MrVI` and `scPoli` ran consistently on **`NVIDIA H200 NVL`** GPUs (`shared-gpu`, 8 CPUs), while **`PILOT-GM-VAE`** and all 8 other CPU methods ran consistently on **`AMD EPYC 7742`** CPUs (`shared-cpu`, 16 CPUs). `PILOT-GM-VAE` was intentionally routed to CPU (`stage5_dispatcher.sh`) because `pilotgm`'s default `batch_size = 32` DataLoader over 50D PCA is CPU-transfer bound (`Bassez`: `455 s` on `EPYC 7742` CPU vs `352 s` on `RTX PRO 6000 Blackwell` + `EPYC 9554`) and its `ot.emd2` Wasserstein step is CPU-only.
+   - Executed scoped 16-row classic-full-H5AD profiling on Bamboo (`src/5_run_benchmark_methods/sf15_classic_profile_16rows/`, `13` `AMD EPYC 7742` CPU tasks + `3` `NVIDIA H200 NVL` GPU tasks, `16/16 COMPLETED|0:0`), eliminating the `Stephenson`/`Bassez` regression outliers (`data/derived/sf15_classic_profile_20261126/sf15_summary_11cohorts.csv`, memory `R² = 0.861–0.967`; `GloProp 0.63 s`, `ECODA 0.88 s`, `PILOT 3.2 s`, `Pseudobulk 8.8 s`, `MOFA+ 11.1 s`, `scITD 28.5 s`, `QOT 2.9 min`, `scPoli 9.4 min`, `GloScope 13.8 min`, `MrVI 17.8 min`, `PILOT-GM-VAE 49.7 min`).
+
+---
+
 ## Canonical Paper Revision Cohort Registry & Decisions — 2026-11-21
 
 > **Centralized Decision Hub:** This section records the finalized manuscript revision (RC-2026-03528) cohort registry, batch-effect inclusion/exclusion rationales, confounding pre-filtering rules, and cross-pipeline standardization decisions. It supersedes stale draft statements in earlier checkpoints (`2026-11-09` / `2026-11-10`) and reconciles `notebooks/dataset_onboarding/README.md`.

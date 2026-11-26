@@ -455,7 +455,7 @@ benchmark_validate_screen_scores <- function(frame) {
 }
 
 plot_benchmark_raw_metric <- function(frame, metric, method_order = unique(as.character(frame$method)),
-                                      x_label = "", reference = NULL) {
+                                      x_label = "", reference = NULL, monochrome = FALSE) {
   frame <- benchmark_validate_screen_scores(frame)
   if (!metric %in% evaluation_metrics() || !setequal(method_order, unique(as.character(frame$method))))
     stop("Supplemental metric or method order differs from the complete comparison")
@@ -463,18 +463,30 @@ plot_benchmark_raw_metric <- function(frame, metric, method_order = unique(as.ch
   frame$method <- factor(frame$method, levels = method_order)
   panel <- ggplot2::ggplot(frame, ggplot2::aes(x = method, y = value)) +
     ggplot2::stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
-    ggplot2::stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
-    ggplot2::geom_point(ggplot2::aes(shape = dataset, color = dataset), size = 1.5) +
-    ggplot2::scale_shape_manual(values = seq_along(unique(frame$dataset))) +
-    ggplot2::geom_line(ggplot2::aes(group = dataset, color = dataset)) +
-    ggplot2::labs(x = x_label, y = paste("Raw", score_facet_labels[[metric]])) +
-    ggplot2::theme_classic() +
-    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 65, vjust = 1, hjust = 1))
+    ggplot2::stat_summary(fun = mean, geom = "bar", fill = "white", color = "black")
+  if (isTRUE(monochrome)) {
+    panel <- panel +
+      ggplot2::geom_point(position = "identity", alpha = 0.6, size = 0.8) +
+      ggplot2::geom_line(ggplot2::aes(group = dataset), color = "grey20", alpha = 0.2) +
+      ggplot2::labs(x = x_label, y = paste("Raw", score_facet_labels[[metric]])) +
+      ggpubr::theme_classic2() +
+      ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 65, vjust = 1, hjust = 1))
+  } else {
+    panel <- panel +
+      ggplot2::geom_point(ggplot2::aes(shape = dataset, color = dataset), size = 1.5) +
+      ggplot2::scale_shape_manual(values = seq_along(unique(frame$dataset))) +
+      ggplot2::geom_line(ggplot2::aes(group = dataset, color = dataset)) +
+      ggplot2::labs(x = x_label, y = paste("Raw", score_facet_labels[[metric]])) +
+      ggplot2::theme_classic() +
+      ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 65, vjust = 1, hjust = 1))
+  }
   if (!is.null(reference)) {
     if (!reference %in% method_order) stop("Supplemental reference method is absent")
     panel <- panel + ggpubr::stat_compare_means(ref.group = reference,
       method = "wilcox.test", paired = TRUE, method.args = list(exact = FALSE),
-      ggplot2::aes(label = ggplot2::after_stat(p.signif)), size = 3)
+      hide.ns = TRUE,
+      ggplot2::aes(label = ggplot2::after_stat(p.signif)), size = 3) +
+      ggplot2::scale_y_continuous(expand = ggplot2::expansion(mult = c(0.05, 0.14)))
   }
   panel
 }

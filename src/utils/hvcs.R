@@ -132,7 +132,9 @@ plot_varmean <- function(
   highlight_hvcs = TRUE,
   labels = c("only_hvc", "all", "none"),
   plot_fit_line = FALSE,
-  smooth_method = "lm"
+  smooth_method = "lm",
+  label_size = 3,
+  max_overlaps = 15
 ) {
   labels <- match.arg(labels)
 
@@ -209,7 +211,8 @@ plot_varmean <- function(
         geom_text_repel(
           data = label_df,
           aes(label = celltype, color = is_highlighted),
-          size = 3,
+          size = label_size,
+          max.overlaps = max_overlaps,
           show.legend = FALSE
         )
     } else {
@@ -217,7 +220,8 @@ plot_varmean <- function(
         geom_text_repel(
           data = label_df,
           aes(label = celltype),
-          size = 3,
+          size = label_size,
+          max.overlaps = max_overlaps,
           color = "black"
         )
     }

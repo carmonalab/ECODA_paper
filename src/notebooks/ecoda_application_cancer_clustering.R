@@ -250,11 +250,11 @@ cancer_biplot <- function(fit, meta, title, legend) {
       inherit.aes = FALSE, color = "black", size = 3.2, seed = 42) +
     ggplot2::scale_color_manual(values = cancer_response_colors, name = legend) +
     ggplot2::theme_classic() + ggplot2::coord_fixed() +
-    ggplot2::labs(title = paste0(title, " - Pre-treatment"), subtitle = "Immune cells only - High granularity",
+    ggplot2::labs(title = paste0(title, " - Pre-treatment"),
       x = paste0("PC1 (", formatC(variance[1], digits = 2, format = "fg"), "%)"),
       y = paste0("PC2 (", formatC(variance[2], digits = 2, format = "fg"), "%)")) +
     ggplot2::theme(plot.title = ggplot2::element_text(size = 10, face = "bold"),
-      plot.subtitle = ggplot2::element_text(size = 8.5), legend.position = "bottom")
+      legend.position = "bottom")
 }
 
 cancer_response_box <- function(meta, pc, title, label) {
@@ -346,12 +346,10 @@ cancer_correlation <- function(pca) {
     ggplot2::scale_fill_gradient2(low = "#1f77b4", mid = "white", high = "#d62728", midpoint = 0, limits = c(-1, 1), name = "Pearson r") +
     ggplot2::scale_x_discrete(drop = FALSE) + ggplot2::scale_y_discrete(drop = FALSE) +
     ggplot2::theme_classic() + ggplot2::labs(x = "", y = "",
-      title = "Clustered Cross-Cohort PC1 & PC2 Loadings Correlation Matrix",
-      subtitle = "* p <= 0.05, ** p <= 0.01, *** p <= 0.001, **** p <= 0.0001 (unadjusted)") +
+      title = NULL, subtitle = NULL) +
     ggplot2::theme(axis.text.x = ggplot2::element_text(size = 9.5, face = "bold", angle = 45, hjust = 1, vjust = 1),
       axis.text.y = ggplot2::element_text(size = 9.5, face = "bold"), axis.line = ggplot2::element_blank(),
-      axis.ticks = ggplot2::element_blank(), plot.title = ggplot2::element_text(size = 10, hjust = 0.5),
-      plot.subtitle = ggplot2::element_text(size = 7.5, hjust = 0.5), legend.title = ggplot2::element_text(size = 9))
+      axis.ticks = ggplot2::element_blank(), legend.title = ggplot2::element_text(size = 9))
   list(plot = plot, matrix = correlations, p_values = p_values, order = axes, hclust = tree, loadings = values)
 }
 

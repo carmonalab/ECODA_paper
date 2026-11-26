@@ -355,77 +355,81 @@ df_plot <- df_benchmark %>%
                          "PILOT_hvg2000" = "PILOT",
                          "GloScope_hvg2000_pcadims30" = "GloScope",
                          "QOT_hvg2000" = "QOT",
-                         "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"))
+                         "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE")) %>%
+  arrange(score, method, dataset)
 
 pointsize <- 1.5
 
-# Plot 1: ANOSIM
-p1 <- df_plot %>%
-  filter(score == "anosim_score") %>%
-  ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
-  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
-  stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
-  geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
-  scale_shape_manual(values=1:length(unique((df_plot$dataset)))) +
-  geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
-  labs(x = "", y = "Separation score (ANOSIM)") +
-  theme_classic() +
-  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
-
-# Plot 2: Modularity
-p2 <- df_plot %>%
-  filter(grepl(pattern = "mod_knn3_score", score)) %>%
-  ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
-  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
-  stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
-  geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
-  scale_shape_manual(values=1:length(unique((df_plot$dataset)))) +
-  geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
-  labs(x = "", y = "Separation score (Modularity (knn3))") +
-  theme_classic() +
-  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
-
-# Plot 3: ARI
-p3 <- df_plot %>%
-  filter(score == "cluster_score") %>%
-  ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
-  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
-  stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
-  geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
-  scale_shape_manual(values=1:length(unique((df_plot$dataset)))) +
-  geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
-  labs(x = "", y = "Separation score (ARI)") +
-  theme_classic() +
-  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
-
-# Raw single-metric panels retain their own units. LISI is already separation.
-extra_metric_plots <- lapply(c("sil_score", "lisi_score"), function(metric) {
-  ggplot(filter(df_plot, score == .env$metric),
-         aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+make_supp17_panel <- function(metric, y_label) {
+  panel_df <- df_plot %>%
+    filter(score == .env$metric) %>%
+    arrange(method, dataset)
+  y_rng <- diff(range(panel_df$value))
+  label_y <- max(panel_df$value) + 0.05 * y_rng
+  ggplot(panel_df, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
     stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
     stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
     geom_point(aes(shape = dataset, color = dataset), size = pointsize) +
     scale_shape_manual(values = seq_along(unique(df_plot$dataset))) +
-    geom_line(aes(group = dataset, linetype = dataset, color = dataset)) +
-    labs(x = "", y = paste0("Separation score (",
-      c(sil_score = "Silhouette", lisi_score = "LISI")[[metric]], ")")) + theme_classic() +
+    geom_line(aes(group = dataset, linetype = dataset, color = dataset), alpha = 1) +
+    stat_compare_means(
+      ref.group = "ECODA_authors",
+      method = "wilcox.test",
+      paired = TRUE,
+      method.args = list(exact = FALSE),
+      hide.ns = TRUE,
+      aes(label = after_stat(p.signif)),
+      size = 3.2,
+      label.y = label_y
+    ) +
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.14))) +
+    labs(x = "", y = y_label) +
+    theme_classic() +
     theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+}
+
+# Plot 1: ANOSIM
+p1 <- make_supp17_panel("anosim_score", "Separation score (ANOSIM)")
+
+# Plot 2: Modularity
+p2 <- make_supp17_panel("mod_knn3_score", "Separation score (Modularity (knn3))")
+
+# Plot 3: ARI
+p3 <- make_supp17_panel("cluster_score", "Separation score (ARI)")
+
+# Raw single-metric panels retain their own units. LISI is already separation.
+extra_metric_plots <- lapply(c("sil_score", "lisi_score"), function(metric) {
+  make_supp17_panel(
+    metric,
+    paste0("Separation score (", c(sil_score = "Silhouette", lisi_score = "sLISI")[[metric]], ")")
+  )
 })
 metric_plots <- setNames(c(list(p1, p2, p3), extra_metric_plots), benchmark_metrics)
 for (metric in benchmark_metrics) {
   ggsave(file.path(path_plots, paste0("Supp_fig_17_benchmark_unscaled_", metric, ".pdf")),
          plot = metric_plots[[metric]], width = 5, height = 5)
 }
-combined_plot <- wrap_plots(metric_plots, nrow = 1) +
-  plot_layout(guides = "collect") & # Collects all legends into one
-  theme(legend.position = "bottom", axis.title.y = element_text(size = 9))
+combined_plot <- wrap_plots(c(metric_plots, list(patchwork::guide_area())), ncol = 3, nrow = 2, guides = "collect") &
+  labs(color = "Dataset", shape = "Dataset", linetype = "Dataset") &
+  guides(
+    color = guide_legend(ncol = 2),
+    shape = guide_legend(ncol = 2),
+    linetype = guide_legend(ncol = 2)
+  ) &
+  theme(
+    axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    axis.title.y = element_text(size = 11.5),
+    legend.text = element_text(size = 10),
+    legend.title = element_text(size = 11.5, face = "bold")
+  )
 combined_plot
 
 # Save the combined plot
 ggsave(file.path(path_plots, "Supp_fig_17_benchmark_unscaled_metrics_perdataset.pdf"), 
        plot = combined_plot,
-       width = 20,
-       height = 5)
+       width = 14,
+       height = 9)
 ```
 
 ```{r fig.height=4, fig.width=4}
@@ -1245,12 +1249,13 @@ p <- ggplot(df_plot, aes(x = method, y = value)) +
     method = "wilcox.test",
     paired = TRUE, # Dataset rows are paired across annotation methods.
     method.args = list(exact = FALSE),
+    hide.ns = TRUE,
     aes(label = after_stat(p.signif)),
     size = 3,
     label.y = 1
   ) +
   labs(x = "", y = "Separation score (ANOSIM)") +
-  ylim(c(min(df_plot$value), max(df_plot$value) + 0.15)) +
+  ylim(c(min(df_plot$value), max(max(df_plot$value) + 0.15, 1.12))) +
   theme_classic() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 print(p)
@@ -1295,7 +1300,8 @@ df_plot <- df_benchmark %>%
   filter(method %in% filter_methods) %>%
   flag_drop_annotation_methods() %>%
   apply_method_labels(method_label_map_annotation) %>%
-  mutate(method = factor(method, levels = annotation_method_order))
+  mutate(method = factor(method, levels = annotation_method_order)) %>%
+  arrange(method, dataset)
   
 p_mod <- ggplot(df_plot, aes(x = method, y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
@@ -1308,12 +1314,13 @@ p_mod <- ggplot(df_plot, aes(x = method, y = value)) +
     method = "wilcox.test",
     method.args = list(exact = FALSE),
     paired = TRUE, # Dataset rows are paired across annotation methods.
+    hide.ns = TRUE,
     aes(label = after_stat(p.signif)),
     size = 3,
     label.y = 1.1
   ) +
   labs(x = "", y = "Separation score\n(Modularity (knn3))") +
-  ylim(c(min(df_plot$value), max(df_plot$value) + 0.15)) +
+  ylim(c(min(df_plot$value), max(max(df_plot$value) + 0.15, 1.22))) +
   theme_classic() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 print(p_mod)
@@ -1328,7 +1335,8 @@ df_plot <- df_benchmark %>%
   filter(method %in% filter_methods) %>%
   flag_drop_annotation_methods() %>%
   apply_method_labels(method_label_map_annotation) %>%
-  mutate(method = factor(method, levels = annotation_method_order))
+  mutate(method = factor(method, levels = annotation_method_order)) %>%
+  arrange(method, dataset)
   
 p_ari <- ggplot(df_plot, aes(x = method, y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
@@ -1341,12 +1349,13 @@ p_ari <- ggplot(df_plot, aes(x = method, y = value)) +
     method = "wilcox.test",
     method.args = list(exact = FALSE),
     paired = TRUE, # Dataset rows are paired across annotation methods.
+    hide.ns = TRUE,
     aes(label = after_stat(p.signif)),
     size = 3,
     label.y = 1.1
   ) +
   labs(x = "", y = "Separation score (ARI)") +
-  ylim(c(min(df_plot$value), max(df_plot$value) + 0.15)) +
+  ylim(c(min(df_plot$value), max(max(df_plot$value) + 0.15, 1.22))) +
   theme_classic() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 print(p_ari)
@@ -1364,27 +1373,34 @@ p_annotation_sil <- plot_benchmark_raw_metric(annotation_metric_scores, "sil_sco
 p_annotation_lisi <- plot_benchmark_raw_metric(annotation_metric_scores, "lisi_score",
   method_order = annotation_method_order, reference = "ECODA_authors_HR")
 p_annotation_sil <- p_annotation_sil + labs(y = "Separation score (Silhouette)")
-p_annotation_lisi <- p_annotation_lisi + labs(y = "Separation score (LISI)")
+p_annotation_lisi <- p_annotation_lisi + labs(y = "Separation score (sLISI)")
 ggsave(file.path(path_plots, "Supp_fig_18_annotationmethods_barplot_sil_lisi.pdf"),
   plot = wrap_plots(list(p_annotation_sil, p_annotation_lisi), nrow = 1, guides = "collect"),
   width = 9, height = 5)
 supp_fig_18_annotation <- wrap_plots(list(
-  p_mod + labs(y = "Separation score\n(Modularity (knn3))"),
+  p_mod + labs(y = "Separation score\n(Modularity (knn3))", colour = "Dataset", shape = "Dataset", linetype = "Dataset") +
+    guides(colour = guide_legend(ncol = 1), shape = guide_legend(ncol = 1), linetype = guide_legend(ncol = 1)),
   p_ari + labs(y = "Separation score\n(ARI)") + guides(colour = "none", shape = "none", linetype = "none"),
   p_annotation_sil + labs(y = "Separation score\n(Silhouette)") + guides(colour = "none", shape = "none", linetype = "none"),
-  p_annotation_lisi + labs(y = "Separation score\n(LISI)") + guides(colour = "none", shape = "none", linetype = "none"))) +
-  plot_layout(nrow = 1, guides = "collect") &
-  labs(colour = "Dataset", shape = "Dataset", linetype = "Dataset") &
+  p_annotation_lisi + labs(y = "Separation score\n(sLISI)") + guides(colour = "none", shape = "none", linetype = "none"))) +
+  plot_layout(nrow = 2, ncol = 2, guides = "collect") &
   scale_colour_discrete(limits = unique(annotation_metric_scores$dataset)) &
   scale_shape_manual(values = seq_along(unique(annotation_metric_scores$dataset)),
     limits = unique(annotation_metric_scores$dataset)) &
   scale_linetype_discrete(limits = unique(annotation_metric_scores$dataset)) &
-  theme(legend.position = "bottom", axis.title.y = element_text(size = 9))
+  theme(
+    legend.position = "right",
+    axis.text.x = element_text(angle = 55, vjust = 1, hjust = 1, size = 8.5),
+    axis.text.y = element_text(size = 8.5),
+    axis.title.y = element_text(size = 10),
+    legend.text = element_text(size = 8.5),
+    legend.title = element_text(size = 10, face = "bold")
+  )
 print(supp_fig_18_annotation)
 ggsave(file.path(path_plots, "Supp_fig_18_annotationmethods_barplot_mod_ari.pdf"),
        plot = supp_fig_18_annotation,
-       width = 20,
-       height = 5)
+       width = 8.8,
+       height = 6.4)
 
 ```
 ### Figure 3 A: Number of cell types by annotation method
@@ -1523,40 +1539,44 @@ legend remains below the PCA grid.
 This composition uses the same reviewed inputs as its component panels; it
 does not load data or rerun benchmark methods.
 
-```{r figure-3-combined, fig.height=8.2, fig.width=13}
+```{r figure-3-combined, fig.height=8.8, fig.width=14.5}
 figure_3_left <- wrap_plots(
   list(
     p_celltypes + labs(tag = "A") +
-      theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()),
+      theme(
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        plot.margin = margin(t = 5.5, r = 5.5, b = 2, l = 28)
+      ),
     p_annotation_clean_labels + labs(tag = "B") +
       scale_y_continuous(breaks = c(0, 0.5, 1), labels = scales::label_number(accuracy = 0.1)) +
-      coord_cartesian(ylim = c(min(0, p_annotation_clean_labels$data$value), 1.15))
+      coord_cartesian(ylim = c(min(0, p_annotation_clean_labels$data$value), 1.15)) +
+      theme(plot.margin = margin(t = 2, r = 5.5, b = 5.5, l = 28))
   ),
   ncol = 1, heights = c(0.85, 1), guides = "collect"
 ) & theme(
-  legend.position = "right", legend.title = element_blank(),
-  legend.text = element_text(size = 9), legend.key.width = unit(14, "pt"),
-  axis.text = element_text(size = 9), axis.title.y = element_text(size = 11),
-  plot.tag = element_text(face = "bold", size = 14)
+  legend.position = "bottom", legend.title = element_blank(),
+  legend.text = element_text(size = 9.8), legend.key.width = unit(14, "pt"),
+  axis.text = element_text(size = 10.2), axis.title.y = element_text(size = 12),
+  plot.tag = element_text(face = "bold", size = 15)
 ) & guides(
-  colour = guide_legend(ncol = 1),
-  shape = guide_legend(ncol = 1),
-  linetype = guide_legend(ncol = 1)
+  colour = guide_legend(nrow = 2, byrow = TRUE),
+  shape = guide_legend(nrow = 2, byrow = TRUE),
+  linetype = guide_legend(nrow = 2, byrow = TRUE)
 )
 
 # Keep the PCA group legend separate from the left column's dataset legend.
 figure_3_right <- wrap_elements(full = (
   p_annotation_pca & theme(legend.position = "bottom")
-)) + labs(tag = "C") + theme(plot.tag = element_text(face = "bold", size = 14))
+)) + labs(tag = "C") + theme(plot.tag = element_text(face = "bold", size = 15))
 
 figure_3 <- wrap_plots(
-  # Include the dataset legend in the left column's 40% allocation.
   list(wrap_elements(full = figure_3_left), figure_3_right),
-  nrow = 1, widths = c(0.4, 0.6)
+  nrow = 1, widths = c(0.48, 0.52)
 )
 print(figure_3)
 ggsave(file.path(path_plots, "Figure_3.pdf"), plot = figure_3,
-       width = 13, height = 8.2)
+       width = 14.5, height = 8.8)
 ```
 
 #### Presentation: Adams annotation correspondence matrix
@@ -1799,10 +1819,73 @@ supp_fig_2_score_labels <- c(
   "mod_knn3_score" = "Modularity",
   "cluster_score" = "ARI",
   "sil_score" = "Silhouette",
-  "lisi_score" = "LISI"
+  "lisi_score" = "sLISI"
 )
 
-supp_fig_2_plot <- df_benchmark %>%
+# Supp fig 2 uses benchmark_access1133_v1 (access_v2 + 33 gm33_access_v1 PILOT-GM-VAE
+# variants) while keeping df_benchmark (access_v2) untouched for the rest of the notebook.
+supp_fig_2_df <- df_benchmark
+gm_variants <- c("PILOT-GM-VAE_hvg1000", "PILOT-GM-VAE_hvg2000",
+                 "PILOT-GM-VAE_hvg2000_lowres", "PILOT-GM-VAE_hvg3000")
+if (!identical(analysis_scope, "preprint") && !all(gm_variants %in% as.character(supp_fig_2_df$method))) {
+  release_1133_path <- file.path(path_data, "derived/benchmark_access1133_v1/analysis_release.rds")
+  control_1133 <- read_benchmark_analysis_control(release_1133_path, "d962a92e392015d771d6829804c5b4ac")
+  selected_ds <- names(datasets)
+  shared_1133 <- control_1133$ledger[
+    control_1133$ledger$dataset %in% selected_ds &
+      control_1133$ledger$view == "benchmark_analysis" &
+      .analysis_key(control_1133$ledger) %in% .analysis_key(benchmark_control$ledger),
+    , drop = FALSE
+  ]
+  shared_main <- benchmark_control$ledger[
+    .analysis_key(benchmark_control$ledger) %in% .analysis_key(shared_1133),
+    , drop = FALSE
+  ]
+  shared_main <- shared_main[match(.analysis_key(shared_1133), .analysis_key(shared_main)), , drop = FALSE]
+  stopifnot(
+    identical(shared_1133$md5, shared_main$md5),
+    identical(shared_1133$receipt_md5, shared_main$receipt_md5)
+  )
+  extra_mask <- control_1133$ledger$dataset %in% selected_ds &
+    control_1133$ledger$view == "benchmark_analysis" &
+    !(.analysis_key(control_1133$ledger) %in% .analysis_key(benchmark_control$ledger))
+  extra_ledger <- control_1133$ledger[extra_mask, , drop = FALSE]
+  extra_scope <- control_1133$expected_scope[
+    match(.analysis_key(extra_ledger), .analysis_key(control_1133$expected_scope)),
+    , drop = FALSE
+  ]
+  extra_rows <- load_analysis_release(extra_ledger, extra_scope, require_projection = TRUE)
+  extra_scores <- lapply(extra_rows, function(item) {
+    ds <- item$source$dataset
+    method <- item$source$method_key
+    ref_key <- control_1133$reference_method_key[[ds]]
+    labels <- result_list$bmark[[ds]][[ref_key]]$labels
+    axes <- datasets[[ds]]$evaluation_labels
+    primary <- names(axes)[1L]
+    evaluations <- setNames(list(labels), primary)
+    evaluated <- evaluate_release_result(
+      item$result, ds, "benchmark_analysis", method,
+      evaluations, primary, is_null = FALSE, score_fn = calc_sep_score,
+      stored_policy = item$receipt$scoring_policy, source_identity = item$identity
+    )
+    frame <- evaluated$scores
+    frame$method <- frame$method_key
+    frame$score <- frame$metric
+    frame$n_samples <- length(evaluated$labels[[primary]])
+    frame$n_features <- if (is.null(item$result$feat_mat)) {
+      if (is.null(item$result$n_features)) NA_integer_ else item$result$n_features
+    } else ncol(item$result$feat_mat)
+    frame$dataset[frame$dataset == "Gongsharma_cmv_young_males"] <- "GongSharma"
+    frame
+  })
+  extra_df <- bind_rows(extra_scores)
+  if (!is.null(analysis_requested_methods)) {
+    extra_df <- extra_df[extra_df$method %in% analysis_requested_methods, , drop = FALSE]
+  }
+  supp_fig_2_df <- bind_rows(supp_fig_2_df, extra_df)
+}
+
+supp_fig_2_plot <- supp_fig_2_df %>%
   filter(score %in% supp_fig_2_scores) %>%
   filter(!grepl("HiTME|scATOMIC|seuratres|ECODA_authors_HR_NULL|ECODA_authors_LR|ECODA_deconv|Freq_highres|varexp|varcts|Avg_PCA|combo|schvg", method)
   ) %>%
@@ -2240,26 +2323,30 @@ p_hvc_sil <- plot_benchmark_raw_metric(df_benchmark_sub, "sil_score",
 p_hvc_lisi <- plot_benchmark_raw_metric(df_benchmark_sub, "lisi_score",
   method_order = levels(df_benchmark_sub$method), x_label = "Variance explained (%)")
 p_hvc_sil <- p_hvc_sil + labs(y = "Separation score (Silhouette)")
-p_hvc_lisi <- p_hvc_lisi + labs(y = "Separation score (LISI)")
+p_hvc_lisi <- p_hvc_lisi + labs(y = "Separation score (sLISI)")
 ggsave(file.path(path_plots, "Supp_fig_21_featureselectionHVC_barplot_sil_lisi.pdf"),
   plot = wrap_plots(list(p_hvc_sil, p_hvc_lisi), nrow = 1, guides = "collect"),
   width = 8, height = 3.5)
-combined_plot <- wrap_plots(list(p3,
-  p4 + guides(colour = "none", shape = "none", linetype = "none"),
-  p_hvc_sil + guides(colour = "none", shape = "none", linetype = "none"),
-  p_hvc_lisi + guides(colour = "none", shape = "none", linetype = "none")), nrow = 1) +
+combined_plot <- wrap_plots(list(
+  p3 + labs(y = "Separation score\n(Modularity (knn3))", color = "Dataset", shape = "Dataset", linetype = "Dataset") +
+    guides(colour = guide_legend(ncol = 1), shape = guide_legend(ncol = 1), linetype = guide_legend(ncol = 1)),
+  p4 + labs(y = "Separation score\n(ARI)") + guides(colour = "none", shape = "none", linetype = "none"),
+  p_hvc_sil + labs(y = "Separation score\n(Silhouette)") + guides(colour = "none", shape = "none", linetype = "none"),
+  p_hvc_lisi + labs(y = "Separation score\n(sLISI)") + guides(colour = "none", shape = "none", linetype = "none")),
+  nrow = 2, ncol = 2) +
   plot_layout(guides = "collect") +
   plot_annotation(tag_levels = 'A') & 
   theme(
-    plot.tag = element_text(size = 16, face = "bold"),
-    legend.position = "bottom", axis.title.y = element_text(size = 9)
-  ) &
-  labs(color = "Dataset", 
-       shape = "Dataset", 
-       linetype = "Dataset")
+    plot.tag = element_text(size = 14, face = "bold"),
+    legend.position = "right",
+    axis.text = element_text(size = 9),
+    axis.title = element_text(size = 10),
+    legend.text = element_text(size = 9),
+    legend.title = element_text(size = 10.5, face = "bold")
+  )
 print(combined_plot)
 ggsave(file.path(path_plots, "Supp_fig_21_featureselectionHVC_barplot_mod_ari_sil_lisi.pdf"),
-       plot = combined_plot, width = 18, height = 5)
+       plot = combined_plot, width = 8.8, height = 6.4)
 ```
 
 ### Show example PCAs
@@ -2402,23 +2489,33 @@ for (ds in dss) {
   )
   ecoda_object <- ecoda(t(counts), metadata = meta, variance_explained = 0.4)
   
-  if (ds == "GongSharma_all_age") {
+  if (ds %in% c("GongSharma_all_age", "Gongsharma_cmv_young_males")) {
     pt <- "GongSharma"
   } else pt <- ds
   
-  p <- plot_varmean(ecoda_object, plot_title = pt)
+  p <- plot_varmean(ecoda_object, plot_title = pt, label_size = 2.8)
   # print(p)
   plot_list[[ds]] <- p
   # p <- plot_corr(ecoda_object)
   # print(p)
 }
 
-wrap_plots(plot_list) +
-  plot_layout(nrow = 4, guides = "collect")
+p_hvcs_grid <- wrap_plots(c(plot_list, list(patchwork::guide_area()))) +
+  plot_layout(ncol = 3, nrow = 4, guides = "collect") &
+  guides(color = guide_legend(override.aes = list(size = 4))) &
+  theme(
+    plot.title = element_text(size = 15.5, face = "bold"),
+    axis.title = element_text(size = 13),
+    axis.text = element_text(size = 11),
+    legend.title = element_text(size = 15, face = "bold"),
+    legend.text = element_text(size = 14)
+  )
+print(p_hvcs_grid)
 
 ggsave(file.path(path_plots, "Supp_fig_20_HVCs_per_dataset.pdf"),
-       width = 20,
-       height = 20)
+       plot = p_hvcs_grid,
+       width = 14.5,
+       height = 18.5)
 ```
 
 # Most highly variable cell types per dataset
@@ -2521,6 +2618,24 @@ exec_time_summary <- summarize_exec_times(exec_times)
 # Plot each pseudobulk method as a standalone run, including its required
 # count aggregation and DESeq2 fit once. Keep global accounting unchanged.
 exec_times_method_cost <- benchmark_method_execution_costs(exec_times, bundle_exec_times)
+
+# Overlay scoped 16-row Bamboo classic full-H5AD profiling measurements
+# (Stephenson 10 methods + Bassez 6 methods) when present so all 11 cohorts
+# share identical full-H5AD-in-memory loading semantics in Supp fig 14.
+classic_profile_csv <- file.path(path_data, "derived", "sf15_classic_profile_20261126", "profile_16rows.csv")
+if (file.exists(classic_profile_csv)) {
+  classic_profile_16 <- normalize_exec_keys(utils::read.csv(classic_profile_csv, stringsAsFactors = FALSE))
+  overlay_keys <- paste(classic_profile_16$dataset, classic_profile_16$method, sep = "\r")
+  cost_keys <- paste(exec_times_method_cost$dataset, exec_times_method_cost$method, sep = "\r")
+  overlay_idx <- match(overlay_keys, cost_keys)
+  if (!anyNA(overlay_idx)) {
+    exec_times_method_cost$time_secs[overlay_idx] <- as.numeric(classic_profile_16$time_secs)
+    exec_times_method_cost$mem_GB[overlay_idx] <- as.numeric(classic_profile_16$mem_GB)
+    exec_times_method_cost$timing_source[overlay_idx] <- "classic_full_h5ad_profile_20261126"
+    exec_times_method_cost$memory_source[overlay_idx] <- "classic_full_h5ad_profile_20261126"
+    exec_times_method_cost$cost_accounting[overlay_idx] <- "classic full-H5AD profile"
+  }
+}
 
 ```
 
@@ -3562,6 +3677,7 @@ p1 <- df_normalization %>%
     ref.group = "CLR",
     method = "wilcox.test",
     paired = TRUE,
+    hide.ns = TRUE,
     # angle = 25,
     # aes(label = sprintf("%5.2f", as.numeric(..p.format..))),
     aes(label = after_stat(p.signif)),
@@ -3587,7 +3703,7 @@ ggsave(file.path(path_plots, "Supp_fig_16A_transformations_mean_unscaled.pdf"),
 transformation_companion_scores <- df_normalization %>% mutate(method = as.character(trans_method))
 transformation_companions <- lapply(setdiff(evaluation_metrics(), "anosim_score"), function(metric) {
   panel <- plot_benchmark_raw_metric(transformation_companion_scores, metric,
-    method_order = levels(df_normalization$trans_method), reference = "CLR")
+    method_order = levels(df_normalization$trans_method), reference = "CLR", monochrome = TRUE)
   ggsave(file.path(path_plots, paste0("Supp_fig_16A_transformations_", metric, ".pdf")),
     plot = panel, width = 5, height = 4)
   panel
@@ -3817,15 +3933,16 @@ zeroimp_metric_panel <- function(metric) {
     stopifnot(is.finite(p_value))
     data.frame(method = method_key, family = as.character(values$family[[1]]),
       label = as.character(cut(p_value, c(-Inf, 0.0001, 0.001, 0.01, 0.05, Inf),
-        labels = c("****", "***", "**", "*", "ns"))))
+        labels = c("****", "***", "**", "*", ""))))
   }))
   tests$y <- max(rows$value) + 0.08 * max(diff(range(rows$value)), 0.1)
-  plot_benchmark_raw_metric(zeroimp_companion_scores, metric, method_order = zeroimp_order) +
+  plot_benchmark_raw_metric(zeroimp_companion_scores, metric, method_order = zeroimp_order, monochrome = TRUE) +
     facet_grid(cols = vars(family), scales = "free_x", space = "free_x") +
     scale_x_discrete(labels = function(x) sub("^(counts_all_|counts_zeros_|multLN_)", "", x)) +
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.14))) +
     geom_text(data = tests, aes(x = method, y = y, label = label), inherit.aes = FALSE, size = 3) +
     labs(y = paste0("Separation score (", score_label_map[[metric]], ")")) +
-    theme(legend.position = "bottom")
+    theme(legend.position = "none")
 }
 p2 <- zeroimp_metric_panel("anosim_score")
 print(p2)
@@ -4162,9 +4279,61 @@ if (isTRUE(cell_subsetting_requested) && !is.null(cell_subsetting_results)) {
     facet_wrap(~metric, scales = "free_y", ncol = 3, labeller = as_labeller(score_facet_labels)) +
     labs(x = "Cells per sample", y = "Raw separation (higher is better)", color = "Dataset", shape = "Dataset", linetype = "Dataset") +
     theme_classic() + theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom")
-  print(p_cell_subsetting)
+
+  cell_subsetting_panels <- lapply(evaluation_metrics(), function(m) {
+    agg_m <- cell_subsetting_aggregate[cell_subsetting_aggregate$metric == m, , drop = FALSE]
+    ds_m <- cell_subsetting_dataset_means[cell_subsetting_dataset_means$metric == m, , drop = FALSE]
+    ds_m <- ds_m[order(ds_m$target, ds_m$dataset), , drop = FALSE]
+    y_rng <- diff(range(ds_m$value))
+    label_y <- max(ds_m$value) + 0.05 * y_rng
+    ggplot() +
+      geom_errorbar(data = agg_m, aes(target, ymin = value - se, ymax = value + se), width = .2) +
+      geom_col(data = agg_m, aes(target, value), fill = "white", color = "black", width = .9) +
+      geom_point(data = ds_m, aes(target, value, shape = dataset_display, color = dataset_display), size = 1.6) +
+      geom_line(data = ds_m, aes(target, value, group = dataset_display,
+        color = dataset_display, linetype = dataset_display)) +
+      ggpubr::stat_compare_means(
+        data = ds_m,
+        mapping = aes(x = target, y = value, label = after_stat(p.signif)),
+        ref.group = "all cells",
+        method = "wilcox.test",
+        paired = TRUE,
+        method.args = list(exact = FALSE),
+        hide.ns = TRUE,
+        size = 3.2,
+        label.y = label_y
+      ) +
+      scale_y_continuous(expand = expansion(mult = c(0.05, 0.14))) +
+      scale_shape_manual(values = seq_along(unique(cell_subsetting_dataset_means$dataset_display))) +
+      scale_x_discrete(limits = cell_subsetting_targets, drop = FALSE) +
+      labs(
+        title = score_facet_labels[[m]],
+        x = "Cells per sample",
+        y = "Raw separation (higher is better)",
+        color = "Dataset", shape = "Dataset", linetype = "Dataset"
+      ) +
+      theme_classic() +
+      theme(
+        plot.title = element_text(size = 13, face = "bold", hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        axis.text.y = element_text(size = 10),
+        axis.title = element_text(size = 11.5)
+      )
+  })
+  p_cell_subsetting_grid <- patchwork::wrap_plots(c(cell_subsetting_panels, list(patchwork::guide_area())),
+    ncol = 3, nrow = 2, guides = "collect") &
+    guides(
+      color = guide_legend(ncol = 2),
+      shape = guide_legend(ncol = 2),
+      linetype = guide_legend(ncol = 2)
+    ) &
+    theme(
+      legend.text = element_text(size = 10.5),
+      legend.title = element_text(size = 12, face = "bold")
+    )
+  print(p_cell_subsetting_grid)
   ggsave(file.path(path_plots, "Supp_fig_X_ECODA_authors_HR_cell_subsetting.pdf"),
-    plot = p_cell_subsetting, width = 14, height = 9)
+    plot = p_cell_subsetting_grid, width = 14, height = 9)
 }
 ```
 

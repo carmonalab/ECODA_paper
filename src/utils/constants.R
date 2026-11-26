@@ -58,7 +58,7 @@ score_label_map <- c(
   "mod_knn3_score" = "Modularity",
   "cluster_score" = "ARI",
   "sil_score" = "Silhouette",
-  "lisi_score" = "LISI"
+  "lisi_score" = "sLISI"
 )
 
 # Score facet labels
@@ -67,7 +67,7 @@ score_facet_labels <- c(
   "cluster_score" = "Adjusted rand index",
   "mod_knn3_score" = "Modularity score",
   "sil_score" = "Silhouette score",
-  "lisi_score" = "LISI separation (higher is better)"
+  "lisi_score" = "sLISI"
 )
 
 method_color_map <- c(

@@ -201,3 +201,38 @@ PDFs use the five core metric keys. The new release owns its score/provenance
 snapshot and checksum sidecars under the explicit release ID. Source bundles
 and historical snapshots remain immutable; plots are not declared current until
 all required release rows are approved.
+
+# Six-cohort publication release (excluding Alzheimer, CT-drop)
+
+For the revised manuscript (`Figure 5` and `Supp_fig_TMP_BatchMDS_<Dataset>.pdf`),
+the publication batch analysis retains the six non-confounded cohorts
+(`Breast_cancer`, `Covid19_PBMC`, `Joanito`, `Kidney_KPMP_full` `condition.l1`
+only, `Lupus_PBMC` strict `majority_only`, and `Stephenson`) and excludes
+`Alzheimer`. ECODA `limma` arms (`ECODA_authors_HR` corrected and
+`ecoda_unsupervised_harmony_limma`) and `droplow50pct` are hidden from
+`Figure 5` and `BatchMDS` (while retaining `Pseudobulk` `limma`, restoring
+ECODA `limma` in `Supp_fig_TMP_ECODA_becm_comp_ANOSIM.pdf`, and keeping
+underlying computation intact). ECODA batch correction in `Figure 5` and
+`BatchMDS` is represented by `ECODA_authors` (`CT-drop (|ΔCLR| ≥ 2)`),
+`ECODA_Leiden: Harmony` (`Harmony`), and `ECODA_Leiden: Harmony + CT-drop`
+(`Harmony + CT-drop (|ΔCLR| ≥ 2)`) scored across all five separation metrics
+(`ANOSIM`, `Modularity`, `ARI`, `Silhouette`, and `sLISI`) from
+`data/derived/ECODA_becm_comp_20261121_v2/comparison_cache.rds`.
+
+`src/notebooks/build_batch_6cohort_figures_20261126.R` executes joint min-max
+scaling per `(dataset, metric)` across all 16 uncorrected, corrected, and
+`Shuffled_baseline` rows together, exports derived tables to
+`data/derived/batch_6cohort_release_20261126/`, and writes:
+
+- `plots/Figure_5_A_batch_6cohorts_funkyheatmap.pdf` (with clean method names,
+  `Corrected` indicator, and `Correction` column) and
+  `plots/Figure_5_B_batch_correction_arrows_ANOSIM_6cohorts.pdf` (combined into
+  `plots/Figure_5.{pdf,png}`),
+- `plots/Supp_fig_TMP_BatchMDS_<Dataset>.pdf` (publication clean MDS without
+  score subtitles, shortened `<Cohort>` headers, enlarged legends), and
+- `plots/batch_mds_internal_with_scores_20261126/BatchMDS_<Dataset>_with_scores.pdf`
+  (internal reference with five-metric subtitles including `sLISI`).
+
+```{r six-cohort-publication-release, eval=FALSE}
+source("src/notebooks/build_batch_6cohort_figures_20261126.R")
+```

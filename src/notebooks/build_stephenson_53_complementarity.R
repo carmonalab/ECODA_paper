@@ -93,34 +93,25 @@ scores_df <- rbind(
 print(scores_df, row.names = FALSE)
 write.csv(scores_df, file.path(cd14_dir, "stephenson_53_complementarity_scores.csv"), row.names = FALSE)
 
-# 5. Plot combined 2-panel figure matching stephenson_pca_comparison aesthetic
+# 5. Plot single-panel CD14+ monocytes pseudobulk PCA
 comp_cd14 <- stephenson_pca_comparison(
   cd14_norm, labels,
-  title = sprintf("CD14+ monocytes pseudobulk (HVG2000, n=%d)", nrow(cd14_norm)),
+  title = "CD14+ monocytes pseudobulk",
   n_loadings = 8L, seed = 20261022L
-)
-comp_ifn <- stephenson_pca_comparison(
-  ifn_prep$features, labels,
-  title = sprintf("Authors HR: IFN UCell (%d complete CTs, n=%d)", ncol(ifn_prep$features), nrow(ifn_prep$features)),
-  n_loadings = 10L, seed = 20261022L
 )
 
 # Inspect exact top loadings for text reporting
 pca_cd14 <- prcomp(cd14_norm, scale. = FALSE)
 cd14_top <- names(sort(rowSums(factoextra::get_pca_var(pca_cd14)$contrib[, 1:2]), decreasing = TRUE))[1:8]
-pca_ifn <- prcomp(ifn_prep$features, scale. = FALSE)
-ifn_top <- names(sort(rowSums(factoextra::get_pca_var(pca_ifn)$contrib[, 1:2]), decreasing = TRUE))[1:10]
 cat("Top CD14 HVG2000 PC1-2 loadings:", paste(cd14_top, collapse = ", "), "\n")
-cat("Top IFN_UCell PC1-2 loadings:", paste(ifn_top, collapse = ", "), "\n")
 
-p_cd14_1 <- comp_cd14$plot + theme(plot.title = element_text(size = 11, face = "bold"))
-p_ifn_1 <- comp_ifn$plot + theme(plot.title = element_text(size = 11, face = "bold"))
+p_cd14_1 <- comp_cd14$plot +
+  ggplot2::labs(title = "CD14+ monocytes pseudobulk", subtitle = NULL) +
+  theme(
+    plot.title = element_text(size = 11.5, face = "bold"),
+    legend.position = "bottom"
+  )
 
-combined <- (p_cd14_1 | p_ifn_1) +
-  plot_layout(guides = "collect") +
-  plot_annotation(tag_levels = "A") &
-  theme(legend.position = "bottom", plot.tag = element_text(face = "bold", size = 13))
-
-ggsave(file.path(path_plots, "Supp_fig_TMP_Stephenson_IFN.pdf"), plot = combined, width = 10.5, height = 5.0)
-ggsave(file.path(path_plots, "Supp_fig_TMP_Stephenson_IFN.png"), plot = combined, width = 10.5, height = 5.0, dpi = 300)
+ggsave(file.path(path_plots, "Supp_fig_TMP_Stephenson_IFN.pdf"), plot = p_cd14_1, width = 5.8, height = 5.2)
+ggsave(file.path(path_plots, "Supp_fig_TMP_Stephenson_IFN.png"), plot = p_cd14_1, width = 5.8, height = 5.2, dpi = 300)
 cat("Wrote plots/Supp_fig_TMP_Stephenson_IFN.{pdf,png}\n")
