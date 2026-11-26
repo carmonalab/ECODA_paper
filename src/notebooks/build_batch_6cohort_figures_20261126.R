@@ -9,7 +9,7 @@
 #     (2x3 ANOSIM arrows for the 6 cohorts) + 5-metric companions
 #   - Composite Figure 5: plots/Figure_5.pdf (+ plots/Figure_5.png)
 #   - SF26: plots/Supp_fig_TMP_ECODA_becm_comp_ANOSIM.{pdf,png}
-#     (2x3 |ΔCLR| >= 0..4 trajectories + limma for 6 cohorts; droplow50pct hidden)
+#     (2x3 |ΔCLR| >= 0..4 trajectories + Harmony for 6 cohorts; limma and droplow50pct hidden)
 #   - BatchMDS (SF27-SF32):
 #     1) Internal (with 5-metric score subtitles):
 #        plots/batch_mds_internal_with_scores_20261126/BatchMDS_<Dataset>_with_scores.pdf
@@ -318,8 +318,8 @@ scores_6_cor_nonlimma <- scores_7_cor[
 ]
 
 # Define unified 16-row method table (7 uncorrected + 8 corrected + 1 Shuffled_baseline)
-ctdrop_2_label <- "CT-drop (|\u0394CLR| \u2265 2)"
-harmony_ctdrop_2_label <- "Harmony + CT-drop (|\u0394CLR| \u2265 2)"
+ctdrop_2_label <- "CT-drop"
+harmony_ctdrop_2_label <- "Harmony + CT-drop"
 
 row_spec <- tibble::tribble(
   ~row_id,                                     ~method_label,       ~state,        ~corrected_flag, ~correction_method,    ~source_view,
@@ -532,7 +532,7 @@ build_batch_6cohort_funkyheatmap <- function(ranking_df, output_pdf, plot_width 
     ~id,          ~group, ~name,        ~geom,  ~palette,           ~options,
     "method",     "",     "",           "text", NA_character_,      list(hjust = 0, width = 5.6),
     "Corrected",  "",     "Corrected",  "text", NA_character_,      list(hjust = 0.5, width = 2.0),
-    "Correction", "",     "Correction", "text", NA_character_,      list(hjust = 0, width = 9.8)
+    "Correction", "",     "Correction", "text", NA_character_,      list(hjust = 0.5, width = 6.4)
   )
   info_overall <- tibble::tribble(
     ~id,             ~group,    ~name,   ~geom, ~palette,           ~options,
@@ -845,12 +845,16 @@ ggsave(file.path("plots", "Figure_5.pdf"), fig5_combined, width = 14.2, height =
 ggsave(file.path("plots", "Figure_5.png"), fig5_combined, width = 14.2, height = 14.6, dpi = 220)
 message("Wrote plots/Figure_5.{pdf,png} and Figure_5_A/B standalone PDFs.")
 
-message("\n=== Step 4: SF26 (Supp_fig_TMP_ECODA_becm_comp_ANOSIM, 2x3, with limma, droplow50pct hidden) ===")
+message("\n=== Step 4: SF26 (Supp_fig_TMP_ECODA_becm_comp_ANOSIM, 2x3, limma and droplow50pct hidden) ===")
 build_becm_anosim_6cohort <- function(scores_df) {
-  # Filter to the 6 retained cohorts and hide droplow50pct only (limma restored)
+  # Filter to the 6 retained cohorts and hide limma + droplow50pct variants
   data <- scores_df[
     scores_df$dataset %in% retained_cohorts &
-      scores_df$method_id != "ECODA_authors_sigdiff_ctdrop_2_droplow50pct",
+      !scores_df$method_id %in% c(
+        "ECODA_authors_sigdiff_ctdrop_2_droplow50pct",
+        "ECODA_authors_limma",
+        "ECODA_Harmony_Leiden_CLR_limma"
+      ),
     ,
     drop = FALSE
   ]
@@ -863,16 +867,12 @@ build_becm_anosim_6cohort <- function(scores_df) {
   labels <- c(
     ECODA_authors_uncorrected = "ECODA_authors (uncorrected)",
     ECODA_Leiden_CLR_uncorrected = "ECODA_Leiden (uncorrected)",
-    ECODA_authors_limma = "ECODA_authors (limma)",
-    ECODA_Harmony_Leiden_CLR = "ECODA_Leiden (Harmony)",
-    ECODA_Harmony_Leiden_CLR_limma = "ECODA_Leiden (Harmony + limma)"
+    ECODA_Harmony_Leiden_CLR = "ECODA_Leiden (Harmony)"
   )
   series_levels <- c(
     "ECODA_authors (uncorrected)",
     "ECODA_Leiden (uncorrected)",
-    "ECODA_authors (limma)",
     "ECODA_Leiden (Harmony)",
-    "ECODA_Leiden (Harmony + limma)",
     auth_traj_label,
     harm_traj_label
   )
@@ -884,17 +884,15 @@ build_becm_anosim_6cohort <- function(scores_df) {
   data$valid <- is.finite(data$biological_anosim) & is.finite(data$batch_anosim)
 
   palette <- setNames(
-    c("#333333", "#888888", "#1B9E77", "#377EB8", "#984EA3", "#D73027", "#E68A00"),
+    c("#333333", "#888888", "#377EB8", "#D73027", "#E68A00"),
     series_levels
   )
   shapes <- setNames(
-    c(1, 2, 17, 15, 18, 16, 16),
+    c(1, 2, 15, 16, 16),
     series_levels
   )
   arrow_pairs <- list(
-    c("ECODA_authors_uncorrected", "ECODA_authors_limma"),
-    c("ECODA_Leiden_CLR_uncorrected", "ECODA_Harmony_Leiden_CLR"),
-    c("ECODA_Leiden_CLR_uncorrected", "ECODA_Harmony_Leiden_CLR_limma")
+    c("ECODA_Leiden_CLR_uncorrected", "ECODA_Harmony_Leiden_CLR")
   )
 
   x_lim <- c(-0.04, 0.72)

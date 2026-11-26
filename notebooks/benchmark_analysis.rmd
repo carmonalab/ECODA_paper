@@ -1378,11 +1378,15 @@ ggsave(file.path(path_plots, "Supp_fig_18_annotationmethods_barplot_sil_lisi.pdf
   plot = wrap_plots(list(p_annotation_sil, p_annotation_lisi), nrow = 1, guides = "collect"),
   width = 9, height = 5)
 supp_fig_18_annotation <- wrap_plots(list(
-  p_mod + labs(y = "Separation score\n(Modularity (knn3))", colour = "Dataset", shape = "Dataset", linetype = "Dataset") +
+  p_mod + scale_x_discrete(labels = annotation_clean_labels, drop = FALSE) +
+    labs(y = "Separation score\n(Modularity (knn3))", colour = "Dataset", shape = "Dataset", linetype = "Dataset") +
     guides(colour = guide_legend(ncol = 1), shape = guide_legend(ncol = 1), linetype = guide_legend(ncol = 1)),
-  p_ari + labs(y = "Separation score\n(ARI)") + guides(colour = "none", shape = "none", linetype = "none"),
-  p_annotation_sil + labs(y = "Separation score\n(Silhouette)") + guides(colour = "none", shape = "none", linetype = "none"),
-  p_annotation_lisi + labs(y = "Separation score\n(sLISI)") + guides(colour = "none", shape = "none", linetype = "none"))) +
+  p_ari + scale_x_discrete(labels = annotation_clean_labels, drop = FALSE) +
+    labs(y = "Separation score\n(ARI)") + guides(colour = "none", shape = "none", linetype = "none"),
+  p_annotation_sil + scale_x_discrete(labels = annotation_clean_labels, drop = FALSE) +
+    labs(y = "Separation score\n(Silhouette)") + guides(colour = "none", shape = "none", linetype = "none"),
+  p_annotation_lisi + scale_x_discrete(labels = annotation_clean_labels, drop = FALSE) +
+    labs(y = "Separation score\n(sLISI)") + guides(colour = "none", shape = "none", linetype = "none"))) +
   plot_layout(nrow = 2, ncol = 2, guides = "collect") &
   scale_colour_discrete(limits = unique(annotation_metric_scores$dataset)) &
   scale_shape_manual(values = seq_along(unique(annotation_metric_scores$dataset)),
@@ -1390,11 +1394,12 @@ supp_fig_18_annotation <- wrap_plots(list(
   scale_linetype_discrete(limits = unique(annotation_metric_scores$dataset)) &
   theme(
     legend.position = "right",
-    axis.text.x = element_text(angle = 55, vjust = 1, hjust = 1, size = 8.5),
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 8.5),
     axis.text.y = element_text(size = 8.5),
     axis.title.y = element_text(size = 10),
     legend.text = element_text(size = 8.5),
-    legend.title = element_text(size = 10, face = "bold")
+    legend.title = element_text(size = 10, face = "bold"),
+    plot.margin = margin(t = 5.5, r = 5.5, b = 5.5, l = 14)
   )
 print(supp_fig_18_annotation)
 ggsave(file.path(path_plots, "Supp_fig_18_annotationmethods_barplot_mod_ari.pdf"),
@@ -4280,6 +4285,13 @@ if (isTRUE(cell_subsetting_requested) && !is.null(cell_subsetting_results)) {
     labs(x = "Cells per sample", y = "Raw separation (higher is better)", color = "Dataset", shape = "Dataset", linetype = "Dataset") +
     theme_classic() + theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom")
 
+  cell_subsetting_ylab <- c(
+    anosim_score = "Separation score (ANOSIM)",
+    mod_knn3_score = "Separation score (Modularity (knn3))",
+    cluster_score = "Separation score (ARI)",
+    sil_score = "Separation score (Silhouette)",
+    lisi_score = "Separation score (sLISI)"
+  )
   cell_subsetting_panels <- lapply(evaluation_metrics(), function(m) {
     agg_m <- cell_subsetting_aggregate[cell_subsetting_aggregate$metric == m, , drop = FALSE]
     ds_m <- cell_subsetting_dataset_means[cell_subsetting_dataset_means$metric == m, , drop = FALSE]
@@ -4307,14 +4319,13 @@ if (isTRUE(cell_subsetting_requested) && !is.null(cell_subsetting_results)) {
       scale_shape_manual(values = seq_along(unique(cell_subsetting_dataset_means$dataset_display))) +
       scale_x_discrete(limits = cell_subsetting_targets, drop = FALSE) +
       labs(
-        title = score_facet_labels[[m]],
+        title = NULL,
         x = "Cells per sample",
-        y = "Raw separation (higher is better)",
+        y = cell_subsetting_ylab[[m]],
         color = "Dataset", shape = "Dataset", linetype = "Dataset"
       ) +
       theme_classic() +
       theme(
-        plot.title = element_text(size = 13, face = "bold", hjust = 0.5),
         axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
         axis.text.y = element_text(size = 10),
         axis.title = element_text(size = 11.5)

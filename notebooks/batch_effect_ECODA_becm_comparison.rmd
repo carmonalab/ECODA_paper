@@ -906,17 +906,17 @@ biological separation with low batch separation is desirable. The two cell-type
 drop families follow thresholds `seq(0, 4, 0.5)` in increasing order. For the
 publication summary (`Supp_fig_TMP_ECODA_becm_comp_ANOSIM.pdf` via
 `src/notebooks/build_batch_6cohort_figures_20261126.R`), `Alzheimer` is
-excluded (retaining the 6 cohorts in a 2x3 layout), the `limma` points and
-arrows (`ECODA_authors (limma)` and `ECODA_Leiden (Harmony + limma)`) are
-shown (`hide_limma = FALSE`), and the `droplow50pct` variant remains hidden from
-the plot (`hide_droplow = TRUE`) while remaining intact in the underlying cache
+excluded (retaining the 6 cohorts in a 2x3 layout), and the `limma`
+(`ECODA_authors (limma)` and `ECODA_Leiden (Harmony + limma)`) and
+`droplow50pct` variants remain hidden from the plot (`hide_limma = TRUE`,
+`hide_droplow = TRUE`) while remaining intact in the underlying cache
 and computation code. Kidney contributes its condition evaluation once. ANOSIM is
 shown on its original scale; no cross-metric mean or min-max normalization is
 used in this figure.
 
 ```{r becm-summary, eval=becm_render}
 figure <- becm_anosim_summary(becm_cache$scores, datasets = becm_retained_6_datasets,
-                              hide_limma = FALSE, hide_droplow = TRUE)
+                              hide_limma = TRUE, hide_droplow = TRUE)
 becm_save_pages(list(figure), file.path(becm_plot_root, "summary", "ECODA_becm_comp_ANOSIM.pdf"),
   width=13.5, height=8.2)
 utils::write.csv(becm_cache$scores,
