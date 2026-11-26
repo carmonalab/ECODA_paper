@@ -76,7 +76,7 @@ def main():
     if args.ds_name not in config:
         raise KeyError(f"Dataset not found in datasets.json: {args.ds_name}")
     entry = config[args.ds_name]
-    input_path = scratch_dir / entry["views"]["benchmark_analysis"]["output_file"]
+    input_path = scratch_dir / args.ds_name / "output" / entry["views"]["benchmark_analysis"]["output_file"]
     if not input_path.is_file():
         raise FileNotFoundError(f"Input H5AD not found: {input_path}")
 

@@ -42,10 +42,11 @@ if (method == "GloProp") library(GloScope)
 if (method == "MOFA_hvg2000_factors15") library(MOFA2)
 
 config_path <- file.path(project_root, "datasets.json")
-input_dir <- Sys.getenv("HPC_SCRATCH_DIR", unset = "")
-if (!nzchar(input_dir)) {
+scratch_dir <- Sys.getenv("HPC_SCRATCH_DIR", unset = "")
+if (!nzchar(scratch_dir)) {
   stop("HPC_SCRATCH_DIR not set.")
 }
+input_dir <- file.path(scratch_dir, ds, "output")
 config <- read_datasets_json(config_path, view = "benchmark_analysis")
 entry <- config[[ds]]
 if (is.null(entry)) {
