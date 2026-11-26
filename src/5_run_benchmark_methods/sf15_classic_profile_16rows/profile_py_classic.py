@@ -33,6 +33,8 @@ def _load_py_benchmark_module():
         / "run_python_sample_embedding_methods"
         / "1.1.1_benchmark_methods_py.py"
     )
+    if str(mod_path.parent) not in sys.path:
+        sys.path.insert(0, str(mod_path.parent))
     spec = importlib.util.spec_from_file_location("ecoda_bench_py", mod_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load benchmark module from {mod_path}")

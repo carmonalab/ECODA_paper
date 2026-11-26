@@ -11,6 +11,7 @@ else
 fi
 
 source "${PROJECT_ROOT}/src/slurm_config.sh"
+source "${PROJECT_ROOT}/src/utils/bash/worker_retry.sh"
 cd "${PROJECT_ROOT}"
 
 MANIFEST_FILE="${SF15_MANIFEST_FILE:?SF15_MANIFEST_FILE is required}"
@@ -50,12 +51,14 @@ if command -v /usr/bin/time >/dev/null 2>&1; then
   TIME_CMD="/usr/bin/time -v"
 fi
 
+set +e
 if [[ "${LANG_MODE}" == "R" ]]; then
   ${TIME_CMD} ${PIXI_RSCRIPT} "${HARNESS_DIR}/profile_r_classic.R" \
     --ds_name "${DS_NAME}" \
     --method "${METHOD_NAME}" \
     --out_csv "${OUT_CSV}" \
     --work_dir "${WORK_DIR}"
+  RC=$?
 elif [[ "${LANG_MODE}" == "py" ]]; then
   DEVICE_ARG="cpu"
   if [[ "${RESOURCE_MODE}" == "gpu" ]]; then
@@ -67,7 +70,20 @@ elif [[ "${LANG_MODE}" == "py" ]]; then
     --out_csv "${OUT_CSV}" \
     --work_dir "${WORK_DIR}" \
     --device "${DEVICE_ARG}"
+  RC=$?
 else
   echo "ERROR: unsupported lang=${LANG_MODE}" >&2
-  exit 1
+  RC=1
 fi
+set -e
+
+if [[ ${RC} -eq 0 ]]; then
+  worker_clear_retry_count
+  exit 0
+fi
+
+ERR_FILE="${RUN_ROOT}/logs/${RESOURCE_MODE}_${SLURM_ARRAY_JOB_ID}_${TASK_ID}.err"
+if worker_requeue_if_transient "${ERR_FILE}" "${WORKER_MAX_RETRIES:-6}"; then
+  exit 0
+fi
+exit "${RC}"
