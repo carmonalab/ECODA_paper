@@ -55,6 +55,9 @@ rsconnect/
 data/
 plots/
 !aux/*
+revision_docs/
+.vscode/
+.codegraph/
 
 # pixi environments
 .pixi/*
@@ -80,3 +83,4 @@ notebooks/dataset_onboarding/*_files/
 /.gate/
 /.kilo/gates/**/*.json
 /.kilo/gates/**/*.json.lock
+Rplots.pdf

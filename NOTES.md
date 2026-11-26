@@ -6,6 +6,47 @@
 ---
 
 
+## Canonical Paper Revision Cohort Registry & Decisions — 2026-11-21
+
+> **Centralized Decision Hub:** This section records the finalized manuscript revision (RC-2026-03528) cohort registry, batch-effect inclusion/exclusion rationales, confounding pre-filtering rules, and cross-pipeline standardization decisions. It supersedes stale draft statements in earlier checkpoints (`2026-11-09` / `2026-11-10`) and reconciles `notebooks/dataset_onboarding/README.md`.
+
+### A. Active Multi-Batch Benchmark Cohorts (7 Retained Cohorts)
+
+All **7 retained cohorts** (`Alzheimer`, `Breast_cancer`, `Covid19_PBMC`, `Joanito`, `Kidney_KPMP_full`, `Lupus_PBMC`, `Stephenson`) are evaluated across `batch_effect_uncorrected` and `batch_effect_corrected`. Total post-Stage-3 sample/cell/CT counts verified directly from Bamboo `obs`:
+
+| Cohort | Batch Variable (`datasets.json`) | Batch Classification | Retained Samples | Total Cells (`mean ± SD`) | `Authors_HR` / `Authors_LR` | Pre-Filtering / Confounding & Policy Rules |
+| :--- | :--- | :--- | ---: | ---: | ---: | :--- |
+| **`Alzheimer`** | `assay` (`10x 3' v3`: 80; `10x multiome`: 21) | Sequencing / storage (`-80°C` vs fresh nuclei + Tn5) | 101 | 1,305,022 (`12,921 ± 5,670`, min `1,869`) | `131` `Supertype` / `24` `Subclass` | Sample key `donor_id_assay`; excluded 3 `Reference` donor-by-assay units (`Dementia`: 47, `No dementia`: 54). Uncorrected 2D UMAP overlap reflects strong cell-type separation relative to within-cell-type 50D assay offset (`Section 2026-11-20` below); MrVI primarily resolves the assay effect. |
+| **`Breast_cancer`** | `["assay", "suspension_dissociation_time"]` (`10x 3' v3`: 33; `12h`: 17, `15m`: 16) | **Tissue dissociation / sample preparation** | 33 | 114,579 (`3,472 ± 1,443`, min `657`) | `58` `author_cell_type` / `10` `broad_cell_type` | Excluded non-`10x 3' v3` assays and `unknown`/other dissociation times; `sequencing_platform` is metadata-only. **RETAINED as an honest, informative limitation** (`breast cancer`: 19, `normal`: 14; see diagnostic note below & `notebooks/Breast_cancer_batch_bio_diagnostic_2026-11-20.md`). |
+| **`Covid19_PBMC`** | `datasets` (`d02`: 22; `d09`: 12; `d13`: 10) | Multi-study / processing batch | 44 | 254,174 (`5,777 ± 2,736`, min `921`) | `54` `celltype` / `10` `majorType` | Retained `d02`/`d09`/`d13` intersected with literal `control` (`10`) or finite sampling day `<= 30` (`mild/moderate`: 27, `severe/critical`: 7); excluded confounded `d07`. |
+| **`Joanito`** | `seqtec` (`3' seq`: 72; `5' seq`: 52) | Sequencing (`3'` vs `5'`) | 124 | 252,519 (`2,036 ± 1,241`, min `545`) | `12` `cell.type_new` / `11` `cell.type` | Retained `Normal` (`34`) and `Tumor` (`90`); excluded `LymphNode` and `Tumor-2`. `3'` vs `5'` sequencing strongly perturbs gene expression with minimal compositional shift. |
+| **`Kidney_KPMP_full`** | `suspension_type` (`cell`: 45; `nucleus`: 35) | **Tissue dissociation / sample preparation** (single-cell vs single-nucleus) | 80 | 283,290 (`3,541 ± 2,937`, min `517`) | `76` `subclass.l3` / `16` `subclass.l1` | Excluded `region.l1 == "Papilla"` (4 deceased-donor nuclei); no sex correction. Evaluated **exclusively on `condition.l1`** (`Ref`: 33, `CKD`: 26, `AKI`: 21) in manuscript figures (`tissue` axis excluded due to confounding with `suspension_type`). Dissociation/preparation compositional effects align with Sikkema et al. HLCA (*Nat Med* 2023 Fig 4a, `10.1038/s41591-023-02327-2`). |
+| **`Lupus_PBMC`** | `batch_cov` (7 multiplexed library pools: `dmx_AbFlare-4` + pools `YS-JY-20_pool3/4`, `21_pool1/2`, `22_pool5/6`) | Multi-pool library processing | 94 | 374,642 (min `1,189`, median `4,092` post-strict) | `24` `louvain` (`layer1` all NA) | **Option 2 (`cell_filter: "majority_only"`):** keeps exact 94 samples whose majority `batch_cov` falls in the 7 allowed pools (`Healthy`: 48, `Case`: 46) and retains ONLY cells matching each sample's winning majority pool (`458,785 -> 374,642` cells; drops minority cells across all 23 mixed donors including 3 multi-allowed-pool donors `HC_014`, `HC_506`, `g1772_1772`), yielding **0 multi-batch samples** and eliminating downstream majority voting. |
+| **`Stephenson`** | `Site` (`Cambridge`: 57; `Ncl`: 53) | **Multi-site processing** | 110 | 543,080 (`4,937 ± 3,295`, min `546`) | `50` `full_clustering` / `18` `initial_clustering` | Excluded `Sanger` and 4 quality/empty samples (`BGCV10_CV0198`, `MH8919230`, `MH8919226`, `MH8919227`). Compositional multi-site differences align with MrVI bioRxiv reviewer discussions; batch-aware ECODA preserves remaining biological signal (`Covid`: 88, `Healthy`: 22). *(Separate 53-sample `Ncl`-only cohort used in main benchmark.)* |
+
+### B. `Breast_cancer` Diagnostic Summary & Retention Decision (2026-11-21)
+
+- **Observed confounding & mechanism:** After filtering to `10x 3' v3` with `12h` (`17` samples: `12` cancer / `5` normal = `70.6%` cancer) vs `15m` (`16` samples: `7` cancer / `9` normal = `43.8%` cancer), uncorrected dissociation-time separation (`ECODA_authors` `batch ANOSIM = 0.379`, `ECODA_seuratres_2 = 0.863`) is more than twice the biological cancer-vs-normal separation (`0.183` / `0.251`).
+- **Affected cell types:** 11/58 cell types show significant (`p_bh < 0.05`) `12h` vs `15m` shifts—led by stromal/mural/endothelial populations (`pericytes` +3.49, `Fibro-SFRP4` +3.25, `vsmc` +2.39, `Vas-capillary` +1.91, `Fibro-major` +1.85, `Vas-arterial` +1.51) and epithelial/immune subsets (`CD4-Tem` -1.51, `Lumsec-basal` -1.42, `Lumsec-prol` -1.20, `cDC2` -1.19, `bmem_unswitched` +0.46). Seven of these overlap with marginal cancer-vs-normal differences (`Fibro-SFRP4`, `pericytes`, and `Vas-arterial` disappear or reverse direction within the `12h` stratum). Meanwhile, true within-batch biological hits (`CD4-activated`, `p_bh = 0.00092`; `LummHR-SCGB`, `p = 0.0092`) are sparse and easily eroded when `droplow50pct` filters sparse cell types.
+- **Why retained honestly in manuscript:** Although Sikkema et al. (HLCA 2023) previously reported that dissociation protocols strongly alter cell-type composition, confirming that phenomenon here and showing why bio-blind linear correction (`ECODA_authors` `limma` falling below `Shuffled_baseline` in Figure 5, collapsing `bio ANOSIM` `0.183 -> 0.094` alongside `Pseudobulk` `0.150 -> 0.073` and `ECODA_Harmony_Leiden_CLR_limma` `0.251 -> 0.024`) removes biological separation when bio and batch are collinear is scientifically informative. Unlike `Stephenson`, where remaining site-unaffected immune populations preserve biology, `Breast_cancer` illustrates an intrinsic boundary of unsupervised (bio-blind) correction.
+
+### C. Excluded Candidate / Legacy Batch Cohorts (`Supp Table 5` + `CombinedPBMC`)
+
+- **`Lung` (excluded from manuscript batch benchmark):** Even after restricting to 6 10x batches (`Goveia_Carmeliet_2020`, `Lambrechts_6149v2`, `Lambrechts_6653`, `Leader_beads_cite`, `Leader_digest-deadcell_cite`, `Leader_5p_v1_CD2`) across 80 lung carcinoma samples (`244,454` cells), residual subtype heterogeneity (`lung adenocarcinoma` 42, `squamous cell lung carcinoma` 30, `NSCLC` 8) yielded near-zero biological separation across every tested method.
+- **`Diabetes` (disabled):** Severe study-condition confounding; removing single-condition confounded batches leaves too few samples with severe imbalance (`3` normal vs `12` T2D).
+- **`Myocardial_infarction` (disabled):** Small sample count (`24` samples / `19` donors) with biological-technical confounding (`MI-2` PILOT-GM-VAE cohort).
+- **`Parkinson` (disabled):** Brain multi-tissue structure with weak overall separation and biological/technical confounding.
+- **`Kidney cancer` & `Pancreas PDAC` (excluded during candidate screening):** Insufficient unconfounded multi-batch/biological overlap (`dataset_onboarding/` / PILOT-GM-VAE screening).
+- **Legacy `CombinedPBMC` (removed from manuscript & omitted from `Supp Table 5`):** Artificially constructed by merging separate cohorts (Kang interferon-stimulated PBMC + Stephenson COVID PBMC), making biological groups completely collinear with batch/study identity and biologically unidentifiable. Replaced by the 7 genuine multi-batch cohorts above.
+
+### D. Harmonized Benchmark & Method Decisions (2026-11-21)
+
+- **Universal `counts_all_0.5` pseudocount:** Main benchmark (`Figure 2–4`), batch/BECM (`Figure 5`), cell-subsetting, and 4-cohort cancer clustering all add `+0.5` to every cell-type count prior to CLR (`counts_all__0.5`). `transformation_analysis_policy()` in `src/5_run_benchmark_methods/benchmark_pipeline.R` is updated to `counts_all__0.5`, and `Supp Fig 16A` (`supp_fig_16A_*`, `16AB`) is recomputed locally under `counts_all__0.5`. (`EPIC` pseudobulk deconvolution retains its `(2/3) * min` zero handling.)
+- **Adams `Leiden_res_5` annotation consistency:** Switched `Figure 3C` unsupervised Adams PCA panel from `Leiden_res_0.4` (`ANOSIM 0.445`, `21` clusters) to `Leiden_res_5` (`ANOSIM 0.648`, `92` clusters), matching `Figure 3A–B`, the 4-sheet Supplementary Excel correspondence matrix (`Authors_HR 38 × Leiden_res_5 92`), and the canonical marker dotplot (`cl_44`/`cl_60` `SPP1+` fibrotic vs `cl_47`/`cl_17` `FABP4/MARCO+` alveolar macrophages; `cl_57` `Aberrant_Basaloid`, `cl_69` `VE_Peribronchial`, `cl_70` `VE_Capillary_B`, `cl_79` `ATII`, `cl_55` `Myofibroblast`, `cl_86` `SMC/Pericyte`).
+
+---
+
+
 ## Current approved work — 2026-11-09
 
 The [active reprocessing plan](.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md)
@@ -548,6 +589,8 @@ cell-type columns:
 | Diabetes | `cell_type` | `cell_type_reannotatedIntegrated` |
 | Joanito | `cell.type` | `cell.type_new` |
 | Lung | `ann_coarse` | `ann_fine` |
+
+- **Joanito cell-type granularity:** Source metadata (`Epithelial_metadata.csv`, `NonEpithelial_metadata.csv`) provides only `cell.type` (11 categories: `Epithelial` plus 10 non-epithelial lineages) and no finer-grained author subcluster column. `cell.type_new` is derived in `src/2_dataset_specific_preprocessing/1.3.1_prepare_joanito.R` from `cell.type` + `iCMS`: non-epithelial cells (`iCMS` is `NA`) keep `cell.type`, while `Epithelial` is split into `Epithelial_Normal` (`iCMS == "Normal"`) and `Epithelial_Cancer` (`iCMS2`/`iCMS3`).
 
 The frozen cohorts use their already-produced uncorrected result artifacts
 read-only and are absent from all new jobs and validator selections. Diabetes
@@ -1295,3 +1338,32 @@ Wu, removing types below 1% of metadata-total cells removes 17 types and
 changes ANOSIM to 0.2072 (+0.0273); below 0.1% removes 3 types and changes it
 to 0.1887 (+0.0088).  The diagnostic was informational only and is not used
 by the production subsetting run.
+
+---
+
+## Alzheimer (SEA-AD) single-cell assay geometry note — 2026-11-20
+
+In `plots/singlecell_batch_geometry_20261110_v2/Alzheimer_UMAP.pdf`, `10x 3' v3`
+and `10x multiome` occupy the same major cell-type islands rather than splitting
+into separate technology clusters. This is **not** a processing error:
+
+- **Quantitative 50D batch effect is strong:** In `LISI_50D_summary.csv`,
+  `unc_raw` has 50D mean iLISI mixing `0.1237` (raw `1.1237` / 2; equal-sample
+  `0.1705`), comparable to `Breast_cancer` (`0.0985`), `Joanito` (`0.0723`), and
+  `Stephenson` (`0.0478`). `cor_harmony` on `assay` barely increases mixing
+  (`0.1389`; equal-sample `0.1676`).
+- **Why 2D UMAP looks overlapped:** The 24 brain cortical cell types (`cLISI`
+  preservation `0.9988`) are transcriptomically much farther apart than the
+  assay offset, so UMAP places both assays in the same cell-type islands with
+  within-cluster assay patching/layering (partially masked by overplotting
+  100,000 batch-balanced cells).
+- **SEA-AD study explanation (Gabitto et al., *Nat Neurosci* 2024, PMID
+  39402379):** Both assays use 10x 3' poly(A) GEX chemistry on nuclei from a
+  paired subset of the same donors (21 `10x multiome` paired with 80 `10x 3' v3`
+  samples after excluding 3 `Reference` samples), the same brain region (MTG),
+  and the same Allen Institute nuclei isolation + FANS sorting (70% neuronal /
+  30% non-neuronal). The main wet-lab difference is post-FANS storage (`10x 3'
+  v3` nuclei frozen at -80 °C vs. `10x multiome` loaded immediately without
+  freeze–thaw, plus Multiome permeabilization/Tn5 transposition), producing a
+  within-cell-type 50D shift rather than disjoint global clusters.
+

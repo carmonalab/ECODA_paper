@@ -1,5 +1,7 @@
 # Dataset onboarding
 
+> **2026-11-21 Manuscript Revision Registry Notice:** The authoritative finalized cohort registry (7 retained multi-batch cohorts: `Alzheimer`, `Breast_cancer`, `Covid19_PBMC`, `Joanito`, `Kidney_KPMP_full` [`condition.l1` only], `Lupus_PBMC` [Option 2 `cell_filter: "majority_only"`, 374,642 cells / 94 samples / 0 multi-batch samples], `Stephenson`; exclusion of `Lung` from manuscript batch figures, exclusion of `Diabetes`/`Myocardial_infarction`/`Parkinson`/legacy `CombinedPBMC`, and the `Breast_cancer` 58-CT bio-vs-batch diagnostic) is centralized in [`../../NOTES.md`](../../NOTES.md#canonical-paper-revision-cohort-registry--decisions--2026-11-21). Note the table below preserves the initial 2026-11-08 8-cohort onboarding configuration before manuscript-level exclusions (`Lung`), `Lupus_PBMC` strict `majority_only` cell filtering, and `Kidney_KPMP_full` condition-only reporting.
+
 ## Purpose
 
 The onboarding notebooks investigate newly added cohorts before analysis. They
@@ -48,8 +50,8 @@ high-resolution labels.
 | `Covid19_PBMC` | PBMC cohort with healthy controls and COVID samples across time after symptom onset. | `datasets` | 10 | Included with acute/control and d02/d09/d13 restrictions |
 | `Diabetes` | Pancreatic cohort spanning multiple studies and disease groups. | `dataset` | 13 | Excluded because most batches have samples from only one condition. After removal of confounded batches, too few samples remain and the remaining two batches are both heavily imbalanced (3 normal and 12 type 2 diabetes left). |
 | `Kidney_KPMP_full` | Combined single-cell/single-nucleus KPMP cohort. | `suspension_type` | 14 | Included after Papilla exclusion; no sex correction |
-| `Lupus_PBMC` | PBMC cohort with case/healthy metadata and technical batch candidates. | `batch_cov` | 11 | Included with AbFlare-4 and selected pools 20–22 |
-| `Lung` | Lung atlas with platform, tissue, disease, and assay metadata. | `dataset` | 12 | Included with six retained batches and the existing COPD exclusion |
+| `Lupus_PBMC` | PBMC cohort with case/healthy metadata and technical batch candidates. | `batch_cov` | 11 | Included with AbFlare-4 and pools 20–22; **Option 2 (`cell_filter: "majority_only"`) retains 374,642 cells / 94 samples with 0 multi-batch samples** |
+| `Lung` | Lung atlas with platform, tissue, disease, and assay metadata. | `dataset` | 12 | Initial 8-cohort onboarding kept 6 batches (80 adenocarcinoma/squamous/NSCLC samples); **excluded from final manuscript batch benchmark (`NOTES.md`) due to ~0 bio separation across all methods** |
 | `Joanito` | Cohort with sample-origin, sequencing, and site metadata. | `seqtec` | Unavailable (not documented in onboarding specs) | Included after LymphNode and Tumor-2 exclusions |
 | `Stephenson` | Cohort with biological status and site/batch metadata. | `Site` | Unavailable (not documented in onboarding specs) | Included after Sanger and sample-quality exclusions |
 | `Myocardial_infarction` | Small myocardial-infarction cohort with biological/technical confounding concerns. | — | 11 | Excluded |
@@ -73,10 +75,13 @@ identifiable. It is retained only as stale legacy code/artefact context; it is
 disabled, excluded from the active/current-final cohorts, and must not be
 re-enabled.
 
-The approved batch-analysis set is the eight included cohorts above; it
-excludes `CombinedPBMC` and all other disabled or diagnostic entries:
-`Alzheimer`, `Breast_cancer`, `Covid19_PBMC`,
-`Kidney_KPMP_full`, `Lupus_PBMC`, `Lung`, `Joanito`, and `Stephenson`.
+The initial 2026-11-08 batch-processing configuration covered the eight cohorts
+above (`Alzheimer`, `Breast_cancer`, `Covid19_PBMC`, `Kidney_KPMP_full`,
+`Lupus_PBMC`, `Lung`, `Joanito`, `Stephenson`). For the finalized manuscript
+revision (`2026-11-21`, centralized in [`NOTES.md`](../../NOTES.md)), `Lung`
+is excluded (near-zero biological separation across all methods after
+confounding filtering), leaving **7 active batch cohorts**, `Kidney_KPMP_full`
+is reported on `condition.l1` only, and `Lupus_PBMC` uses `cell_filter: "majority_only"`.
 The benchmark set has 11 enabled production datasets; only `Stephenson`
 overlaps these batch cohorts. Alzheimer, Joanito and Kidney full are batch-only.
 The exact processing rows and artifact handling belong in the implementation
@@ -117,15 +122,17 @@ structural zeros. More than three represented groups needs an explicit decision.
 | Covid19_PBMC | Keep d02 (22), d09 (12), d13 (10), intersected with literal `control` or finite numeric sampling day <=30; d07 excluded | 44 |
 | Joanito | Remove `Tumor-2` and retain the LymphNode exclusion | 124 |
 | Kidney_KPMP_full | Remove `region.l1 == "Papilla"`; retain unknown region and correct only suspension type | 80 |
-| Lupus_PBMC | Keep `dmx_AbFlare-4` (11), `dmx_YS-JY-20_pool3/4`, `dmx_YS-JY-21_pool1/2`, `dmx_YS-JY-22_pool5/6` (83 combined) | 94 |
-| Lung | Keep Goveia 2020, Lambrechts 6149v2/6653, and Leader beads_cite/digest-deadcell_cite/5p_v1_CD2 batches; preserve 10x/lung/COPD restrictions | 80 |
+| Lupus_PBMC | Keep exact 94 samples whose majority `batch_cov` is in `dmx_AbFlare-4`, `dmx_YS-JY-20_pool3/4`, `21_pool1/2`, `22_pool5/6`, then apply `cell_filter: "majority_only"` (374,642 cells, 0 multi-batch samples) | 94 |
+| Lung | Historical 8-cohort selection (`6` 10x batches, `COPD` excluded); **excluded from manuscript batch figures (`NOTES.md`)** | 80 |
 | Stephenson | Remove Sanger and the four excluded sample IDs documented below | 110 |
 
 The active plan records exact Lung literals and all expected counts. These
 are expectations to reconcile against Bamboo and >=500-cell/QC eligibility,
-not proof of regenerated artifacts. Preserve whole samples: resolve approved
-sample membership from audited sample-level batch assignments, then keep all
-cells of those raw IDs. Cell-level batch predicates can otherwise split samples.
+not proof of regenerated artifacts. Preserve whole samples by default: resolve
+approved sample membership from audited sample-level batch assignments, then
+keep all cells of those raw IDs (`Lupus_PBMC` additionally applies the explicit
+dataset-scoped `cell_filter: "majority_only"` after whole-sample selection so
+all 94 retained donors achieve 100% single-pool cell purity).
 
 - **COVID verification:** the existing matrix's checksum-bound sample metadata
   already satisfies the control/day<=30 rule. Intersecting the three retained
@@ -154,6 +161,8 @@ normalization, HVG selection, embeddings or correction-model covariates.
 
 - Kidney reports `condition.l1` and literal `tissue` separately on the same 80
   samples/distances: kidney (45), cortex of kidney (23), renal medulla (12).
+  In the manuscript batch benchmark (`2026-11-21`), only **`condition.l1`** is
+  evaluated (`tissue` is excluded due to confounding with `suspension_type`).
   The scalar primary label remains supported; dataset-level
   `columns.evaluation_labels` declares both axes without a second physical
   dataset, H5AD, feature/distance calculation or method fit. Initially both

@@ -1454,14 +1454,17 @@ ggsave(
 #### Figure 3 C: Plot PCA for selected annot. methods (Adams)
 
 Panel titles omit `ECODA_` and start with a capital letter. The unsupervised
-panel uses non-Harmony Leiden resolution 0.4; the other PCA inputs are unchanged.
+panel uses non-Harmony Leiden resolution 5 (`ECODA_seuratres_5`), matching the
+barplots in Figure 3A–B, Figure 4, and the Supplementary Adams correspondence/marker
+tables; when `feat_mat` is absent from the compact release bundle, it loads the
+verified raw `leiden_res_5` count matrix and asserts exact distance equality.
 
 ```{r fig.height=8, fig.width=8}
 ds <- "Adams"
 
 methods <- list(
   "ECODA_authors_HR" = "Authors_HR",
-  "ECODA_seuratres_0.4" = "Leiden_res_0.4",
+  "ECODA_seuratres_5" = "Leiden_res_5",
   "ECODA_HiTME_HR_layer2" = "HiTME",
   "ECODA_authors_LR" = "Authors_LR"
   # "ECODA_scATOMIC_HR" = "ECODA_scATOMIC",
@@ -1473,8 +1476,23 @@ methods <- methods_in_scope_named(methods)
 plot_list <- list()
 
 for (m in names(methods)) {
-  feat_mat <- result_list[["bmark"]][[ds]][[m]][["feat_mat"]]
-  labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
+  bundle <- result_list[["bmark"]][[ds]][[m]]
+  feat_mat <- bundle[["feat_mat"]]
+  labels <- bundle[["labels"]]
+  if (is.null(feat_mat) && identical(ds, "Adams") && identical(m, "ECODA_seuratres_5")) {
+    counts_path <- file.path(path_data, "derived", "adams_leiden5_20261121", "adams_leiden5_counts.csv")
+    if (!file.exists(counts_path)) {
+      stop("Missing verified Adams Leiden_res_5 counts table: ", counts_path)
+    }
+    counts_df <- utils::read.csv(counts_path, row.names = 1, check.names = FALSE)
+    feat_mat <- clr(impute_zeros(counts_df, clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5))
+    feat_mat <- feat_mat[names(labels), , drop = FALSE]
+    if (!is.null(bundle[["dist_mat"]])) {
+      ref_dist <- as.matrix(bundle[["dist_mat"]])
+      cur_dist <- as.matrix(stats::dist(feat_mat[rownames(ref_dist), , drop = FALSE]))
+      stopifnot(max(abs(cur_dist - ref_dist)) < 1e-10)
+    }
+  }
   
   plot_list[[m]] <- plot_pca(
     feat_mat = feat_mat,
