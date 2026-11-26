@@ -4,14 +4,14 @@ set -euo pipefail
 SUBMIT_MODE="${1:-all}"
 ARRAY_OVERRIDE="${2:-}"
 case "${SUBMIT_MODE}" in
-  all|cpu|gpu) ;;
+  all|cpu|gpu|pilotgm_cpu) ;;
   *)
-    echo "Usage: $0 [all|cpu|gpu] [array_spec]" >&2
+    echo "Usage: $0 [all|cpu|gpu|pilotgm_cpu] [array_spec]" >&2
     exit 1
     ;;
 esac
 if [[ "${SUBMIT_MODE}" == "all" && -n "${ARRAY_OVERRIDE}" ]]; then
-  echo "ERROR: array_spec override requires mode 'cpu' or 'gpu'" >&2
+  echo "ERROR: array_spec override requires mode 'cpu', 'gpu', or 'pilotgm_cpu'" >&2
   exit 1
 fi
 
@@ -22,19 +22,22 @@ cd "${PROJECT_ROOT}"
 
 RUN_ROOT="${HPC_SCRATCH_DIR}/_ecoda_runs/sf15_classic_profile_20261126"
 MANIFEST_ALL="${SCRIPT_DIR}/manifest_16rows.tsv"
-MANIFEST_CPU="${RUN_ROOT}/manifests/manifest_cpu_11rows.tsv"
-MANIFEST_GPU="${RUN_ROOT}/manifests/manifest_gpu_5rows.tsv"
+MANIFEST_CPU="${RUN_ROOT}/manifests/manifest_cpu_13rows.tsv"
+MANIFEST_GPU="${RUN_ROOT}/manifests/manifest_gpu_3rows.tsv"
+MANIFEST_PILOTGM_CPU="${RUN_ROOT}/manifests/manifest_pilotgm_cpu_2rows.tsv"
 WORKER_SH="${SCRIPT_DIR}/task_worker.sh"
 
 mkdir -p "${RUN_ROOT}/manifests" "${RUN_ROOT}/rows" "${RUN_ROOT}/outputs" "${RUN_ROOT}/logs"
 
 awk -F'\t' 'NR > 1 && $4 == "cpu" { print $0 }' "${MANIFEST_ALL}" > "${MANIFEST_CPU}"
 awk -F'\t' 'NR > 1 && $4 == "gpu" { print $0 }' "${MANIFEST_ALL}" > "${MANIFEST_GPU}"
+awk -F'\t' 'NR > 1 && $2 == "PILOT-GM-VAE_hvg2000" && $4 == "cpu" { print $0 }' "${MANIFEST_ALL}" > "${MANIFEST_PILOTGM_CPU}"
 
 CPU_COUNT="$(wc -l < "${MANIFEST_CPU}" | tr -d ' ')"
 GPU_COUNT="$(wc -l < "${MANIFEST_GPU}" | tr -d ' ')"
-if [[ "${CPU_COUNT}" != "11" || "${GPU_COUNT}" != "5" ]]; then
-  echo "ERROR: expected 11 CPU and 5 GPU rows, got cpu=${CPU_COUNT} gpu=${GPU_COUNT}" >&2
+PILOTGM_COUNT="$(wc -l < "${MANIFEST_PILOTGM_CPU}" | tr -d ' ')"
+if [[ "${CPU_COUNT}" != "13" || "${GPU_COUNT}" != "3" || "${PILOTGM_COUNT}" != "2" ]]; then
+  echo "ERROR: expected 13 CPU, 3 GPU, and 2 PILOT-GM-VAE CPU rows, got cpu=${CPU_COUNT} gpu=${GPU_COUNT} pilotgm=${PILOTGM_COUNT}" >&2
   exit 1
 fi
 
@@ -60,6 +63,26 @@ if [[ "${SUBMIT_MODE}" == "all" || "${SUBMIT_MODE}" == "cpu" ]]; then
       "${WORKER_SH}"
   )"
   echo "CPU_JOB_ID=${CPU_JOB_ID} (array=${CPU_ARRAY_SPEC})"
+fi
+
+if [[ "${SUBMIT_MODE}" == "pilotgm_cpu" ]]; then
+  PILOTGM_JOB_ID="$(
+    sbatch --parsable \
+      --job-name=sf15_pgm_cpu \
+      --partition="${SLURM_PARTITION_BENCHMARK_CPU}" \
+      --constraint="${BENCHMARK_CPU_CONSTRAINT}" \
+      --nodes=1 \
+      --ntasks=1 \
+      --cpus-per-task="${BENCHMARK_CPU_CPUS_PER_TASK}" \
+      --mem="${BENCHMARK_MEM}" \
+      --time=04:00:00 \
+      --array="${ARRAY_OVERRIDE:-1-${PILOTGM_COUNT}}" \
+      --output="${RUN_ROOT}/logs/cpu_%A_%a.out" \
+      --error="${RUN_ROOT}/logs/cpu_%A_%a.err" \
+      --export=ALL,ECODA_PROJECT_ROOT="${PROJECT_ROOT}",SF15_RUN_ROOT="${RUN_ROOT}",SF15_MANIFEST_FILE="${MANIFEST_PILOTGM_CPU}" \
+      "${WORKER_SH}"
+  )"
+  echo "PILOTGM_CPU_JOB_ID=${PILOTGM_JOB_ID} (array=${ARRAY_OVERRIDE:-1-${PILOTGM_COUNT}})"
 fi
 
 if [[ "${SUBMIT_MODE}" == "all" || "${SUBMIT_MODE}" == "gpu" ]]; then

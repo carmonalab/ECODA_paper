@@ -6,12 +6,12 @@ Stephenson	MOFA_hvg2000_factors15	R	cpu
 Stephenson	GloScope_hvg2000_pcadims30	R	cpu
 Stephenson	PILOT_hvg2000	py	cpu
 Stephenson	QOT_hvg2000	py	cpu
-Stephenson	PILOT-GM-VAE_hvg2000	py	gpu
+Stephenson	PILOT-GM-VAE_hvg2000	py	cpu
 Stephenson	MrVI_hvg2000	py	gpu
 Stephenson	scPoli_hvg2000_dims15_highres	py	gpu
 Bassez	ECODA_authors_HR	R	cpu
 Bassez	GloProp	R	cpu
 Bassez	PILOT_hvg2000	py	cpu
 Bassez	QOT_hvg2000	py	cpu
-Bassez	PILOT-GM-VAE_hvg2000	py	gpu
+Bassez	PILOT-GM-VAE_hvg2000	py	cpu
 Bassez	scPoli_hvg2000_dims15_highres	py	gpu
