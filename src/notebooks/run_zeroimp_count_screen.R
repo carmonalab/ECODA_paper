@@ -2,7 +2,7 @@
 zeroimp_datasets <- function() c("Adams", "Bassez", "Gongsharma_cmv_young_males", "Kfoury", "Kim", "Lee", "Pelka", "Smillie", "Stephenson", "Wu", "Zhang")
 zeroimp_need <- function(ok, message) if (!isTRUE(ok)) stop(message, call.=FALSE)
 zeroimp_menu <- function() {
-  counts <- c("0.5", "2/3", "1", "5", "10", "20", "50", "100", "200")
+  counts <- c("0.001", "0.01", "0.1", "0.5", "2/3", "1", "5", "10", "20", "50", "100", "200")
   percent <- c("0.001", "0.01", "0.1", "1", "2", "5")
   c(unlist(lapply(counts, function(x) paste0(c("counts_zeros_", "counts_all_"), x)), use.names=FALSE),
     unlist(lapply(percent, function(x) paste0(c("percentage_all_", "percentage_zeros_", "multLN_", "multRepl_"), x, "%")), use.names=FALSE), "asinsqrt")
@@ -256,13 +256,13 @@ zeroimp_main <- function(args=commandArgs(TRUE)) {
   zeroimp_check_reuse(reuse)
   if(!is.null(a$produce)) {
     .ecoda_write_json_atomic(list(schema="ecoda_zeroimp_counts_manifest_v1",run_id=a$run_id,datasets=control$selected,recipe_menu=zeroimp_menu(),scoring_policy=zeroimp_policy()$scoring_policy,source_manifest_md5=.ecoda_md5(Sys.getenv("ECODA_SOURCE_MANIFEST")),release_md5=a$analysis_release_md5,legacy_source9ca_comparability=zeroimp_policy()$legacy_source9ca_comparability,checkpoint_reuse=if(is.null(reuse))NULL else list(refs=reuse$refs,datasets=reuse$datasets,action="BYTE_IDENTICAL_COPY_NO_IMPUTATION_OR_SCORING",original_embedded_identity_preserved=TRUE)),file.path(output,"screen_manifest.json"))
-    .ecoda_write_json_atomic(list(state="OK",run_id=a$run_id,cohorts=length(control$selected),settings_per_cohort=43L),file.path(output,"status.json"))
+    .ecoda_write_json_atomic(list(state="OK",run_id=a$run_id,cohorts=length(control$selected),settings_per_cohort=length(zeroimp_menu())),file.path(output,"status.json"))
   }
   manifest <- jsonlite::fromJSON(file.path(output,"screen_manifest.json"),simplifyVector=FALSE)
   status <- jsonlite::fromJSON(file.path(output,"status.json"),simplifyVector=FALSE)
   lineage<-manifest$checkpoint_reuse
   zeroimp_need(if(is.null(reuse))is.null(lineage) else is.list(lineage)&&identical(lineage$refs,reuse$refs)&&identical(unlist(lineage$datasets,use.names=FALSE),reuse$datasets)&&identical(lineage$action,"BYTE_IDENTICAL_COPY_NO_IMPUTATION_OR_SCORING")&&isTRUE(lineage$original_embedded_identity_preserved),"Checkpoint copy lineage differs")
-  zeroimp_need(identical(manifest$schema,"ecoda_zeroimp_counts_manifest_v1") && identical(manifest$run_id,a$run_id) && identical(unlist(manifest$datasets,use.names=FALSE),control$selected) && identical(unlist(manifest$recipe_menu,use.names=FALSE),zeroimp_menu()) && identical(manifest$scoring_policy,zeroimp_policy()$scoring_policy) && identical(manifest$release_md5,a$analysis_release_md5) && identical(manifest$source_manifest_md5,.ecoda_md5(Sys.getenv("ECODA_SOURCE_MANIFEST"))) && identical(manifest$legacy_source9ca_comparability,zeroimp_policy()$legacy_source9ca_comparability) && identical(status$state,"OK") && identical(status$run_id,a$run_id) && status$cohorts==length(control$selected) && status$settings_per_cohort==43L,"Zeroimp manifest/status/complete recipe denominator differs")
+  zeroimp_need(identical(manifest$schema,"ecoda_zeroimp_counts_manifest_v1") && identical(manifest$run_id,a$run_id) && identical(unlist(manifest$datasets,use.names=FALSE),control$selected) && identical(unlist(manifest$recipe_menu,use.names=FALSE),zeroimp_menu()) && identical(manifest$scoring_policy,zeroimp_policy()$scoring_policy) && identical(manifest$release_md5,a$analysis_release_md5) && identical(manifest$source_manifest_md5,.ecoda_md5(Sys.getenv("ECODA_SOURCE_MANIFEST"))) && identical(manifest$legacy_source9ca_comparability,zeroimp_policy()$legacy_source9ca_comparability) && identical(status$state,"OK") && identical(status$run_id,a$run_id) && status$cohorts==length(control$selected) && status$settings_per_cohort==length(zeroimp_menu()),"Zeroimp manifest/status/complete recipe denominator differs")
   invisible(NULL)
 }
 if(sys.nframe()==0L)zeroimp_main()

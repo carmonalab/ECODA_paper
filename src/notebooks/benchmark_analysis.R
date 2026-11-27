@@ -556,13 +556,14 @@ benchmark_zeroimp_scores <- function(release, datasets) {
   comparison <- frame[frame$method %in% eligible, , drop = FALSE]
   benchmark_validate_screen_scores(comparison)
   excluded <- setdiff(unique(statuses$setting), eligible)
-  if (length(excluded)) warning(length(excluded), " of 43 zero-imputation recipes lack PASS in every selected cohort; ",
+  n_menu <- length(unique(statuses$setting))
+  if (length(excluded)) warning(length(excluded), " of ", n_menu, " zero-imputation recipes lack PASS in every selected cohort; ",
     "comparisons use the complete common PASS menu, with all failures retained in recipe_status/all_recipe_scores")
   attr(comparison, "recipe_status") <- statuses
   attr(comparison, "all_recipe_scores") <- frame
   attr(comparison, "excluded_methods") <- excluded
   attr(comparison, "comparison_policy") <- paste("Common PASS recipes; exactly", length(datasets),
-    "cohorts per method/metric; all 43 outcomes per cohort retained; failed scores are NA, never imputed")
+    "cohorts per method/metric; all", n_menu, "outcomes per cohort retained; failed scores are NA, never imputed")
   comparison
 }
 

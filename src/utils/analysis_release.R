@@ -169,10 +169,15 @@ load_analysis_release <- function(ledger, expected_scope, require_projection = F
 # contract retains every recipe outcome and only sample-level PASS geometry.
 .analysis_zeroimp_screen <- function(value) {
   metrics <- evaluation_metrics()
-  counts <- c("0.5", "2/3", "1", "5", "10", "20", "50", "100", "200")
-  percent <- c("0.001", "0.01", "0.1", "1", "2", "5")
-  menu <- c(unlist(lapply(counts, function(x) paste0(c("counts_zeros_", "counts_all_"), x)), use.names = FALSE),
-    unlist(lapply(percent, function(x) paste0(c("percentage_all_", "percentage_zeros_", "multLN_", "multRepl_"), x, "%")), use.names = FALSE), "asinsqrt")
+  build_menu <- function(counts) c(
+    unlist(lapply(counts, function(x) paste0(c("counts_zeros_", "counts_all_"), x)), use.names = FALSE),
+    unlist(lapply(c("0.001", "0.01", "0.1", "1", "2", "5"), function(x) paste0(c("percentage_all_", "percentage_zeros_", "multLN_", "multRepl_"), x, "%")), use.names = FALSE),
+    "asinsqrt"
+  )
+  counts_legacy <- c("0.5", "2/3", "1", "5", "10", "20", "50", "100", "200")
+  menu_legacy <- build_menu(counts_legacy)
+  menu_extended <- build_menu(c("0.001", "0.01", "0.1", counts_legacy))
+  menu <- if (identical(value$policy$recipe_menu, menu_extended)) menu_extended else menu_legacy
   need <- function(ok, message) if (!isTRUE(ok)) stop(message)
   need(identical(value$schema, "ecoda_zeroimp_counts_five_v1") &&
     identical(value$policy$schema, value$schema) && identical(value$policy$version, 1L) &&
@@ -197,7 +202,7 @@ load_analysis_release <- function(ledger, expected_scope, require_projection = F
   need(is.data.frame(table) && identical(table$setting, menu) && identical(names(value$recipes), menu) &&
     all(c("status", "reason", "scoring_sample_ids", "dropped_sample_ids", metrics) %in% names(table)) &&
     !anyNA(table$status) && all(table$status %in% c("PASS", "FAILED_OR_DROPPED_BY_ORDINARY_PRODUCER")),
-    "Zero-imputation screen requires all 43 explicit recipe outcomes")
+    sprintf("Zero-imputation screen requires all %d explicit recipe outcomes", length(menu)))
   for (i in seq_along(menu)) {
     record <- value$recipes[[i]]; row <- table[i, , drop = FALSE]
     need(identical(record$setting, menu[i]) && identical(record$status, row$status) &&

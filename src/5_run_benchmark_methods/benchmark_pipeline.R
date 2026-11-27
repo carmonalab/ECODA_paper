@@ -2674,6 +2674,7 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
   # for already-computed zeroimp bundles — re-run the zeroimp array with
   # --force (see TODO.md).
   counts_vals <- c(
+    "0.001" = 0.001, "0.01" = 0.01, "0.1" = 0.1,
     "0.5" = 0.5, "2/3" = 2 / 3, "1" = 1, "5" = 5, "10" = 10,
     "20" = 20, "50" = 50, "100" = 100, "200" = 200
   )

@@ -2260,7 +2260,7 @@ p2 <- df_benchmark_anosim %>%
   scale_shape_manual(values=1:length(unique((df_benchmark_sub$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
   # ylim(c(-0.1, 1)) +
-  labs(x = "Variance explained (%)", y = "Separation score (ANOSIM)") +
+  labs(x = "Variance explained (%)", y = "Separation score\n(ANOSIM)") +
   theme_classic2() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1),
         legend.position = "none")
@@ -2450,26 +2450,37 @@ ggsave(file.path(path_plots, "Figure_4_DF_featureselectionHVC_PCA_kfoury.pdf"),
 
 ### Figure 4: Cell-type selection and example projections
 
-```{r figure-4-combined, fig.height=7, fig.width=15}
+```{r figure-4-combined, fig.height=5.6, fig.width=10.0}
 # Keep dataset and disease legends with their own columns; boxplots repeat
 # the PCA groups and do not need an additional fill legend.
 figure_4_left <- wrap_plots(list(figure_4_ab[[1]] + labs(tag = "A"),
   figure_4_ab[[2]] + labs(tag = "B")), ncol = 1, guides = "collect") &
-  theme(legend.position = "bottom", legend.text = element_text(size = 8)) &
+  theme(legend.position = "bottom",
+        legend.text = element_text(size = 8),
+        legend.key.size = unit(0.4, "cm"),
+        legend.margin = margin(0, 0, 0, 0),
+        plot.margin = margin(4, 6, 4, 6)) &
   labs(colour = NULL, shape = NULL, linetype = NULL) &
   guides(colour = guide_legend(ncol = 3), shape = guide_legend(ncol = 3),
     linetype = guide_legend(ncol = 3))
 figure_4_middle <- wrap_plots(list(figure_4_c + labs(tag = "C"),
   figure_4_d + labs(tag = "D")), ncol = 1, guides = "keep") &
-  theme(legend.position = "bottom", legend.text = element_text(size = 8)) &
+  theme(legend.position = "bottom",
+        legend.text = element_text(size = 8.5),
+        legend.title = element_text(size = 9),
+        legend.margin = margin(0, 0, 0, 0),
+        legend.box.margin = margin(-4, 0, 0, 0),
+        plot.margin = margin(4, 6, 4, 6)) &
   guides(colour = guide_legend(nrow = 1), shape = guide_legend(nrow = 1))
 figure_4_right <- wrap_plots(list(figure_4_e + labs(tag = "E"),
-  figure_4_f + labs(tag = "F")), ncol = 1) & theme(legend.position = "none")
+  figure_4_f + labs(tag = "F")), ncol = 1) &
+  theme(legend.position = "none",
+        plot.margin = margin(4, 6, 4, 6))
 figure_4 <- wrap_plots(list(figure_4_left, figure_4_middle, figure_4_right),
-  nrow = 1, widths = c(1.1, 1.5, 1)) &
-  theme(plot.tag = element_text(size = 16, face = "bold"))
+  nrow = 1, widths = c(1.05, 1.45, 0.65)) &
+  theme(plot.tag = element_text(size = 13, face = "bold"))
 print(figure_4)
-ggsave(file.path(path_plots, "Figure_4.pdf"), plot = figure_4, width = 15, height = 7)
+ggsave(file.path(path_plots, "Figure_4.pdf"), plot = figure_4, width = 10.0, height = 5.6)
 ```
 
 ## Supp fig 20
@@ -3912,7 +3923,7 @@ df_zeroimp <- benchmark_zeroimp_scores(benchmark_release, names(datasets))
 
 df_results_list[["Zero_imputation"]] <- df_zeroimp
 
-zeroimp_counts_order <- c("0.5", "2/3", "1", "5", "10", "20", "50", "100", "200")
+zeroimp_counts_order <- c("0.001", "0.01", "0.1", "0.5", "2/3", "1", "5", "10", "20", "50", "100", "200")
 zeroimp_order <- c(paste0("counts_all_", zeroimp_counts_order),
   paste0("counts_zeros_", zeroimp_counts_order),
   paste0("multLN_", c("0.001", "0.01", "0.1", "1", "2", "5"), "%"))
@@ -3952,16 +3963,16 @@ zeroimp_metric_panel <- function(metric) {
 p2 <- zeroimp_metric_panel("anosim_score")
 print(p2)
 ggsave(file.path(path_plots, "Supp_fig_16B_zero_replacement_anosim.pdf"),
-       plot = p2, width = 12, height = 5)
+       plot = p2, width = 13, height = 5)
 
 zeroimp_companions <- lapply(setdiff(evaluation_metrics(), "anosim_score"), function(metric) {
   panel <- zeroimp_metric_panel(metric)
   ggsave(file.path(path_plots, paste0("Supp_fig_16B_zero_replacement_", metric, ".pdf")),
-    plot = panel, width = 12, height = 5)
+    plot = panel, width = 13, height = 5)
   panel
 })
 ggsave(file.path(path_plots, "Supp_fig_16B_zero_replacement_metric_companions.pdf"),
-  plot = wrap_plots(zeroimp_companions, ncol = 2, guides = "collect"), width = 24, height = 10)
+  plot = wrap_plots(zeroimp_companions, ncol = 2, guides = "collect"), width = 26, height = 10)
 
 
 
@@ -4180,11 +4191,11 @@ ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_anos
 
 ```{r}
 wrap_plots(list(p1, p2)) +
-  plot_layout(nrow = 1, widths = c(1, 3)) +
+  plot_layout(nrow = 1, widths = c(1, 3.6)) +
   plot_annotation(tag_levels = "A") &
   theme(plot.tag = element_text(face = "bold"))
 ggsave(file.path(path_plots, "Supp_fig_16AB_trans_zero_anosim.pdf"),
-       width = 10,
+       width = 11.5,
        height = 4.5)
 ```
 

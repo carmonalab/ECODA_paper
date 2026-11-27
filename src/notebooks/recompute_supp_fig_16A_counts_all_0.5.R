@@ -183,9 +183,14 @@ ggsave(
   width = 10, height = 8
 )
 
-# Regenerate Supp_fig_16AB_trans_zero_anosim.pdf combining updated p1 with reviewed p2
-df_zeroimp <- benchmark_zeroimp_scores(release_stub, ds_names)
-zeroimp_counts_order <- c("0.5", "2/3", "1", "5", "10", "20", "50", "100", "200")
+# Regenerate Supp_fig_16AB_trans_zero_anosim.pdf combining updated p1 with extended p2
+sweep_csv <- file.path(root, "data/derived/zeroimp_count_sweep_20261127/zeroimp_scores_all11.csv")
+df_zeroimp <- if (file.exists(sweep_csv)) {
+  read.csv(sweep_csv, stringsAsFactors = FALSE)
+} else {
+  benchmark_zeroimp_scores(release_stub, ds_names)
+}
+zeroimp_counts_order <- c("0.001", "0.01", "0.1", "0.5", "2/3", "1", "5", "10", "20", "50", "100", "200")
 zeroimp_order <- c(
   paste0("counts_all_", zeroimp_counts_order),
   paste0("counts_zeros_", zeroimp_counts_order),
@@ -229,10 +234,10 @@ zeroimp_metric_panel <- function(metric) {
 
 p2 <- zeroimp_metric_panel("anosim_score")
 combined_16ab <- wrap_plots(list(p1, p2)) +
-  plot_layout(nrow = 1, widths = c(1, 3)) +
+  plot_layout(nrow = 1, widths = c(1, 3.6)) +
   plot_annotation(tag_levels = "A") &
   theme(plot.tag = element_text(face = "bold"))
 ggsave(file.path(path_plots, "Supp_fig_16AB_trans_zero_anosim.pdf"),
-       plot = combined_16ab, width = 10, height = 4.5)
+       plot = combined_16ab, width = 11.5, height = 4.5)
 
 cat("DONE: Supp_fig_16A and Supp_fig_16AB regenerated with counts_all__0.5\n")

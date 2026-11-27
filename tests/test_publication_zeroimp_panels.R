@@ -12,8 +12,8 @@ last <- which(startsWith(lines, "p2 <- zeroimp_metric_panel("))
 stopifnot(length(first) == 1L, length(last) == 1L, last > first)
 setup <- parse(text = lines[first:(last - 1L)])
 
-methods <- c(paste0("counts_all_", c("0.5", "2/3", "1", "5", "10", "20", "50", "100", "200")),
-  paste0("counts_zeros_", c("0.5", "2/3", "1", "5", "10", "20", "50", "100", "200")),
+methods <- c(paste0("counts_all_", c("0.001", "0.01", "0.1", "0.5", "2/3", "1", "5", "10", "20", "50", "100", "200")),
+  paste0("counts_zeros_", c("0.001", "0.01", "0.1", "0.5", "2/3", "1", "5", "10", "20", "50", "100", "200")),
   paste0("multLN_", c("0.001", "0.01", "0.1", "1", "2", "5"), "%"))
 df_zeroimp <- expand.grid(dataset = paste0("cohort", 1:5),
   method = c(methods, "multRepl_1%"), score = evaluation_metrics(), stringsAsFactors = FALSE)

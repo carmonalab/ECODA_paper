@@ -8,7 +8,7 @@ md5 <- function(p)unname(tools::md5sum(p))
 ids <- paste0('s',1:12);counts <- matrix(as.double(1:48),12,dimnames=list(ids,paste0('CT',1:4)));counts[c(1,18,27,40)] <- 0
 labels <- setNames(factor(rep(c('A','B'),each=6)),ids)
 input <- list(counts=counts,labels=labels)
-stopifnot(length(zeroimp_menu())==43L,!anyDuplicated(zeroimp_menu()),identical(zeroimp_policy()$metrics,.ecoda_screen_metrics()),zeroimp_policy()$parent_counts_offset==.5)
+stopifnot(length(zeroimp_menu())==49L,!anyDuplicated(zeroimp_menu()),identical(zeroimp_policy()$metrics,.ecoda_screen_metrics()),zeroimp_policy()$parent_counts_offset==.5)
 # Actual ordinary recipe body, including nested multLN and any native dropped
 # settings. Scoring is isolated; label-dependent RNG consumption cannot alter a
 # subsequent recipe's distance matrix or imputation draw.
@@ -20,7 +20,7 @@ stub <- function(dist_mat,labels,parallel=1) {
 }
 set.seed(701);before <- .Random.seed;kind <- RNGkind()
 a <- zeroimp_run_cohort(input,score_fun=stub);geometry <- seen
-stopifnot(identical(before,.Random.seed),identical(kind,RNGkind()),nrow(a$results)==43L,
+stopifnot(identical(before,.Random.seed),identical(kind,RNGkind()),nrow(a$results)==49L,
  identical(a$results$setting,zeroimp_menu()),length(geometry)>0L,a$recipes$counts_all_0.5$status=="PASS",all(a$results$status%in%c('PASS','FAILED_OR_DROPPED_BY_ORDINARY_PRODUCER')))
 seen <- list();permuted <- input;permuted$labels <- setNames(rev(labels),ids)
 b <- zeroimp_run_cohort(permuted,score_fun=stub)
@@ -110,4 +110,4 @@ fail(zeroimp_main(c(base,'--produce',output)))
 stopifnot(!any(file.exists(vapply(parents,function(x)x$current_input_path,character(1)))))
 stopifnot(identical(original,tools::md5sum(names(original))))
 unlink(root,recursive=TRUE)
-cat('zeroimp counts: current five metrics, raw +0.5 recovery, 43 explicit settings, isolated RNG, checked22 current/legacy parents and immutable9 lineage: OK\n')
+cat('zeroimp counts: current five metrics, raw +0.5 recovery, 49 explicit settings, isolated RNG, checked22 current/legacy parents and immutable9 lineage: OK\n')

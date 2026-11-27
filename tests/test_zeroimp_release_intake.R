@@ -48,15 +48,15 @@ calc_sep_score <- run_zeroimp_analysis <- zeroimp_run_cohort <- function(...) st
 projected <- project_analysis_release(control, file.path(root, "projection"), c(source = source, runtime = runtime, control = parent))
 items <- load_analysis_release(projected$ledger, projected$expected_scope, require_projection = TRUE)
 for (item in items) stopifnot(is.null(item$result[["counts"]]), identical(item$result$source$parent_receipts$origin, "legacy_reuse"),
-  identical(item$result$policy$recipe_menu, zeroimp_menu()), length(item$result$recipes) == 43L,
+  identical(item$result$policy$recipe_menu, zeroimp_menu()), length(item$result$recipes) == 49L,
   is.null(item$result$recipes$asinsqrt$scores), is.null(item$result$recipes$asinsqrt$dist_mat),
   length(item$result$recipes$counts_all_0.5$scores) == 8L)
 warnings <- character()
 frame <- withCallingHandlers(benchmark_zeroimp_scores(list(control = projected), c("A", "B")),
   warning = function(w) { warnings <<- c(warnings, conditionMessage(w)); invokeRestart("muffleWarning") })
 stopifnot(nrow(frame) == 10L, identical(unique(frame$method), "counts_all_0.5"), length(warnings) == 1L,
-  nrow(attr(frame, "recipe_status")) == 86L, nrow(attr(frame, "all_recipe_scores")) == 430L,
-  "counts_all_1" %in% attr(frame, "excluded_methods"), length(attr(frame, "excluded_methods")) == 42L,
+  nrow(attr(frame, "recipe_status")) == 98L, nrow(attr(frame, "all_recipe_scores")) == 490L,
+  "counts_all_1" %in% attr(frame, "excluded_methods"), length(attr(frame, "excluded_methods")) == 48L,
   all(frame$value[frame$score == "lisi_score"] == .8))
 full <- attr(frame, "all_recipe_scores")
 stopifnot(all(is.na(full$value[full$status != "PASS"])),
